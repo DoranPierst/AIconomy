@@ -1,5 +1,5 @@
 {
-  "version": "1.2.0",
+  "version": "1.2.1",
   "update_repo": "",
-  "changelog": "Üst bara doğrudan Program Güncelleme Kontrol butonu, paylaşılan kullanıcılar için gömülü güncelleme kanalı ve tüm eklentilerin yanına (?) ne işe yarar bilgi kartları eklendi."
+  "changelog": "Araç Paneli altına seçili araçların genel durumunu kopyalama çubuğu, satır/başlık seçim kutuları ve soldan sağa tam satır (full-row) hover aydınlatması eklendi."
 }

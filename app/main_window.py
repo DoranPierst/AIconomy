@@ -1,13 +1,14 @@
 """PySide6 (Qt 6) Yerel Masaüstü Arayüzü: Proje/Konum Sütunu, 94-Skill Çark Yöneticisi, Çift Yönlü AI Danışman ve Sistem Tepsisi."""
 from __future__ import annotations
 
+import datetime as dt
 import json
 import pathlib
 import threading
 from typing import Any
 
-from PySide6.QtCore import QObject, QTimer, Qt, Signal
-from PySide6.QtGui import QAction, QColor, QFont, QIcon, QPainter, QPixmap
+from PySide6.QtCore import QEvent, QObject, QTimer, Qt, Signal
+from PySide6.QtGui import QAction, QColor, QCursor, QFont, QIcon, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -27,6 +28,7 @@ from PySide6.QtWidgets import (
     QProgressBar,
     QPushButton,
     QScrollArea,
+    QStyledItemDelegate,
     QSystemTrayIcon,
     QTabWidget,
     QTableWidget,
@@ -88,6 +90,7 @@ QPushButton#successBtn { background-color: #15803d; border-color: #16a34a; color
 QPushButton#warnBtn { background-color: #7c2d12; border-color: #ea580c; color: #ffedd5; font-weight: 600; }
 QLineEdit, QComboBox, QPlainTextEdit { background-color: #0f141c; border: 1px solid #2e3d54; border-radius: 5px; padding: 4px 8px; color: #e6edf3; }
 QTableWidget { background-color: #111823; alternate-background-color: #151e2b; gridline-color: #1f2a3c; border: 1px solid #243042; border-radius: 6px; }
+QWidget#cellBox { background: transparent; }
 QHeaderView::section { background-color: #182232; color: #94a3b8; padding: 6px; border: none; border-bottom: 1px solid #243042; font-weight: 600; }
 QFrame#card { background-color: #151e2b; border: 1px solid #243042; border-radius: 6px; }
 QProgressBar { border: 1px solid #2e3d54; border-radius: 4px; background: #0f141c; text-align: center; color: #e6edf3; min-height: 18px; }
@@ -107,6 +110,7 @@ QPushButton#successBtn { background-color: #16a34a; border-color: #16a34a; color
 QPushButton#warnBtn { background-color: #ea580c; border-color: #ea580c; color: #ffffff; font-weight: 600; }
 QLineEdit, QComboBox, QPlainTextEdit { background-color: #ffffff; border: 1px solid #cbd5e1; border-radius: 5px; padding: 4px 8px; color: #1e293b; }
 QTableWidget { background-color: #ffffff; alternate-background-color: #f8fafc; gridline-color: #e2e8f0; border: 1px solid #cbd5e1; border-radius: 6px; }
+QWidget#cellBox { background: transparent; }
 QHeaderView::section { background-color: #f1f5f9; color: #475569; padding: 6px; border: none; border-bottom: 1px solid #cbd5e1; font-weight: 600; }
 QFrame#card { background-color: #f8fafc; border: 1px solid #cbd5e1; border-radius: 6px; }
 """
@@ -139,8 +143,95 @@ class WorkerBridge(QObject):
     app_apply_done = Signal(bool, str, str)
 
 
+class FullRowHoverDelegate(QStyledItemDelegate):
+    """Fare hangi satırın üzerindeyse (buton ve açılır kutular dahil) satırı soldan sağa komple aydınlatır."""
+
+    def __init__(self, table: "HoverTableWidget", main_win: "MainWindow") -> None:
+        super().__init__(table)
+        self.table = table
+        self.main_win = main_win
+
+    def paint(self, painter: QPainter, option: Any, index: Any) -> None:
+        if index.row() != self.table.hover_row:
+            super().paint(painter, option, index)
+            return
+
+        is_light = self.main_win.meta.get("theme", "dark") == "light"
+        bg_col = QColor("#dbeafe") if is_light else QColor("#1e324d")
+        border_col = QColor("#3b82f6")
+        txt_col = QColor("#0f172a") if is_light else QColor("#f8fafc")
+
+        painter.save()
+        painter.fillRect(option.rect, bg_col)
+
+        text = index.data(Qt.ItemDataRole.DisplayRole)
+        if text:
+            align = index.data(Qt.ItemDataRole.TextAlignmentRole)
+            flags = int(align) if align is not None else int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+            painter.setPen(txt_col)
+            painter.setFont(QFont(option.font))
+            painter.drawText(option.rect.adjusted(3, 0, -3, 0), flags, str(text))
+
+        pen = QPen(border_col, 1)
+        painter.setPen(pen)
+        painter.drawLine(option.rect.left(), option.rect.top(), option.rect.right(), option.rect.top())
+        painter.drawLine(option.rect.left(), option.rect.bottom(), option.rect.right(), option.rect.bottom())
+
+        if index.column() == 0:
+            painter.fillRect(option.rect.left(), option.rect.top(), 3, option.rect.height(), border_col)
+        painter.restore()
+
+
+class HoverTableWidget(QTableWidget):
+    """İçindeki tüm hücre bileşenleri üzerinde bile tam satır (full-row) hover takibi yapan tablo."""
+
+    def __init__(self, rows: int, cols: int, main_win: "MainWindow") -> None:
+        super().__init__(rows, cols)
+        self.main_win = main_win
+        self.hover_row: int = -1
+        self.setMouseTracking(True)
+        self.viewport().setMouseTracking(True)
+        self.setItemDelegate(FullRowHoverDelegate(self, main_win))
+        app = QApplication.instance()
+        if app is not None:
+            app.installEventFilter(self)
+
+    def detach_filter(self) -> None:
+        app = QApplication.instance()
+        if app is not None:
+            app.removeEventFilter(self)
+
+    def set_hover_row(self, row: int) -> None:
+        if row != self.hover_row:
+            self.hover_row = row
+            self.viewport().update()
+
+    def _refresh_hover_from_cursor(self) -> None:
+        if not self.isVisible():
+            if self.hover_row != -1:
+                self.set_hover_row(-1)
+            return
+        if QApplication.activePopupWidget() is not None:
+            return
+        vp = self.viewport()
+        local_pos = vp.mapFromGlobal(QCursor.pos())
+        if vp.rect().contains(local_pos):
+            self.set_hover_row(self.rowAt(local_pos.y()))
+        else:
+            self.set_hover_row(-1)
+
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:  # noqa: N802
+        if event.type() in (QEvent.Type.MouseMove, QEvent.Type.HoverMove, QEvent.Type.Leave, QEvent.Type.Wheel):
+            self._refresh_hover_from_cursor()
+        return False
+
+    def leaveEvent(self, event: Any) -> None:  # noqa: N802
+        self.set_hover_row(-1)
+        super().leaveEvent(event)
+
+
 class AiMatrixHeaderView(QHeaderView):
-    """Sütun 5 başlığının tam içine alt satırlarla birebir hizalı [AGY] [CDX] [CLD] [CUR] toplu kontrol butonları yerleştirir."""
+    """Sütun 0'a toplu seçim kutusu ve Sütun 5 başlığının tam içine [AGY] [CDX] [CLD] [CUR] toplu kontrol butonları yerleştirir."""
 
     AI_COL = 5
     AI_COL_WIDTH = 161  # 4px sol + 4x36px buton + 3x3px boşluk + 4px sağ = 161px
@@ -150,6 +241,11 @@ class AiMatrixHeaderView(QHeaderView):
         self.main_win = main_win
         self.setSectionsClickable(True)
         self.setMinimumHeight(34)
+
+        self.master_cb = QCheckBox(self.viewport())
+        self.master_cb.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.master_cb.setToolTip("Tüm araçları seç / seçimi kaldır (durum kopyalama için)")
+        self.master_cb.clicked.connect(lambda checked: self.main_win._set_panel_checks("all" if checked else "none"))
 
         self.ai_bar = QWidget(self.viewport())
         self.ai_bar.setStyleSheet("background: transparent; border: none;")
@@ -180,12 +276,20 @@ class AiMatrixHeaderView(QHeaderView):
         self.geometriesChanged.connect(self.sync_ai_bar_geometry)
 
     def sync_ai_bar_geometry(self) -> None:
+        vh = self.viewport().height() or self.height()
+        if self.count() > 0 and not self.isSectionHidden(0):
+            x0 = self.sectionViewportPosition(0)
+            self.master_cb.setGeometry(x0 + 10, max(4, (vh - 18) // 2), 20, 18)
+            self.master_cb.show()
+            self.master_cb.raise_()
+        else:
+            self.master_cb.hide()
+
         if self.count() <= self.AI_COL or self.isSectionHidden(self.AI_COL):
             self.ai_bar.hide()
             return
         x = self.sectionViewportPosition(self.AI_COL)
         w = self.sectionSize(self.AI_COL)
-        vh = self.viewport().height() or self.height()
         self.ai_bar.setGeometry(x, 0, w, max(24, vh - 1))
         self.ai_bar.show()
         self.ai_bar.raise_()
@@ -901,6 +1005,7 @@ class MainWindow(QMainWindow):
         self.bridge.update_all_done.connect(self._on_update_all_done)
         self.bridge.app_check_done.connect(self._on_bg_app_check_done)
         self.plugin_checks: dict[str, QCheckBox] = {}
+        self.panel_row_checks: dict[str, QCheckBox] = {}
         self.updating_busy = False
         self.checking_plugins_busy = False
         self.latest_app_check: UpdateCheckResult | None = None
@@ -1115,7 +1220,7 @@ class MainWindow(QMainWindow):
         flt.addWidget(hint_lbl)
         lay.addLayout(flt)
 
-        self.table = QTableWidget(0, 8)
+        self.table = HoverTableWidget(0, 8, self)
         self.ai_header = AiMatrixHeaderView(self.table, self)
         self.bulk_client_btns: dict[str, QPushButton] = self.ai_header.buttons
         self.table.setHorizontalHeader(self.ai_header)
@@ -1148,6 +1253,40 @@ class MainWindow(QMainWindow):
         hdr.sectionClicked.connect(self._on_header_clicked)
         self.table.horizontalScrollBar().valueChanged.connect(lambda *_: hdr.sync_ai_bar_geometry())
         lay.addWidget(self.table, stretch=1)
+
+        # ARAÇ PANELİ ALT SEÇİM & GENEL DURUM KOPYALAMA ÇUBUĞU
+        panel_bot = QHBoxLayout()
+        panel_bot.setContentsMargins(2, 4, 2, 0)
+
+        self.lbl_panel_sel = QLabel("☑️ Seçili: 14 / 14 araç")
+        self.lbl_panel_sel.setStyleSheet("color: #94a3b8; font-weight: 600;")
+        panel_bot.addWidget(self.lbl_panel_sel)
+
+        btn_p_all = QPushButton("Tümünü Seç")
+        btn_p_all.clicked.connect(lambda: self._set_panel_checks("all"))
+        panel_bot.addWidget(btn_p_all)
+
+        btn_p_act = QPushButton("Sadece Açıkları Seç")
+        btn_p_act.setToolTip("Yalnızca şu an durumu AÇIK olan araçları seçer")
+        btn_p_act.clicked.connect(lambda: self._set_panel_checks("enabled_only"))
+        panel_bot.addWidget(btn_p_act)
+
+        btn_p_none = QPushButton("Seçimi Temizle")
+        btn_p_none.clicked.connect(lambda: self._set_panel_checks("none"))
+        panel_bot.addWidget(btn_p_none)
+
+        panel_bot.addStretch()
+
+        self.btn_copy_tools_status = QPushButton("📋 Seçili Araçların Genel Durumunu Kopyala (14)")
+        self.btn_copy_tools_status.setObjectName("primaryBtn")
+        self.btn_copy_tools_status.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_copy_tools_status.setToolTip(
+            "Yalnızca tabloda işaretlediğiniz araçların genel durumunu (Açık/Kapalı, AI istemcileri,\n"
+            "çalışma modu, son yanıt, aktif seçenekler ve proje konumları) düzenli rapor olarak kopyalar."
+        )
+        self.btn_copy_tools_status.clicked.connect(self._copy_selected_tools_status)
+        panel_bot.addWidget(self.btn_copy_tools_status)
+        lay.addLayout(panel_bot)
 
         self.tabs.addTab(tab, "📊 Araç Paneli (14)")
 
@@ -1244,17 +1383,29 @@ class MainWindow(QMainWindow):
             return item.usage_count
 
         rows.sort(key=sort_val, reverse=self.sort_desc)
+        panel_checked_set = self._get_panel_checked_set()
+        self.panel_row_checks.clear()
         self.table.setRowCount(0)
         self.table.setRowCount(len(rows))
 
         for r_idx, t in enumerate(rows):
             self.table.setRowHeight(r_idx, 38)
 
-            # Sütun 0: Eklenti Adı + (?) Ne İşe Yarar Bilgi Butonu
+            # Sütun 0: Seçim Kutusu + Eklenti Adı + (?) Ne İşe Yarar Bilgi Butonu
             nm_w = QWidget()
+            nm_w.setObjectName("cellBox")
             nm_l = QHBoxLayout(nm_w)
-            nm_l.setContentsMargins(8, 2, 6, 2)
+            nm_l.setContentsMargins(10, 2, 6, 2)
             nm_l.setSpacing(6)
+
+            row_cb = QCheckBox()
+            row_cb.setCursor(Qt.CursorShape.PointingHandCursor)
+            row_cb.setChecked(t.id in panel_checked_set)
+            row_cb.setToolTip(f"{t.name} aracını durum kopyalama listesine dahil et / çıkar")
+            row_cb.toggled.connect(lambda checked, tid=t.id: self._on_panel_row_check_toggled(tid, checked))
+            self.panel_row_checks[t.id] = row_cb
+            nm_l.addWidget(row_cb)
+
             nm_lbl = QLabel(f"<b>{t.name}</b>")
             if t.summary or t.live_location_detail:
                 nm_lbl.setToolTip(f"{t.summary}\n\n{t.live_location_detail}".strip())
@@ -1269,6 +1420,7 @@ class MainWindow(QMainWindow):
 
             # Sütun 2: PROJE / KONUM (Seçilebilir olanlarda proje kutusu + canlı konum rozeti; sabit servislerde gerçek konum etiketi)
             proj_w = QWidget()
+            proj_w.setObjectName("cellBox")
             proj_l = QHBoxLayout(proj_w)
             proj_l.setContentsMargins(4, 2, 4, 2)
             proj_l.setSpacing(4)
@@ -1321,6 +1473,7 @@ class MainWindow(QMainWindow):
 
             # Sütun 5: AI Matrisi [AGY] [CDX] [CLD] [CUR]
             mat_w = QWidget()
+            mat_w.setObjectName("cellBox")
             mat_l = QHBoxLayout(mat_w)
             mat_l.setContentsMargins(4, 2, 4, 2)
             mat_l.setSpacing(3)
@@ -1342,6 +1495,7 @@ class MainWindow(QMainWindow):
 
             # Sütun 6: Çalışma Modu
             mod_w = QWidget()
+            mod_w.setObjectName("cellBox")
             mod_l = QHBoxLayout(mod_w)
             mod_l.setContentsMargins(4, 2, 4, 2)
             if t.id == "blender_skills":
@@ -1364,6 +1518,7 @@ class MainWindow(QMainWindow):
 
             # Sütun 7: ⚙️ Çark + AÇIK/KAPALI
             act_w = QWidget()
+            act_w.setObjectName("cellBox")
             act_l = QHBoxLayout(act_w)
             act_l.setContentsMargins(4, 2, 4, 2)
             act_l.setSpacing(5)
@@ -1389,7 +1544,136 @@ class MainWindow(QMainWindow):
         )
         self.table.resizeColumnToContents(6)
         self._update_bulk_client_buttons()
+        self._update_panel_selection_ui()
         self.ai_header.sync_ai_bar_geometry()
+        self.table._refresh_hover_from_cursor()
+
+    def _get_panel_checked_set(self) -> set[str]:
+        saved = self.meta.get("panel_checked_ids")
+        if isinstance(saved, list):
+            return {str(x) for x in saved}
+        all_ids = [t.id for t in self.tools]
+        self.meta["panel_checked_ids"] = all_ids
+        return set(all_ids)
+
+    def _on_panel_row_check_toggled(self, tool_id: str, checked: bool) -> None:
+        cur = self._get_panel_checked_set()
+        if checked:
+            cur.add(tool_id)
+        else:
+            cur.discard(tool_id)
+        self.meta["panel_checked_ids"] = [t.id for t in self.tools if t.id in cur]
+        self._update_panel_selection_ui()
+        self._save_state()
+
+    def _set_panel_checks(self, mode: str) -> None:
+        if mode == "all":
+            target = {t.id for t in self.tools}
+        elif mode == "enabled_only":
+            target = {t.id for t in self.tools if t.enabled}
+        else:
+            target = set()
+        self.meta["panel_checked_ids"] = [t.id for t in self.tools if t.id in target]
+        for tid, cb in self.panel_row_checks.items():
+            cb.blockSignals(True)
+            cb.setChecked(tid in target)
+            cb.blockSignals(False)
+        self._update_panel_selection_ui()
+        self._save_state()
+
+    def _update_panel_selection_ui(self) -> None:
+        cur = self._get_panel_checked_set()
+        sel_cnt = sum(1 for t in self.tools if t.id in cur)
+        tot_cnt = len(self.tools)
+        self.lbl_panel_sel.setText(f"☑️ Seçili: {sel_cnt} / {tot_cnt} araç")
+        self.btn_copy_tools_status.setText(f"📋 Seçili Araçların Genel Durumunu Kopyala ({sel_cnt})")
+        self.ai_header.master_cb.blockSignals(True)
+        self.ai_header.master_cb.setChecked(tot_cnt > 0 and sel_cnt == tot_cnt)
+        self.ai_header.master_cb.blockSignals(False)
+
+    def _copy_selected_tools_status(self) -> None:
+        checked_set = self._get_panel_checked_set()
+        selected_tools = [t for t in self.tools if t.id in checked_set]
+        if not selected_tools:
+            QMessageBox.information(
+                self,
+                "Araç Seçilmedi",
+                "Genel durumu kopyalamak için lütfen Araç Paneli tablosundan en az bir aracı işaretleyin.",
+            )
+            return
+
+        def sort_val(item: ToolSpec) -> Any:
+            if self.sort_key == "name":
+                return item.name.lower()
+            if self.sort_key == "kind":
+                return item.kind.lower()
+            if self.sort_key == "project":
+                return (item.project_scope if item.scope_selectable else item.fixed_location_label).lower()
+            if self.sort_key == "ping":
+                return item.last_latency_ms if item.last_latency_ms >= 0 else 999999
+            return item.usage_count
+
+        selected_tools.sort(key=sort_val, reverse=self.sort_desc)
+        active_k, saved_k = self._calculate_token_economy()
+        en_cnt = sum(1 for t in selected_tools if t.enabled)
+        now_str = dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        gpu_txt = self.vram_bar.text()
+
+        lines = [
+            f"=== AI Araç & Token Ekonomisi Genel Durum Raporu ({now_str}) ===",
+            f"Seçili Araç: {len(selected_tools)} / {len(self.tools)} ({en_cnt} Açık, {len(selected_tools) - en_cnt} Kapalı)",
+            f"Token Ekonomisi: Aktif Şema ~{active_k}K tok | Korunan Tasarruf +{saved_k}K tok | GPU: {gpu_txt}",
+            "",
+        ]
+
+        for idx, t in enumerate(selected_tools, start=1):
+            st_tag = "AÇIK" if t.enabled else "KAPALI"
+            port_part = f" · Port :{t.port}" if t.port else ""
+            lines.append(f"{idx}. [{st_tag}] {t.name} ({t.kind} · {t.version}{port_part})")
+
+            scope_str = self._format_scope_display(t)
+            loc_str = f" | {t.live_location_detail}" if t.live_location_detail else ""
+            lines.append(f"   • Kapsam & Konum: {scope_str}{loc_str}")
+
+            if t.id == "blender_skills":
+                mode_str = f"{len(self.active_skills)} / {len(BLENDER_SKILLS_94)} Skill Açık"
+            elif len(t.modes) > 1 and 0 <= t.mode_index < len(t.modes):
+                mode_str = t.modes[t.mode_index]
+            else:
+                mode_str = "Standart"
+
+            on_clients = [c for c, _ in AI_CLIENTS if t.clients.get(c, False)]
+            clients_str = ", ".join(on_clients) if on_clients else "Hiçbiri (Tümü Kapalı)"
+            lines.append(f"   • Son Yanıt: {t.last_ping} | Çalışma Modu: {mode_str} | Açık AI İstemcileri: {clients_str}")
+
+            if t.id == "blender_skills" and self.active_skills:
+                lines.append(f"   • Aktif Blender Skill'ler ({len(self.active_skills)}): {', '.join(sorted(self.active_skills))}")
+
+            if t.options:
+                on_opts = [o.label for o in t.options if o.enabled]
+                if on_opts:
+                    lines.append(f"   • Aktif Seçenekler: {', '.join(on_opts)}")
+
+            if t.vault_key_name:
+                has_k = bool(self.vault.get_secret(t.vault_key_name))
+                lines.append(f"   • API Anahtarı ({t.vault_key_name}): {'Şifreli Kasada Kayıtlı ✓' if has_k else 'Girilmemiş'}")
+
+        report_txt = "\n".join(lines)
+        QApplication.clipboard().setText(report_txt)
+        self.set_status(f"📋 Seçili {len(selected_tools)} aracın genel durum raporu panoya kopyalandı!")
+
+        self.btn_copy_tools_status.setText(f"✓ Panoya Kopyalandı! ({len(selected_tools)} Araç)")
+        self.btn_copy_tools_status.setObjectName("successBtn")
+        self.style().unpolish(self.btn_copy_tools_status)
+        self.style().polish(self.btn_copy_tools_status)
+
+        def _restore_copy_btn() -> None:
+            self.btn_copy_tools_status.setObjectName("primaryBtn")
+            self._update_panel_selection_ui()
+            self.style().unpolish(self.btn_copy_tools_status)
+            self.style().polish(self.btn_copy_tools_status)
+
+        QTimer.singleShot(1800, _restore_copy_btn)
 
     def _on_tool_scope_changed(self, tool: ToolSpec, new_scope: str) -> None:
         if new_scope == "__ADD_NEW__":
@@ -1812,6 +2096,7 @@ class MainWindow(QMainWindow):
                 )
                 self.tray_notified = True
             return
+        self.table.detach_filter()
         super().closeEvent(event)
 
     # --- AKSİYONLAR & İŞ MANTIĞI ---
@@ -2189,6 +2474,9 @@ class MainWindow(QMainWindow):
             mcp_args=info["mcp_args"],
         )
         self.tools.append(new_tool)
+        cur_p_chk = self._get_panel_checked_set()
+        cur_p_chk.add(new_tool.id)
+        self.meta["panel_checked_ids"] = [t.id for t in self.tools if t.id in cur_p_chk]
         self._save_state()
         self._refresh_table()
         self._refresh_plugins_tab()
