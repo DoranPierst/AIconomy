@@ -763,7 +763,7 @@ class MainWindow(QMainWindow):
         prof_bar = QHBoxLayout()
         prof_bar.addWidget(QLabel("<b>🎯 İş Modu:</b>"))
         for p_key, p_info in PROFILES.items():
-            btn = QPushButton(p_info["title"])
+            btn = QPushButton(p_info["title"].replace("&", "&&"))
             btn.setToolTip(p_info["desc"])
             btn.clicked.connect(lambda _=False, k=p_key: self.apply_profile(k))
             prof_bar.addWidget(btn)
@@ -871,9 +871,20 @@ class MainWindow(QMainWindow):
         flt.addWidget(btn_add_proj)
 
         flt.addStretch()
-        hint = QLabel("📍/🟢 ikonunun üzerine gelerek canlı süreç ve dosya konumunu görebilirsiniz.")
-        hint.setStyleSheet("color: #94a3b8;")
-        flt.addWidget(hint)
+        flt.addWidget(QLabel("<b>🤖 Toplu AI:</b>"))
+        self.bulk_client_btns: dict[str, QPushButton] = {}
+        for code, full_lbl in AI_CLIENTS:
+            b_btn = QPushButton(code)
+            b_btn.setToolTip(
+                f"{full_lbl} — Sol tık: Tüm araçlarda tek tıkla komple AÇ / KAPAT\nSağ tık: Gelişmiş toplu seçim menüsü"
+            )
+            b_btn.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+            b_btn.clicked.connect(lambda _=False, c=code: self._toggle_client_all(c, mode="auto"))
+            b_btn.customContextMenuRequested.connect(
+                lambda pos, c=code, btn=b_btn: self._show_bulk_client_menu(c, btn, pos)
+            )
+            self.bulk_client_btns[code] = b_btn
+            flt.addWidget(b_btn)
         lay.addLayout(flt)
 
         self.table = QTableWidget(0, 8)
@@ -1135,6 +1146,7 @@ class MainWindow(QMainWindow):
         self.token_summary_lbl.setText(
             f"Aktif Şema Yükü: ~{active_k}K tok  |  Korunan (Tasarruf): +{saved_k}K tok"
         )
+        self._update_bulk_client_buttons()
 
     def _on_tool_scope_changed(self, tool: ToolSpec, new_scope: str) -> None:
         if new_scope == "__ADD_NEW__":
@@ -1463,7 +1475,7 @@ class MainWindow(QMainWindow):
                         item.setForeground(QColor("#f59e0b"))
                 self.log_table.setItem(i, col_i, item)
         counts = self.logs.counts_by_level()
-        self.tabs.setTabText(4, f"🐛 Debug & Log (🔴{counts['ERR']} 🟡{counts['WARN']})")
+        self.tabs.setTabText(4, f"🐛 Debug && Log (🔴{counts['ERR']} 🟡{counts['WARN']})")
 
     def _on_log_row_selected(self) -> None:
         idxs = self.log_table.selectionModel().selectedRows()
@@ -1579,6 +1591,64 @@ class MainWindow(QMainWindow):
         self._save_state()
         self.set_status(f"{tool.name} -> {client_code} hedefi {'aktif' if checked else 'devre dışı'}.")
         self._refresh_table()
+
+    def _update_bulk_client_buttons(self) -> None:
+        total = len(self.tools)
+        for code, full_lbl in AI_CLIENTS:
+            btn = self.bulk_client_btns.get(code)
+            if not btn:
+                continue
+            on_cnt = sum(1 for t in self.tools if t.clients.get(code, False))
+            if on_cnt > 0:
+                btn.setText(f"{code} ({on_cnt}/{total})")
+                btn.setStyleSheet("background-color: #1d4ed8; color: #ffffff; font-weight: 700; padding: 4px 8px;")
+            else:
+                btn.setText(f"{code} (Kapalı)")
+                btn.setStyleSheet("color: #64748b; padding: 4px 8px;")
+            btn.setToolTip(
+                f"{full_lbl}: {on_cnt}/{total} araçta açık.\n"
+                f"Sol tık: {'Tümünde KAPAT' if on_cnt > 0 else 'Tümünde AÇ'}\n"
+                "Sağ tık: Sadece açık araçlarda aç / Tümünde aç / Tümünde kapat"
+            )
+
+    def _toggle_client_all(self, client_code: str, mode: str = "auto") -> None:
+        if mode == "auto":
+            any_on = any(t.clients.get(client_code, False) for t in self.tools)
+            target_state = not any_on
+            for t in self.tools:
+                t.clients[client_code] = target_state
+            action_desc = "tüm araçlarda AÇILDI" if target_state else "tüm araçlarda komple KAPATILDI"
+        elif mode == "all_on":
+            for t in self.tools:
+                t.clients[client_code] = True
+            action_desc = "tüm araçlarda AÇILDI"
+        elif mode == "active_only":
+            for t in self.tools:
+                t.clients[client_code] = bool(t.enabled)
+            action_desc = "sadece AÇIK araçlarda aktif edildi"
+        else:
+            for t in self.tools:
+                t.clients[client_code] = False
+            action_desc = "tüm araçlarda komple KAPATILDI"
+
+        self._save_state()
+        self.logs.add("INFO", f"Toplu AI ({client_code})", f"{client_code} {action_desc}.")
+        self.set_status(f"🤖 {client_code} {action_desc}.")
+        self._refresh_table()
+        self._refresh_logs_tab()
+
+    def _show_bulk_client_menu(self, client_code: str, btn: QPushButton, pos: Any) -> None:
+        menu = QMenu(self)
+        act_all_on = QAction(f"✓ {client_code} — Tüm Araçlarda Aç", self)
+        act_act_on = QAction(f"⚡ {client_code} — Sadece Açık Araçlarda Aç", self)
+        act_all_off = QAction(f"✕ {client_code} — Tüm Araçlarda Komple Kapat", self)
+        act_all_on.triggered.connect(lambda: self._toggle_client_all(client_code, "all_on"))
+        act_act_on.triggered.connect(lambda: self._toggle_client_all(client_code, "active_only"))
+        act_all_off.triggered.connect(lambda: self._toggle_client_all(client_code, "all_off"))
+        menu.addAction(act_all_on)
+        menu.addAction(act_act_on)
+        menu.addAction(act_all_off)
+        menu.exec(btn.mapToGlobal(pos))
 
     def _change_mode(self, tool: ToolSpec, idx: int) -> None:
         tool.mode_index = idx
