@@ -50,6 +50,7 @@ from .catalog import (
     PROFILES,
     ToolSpec,
     build_default_catalog,
+    describe_blender_skill,
 )
 from .storage import LogDatabase, StateStore, WindowsDpapiVault
 from .system_ops import (
@@ -654,7 +655,7 @@ class AiPasteDialog(QDialog):
         btns.addStretch()
         cancel_btn = QPushButton("İptal")
         cancel_btn.clicked.connect(self.reject)
-        apply_btn = QPushButton("📥 Analiz Et & Seçime Uygula")
+        apply_btn = QPushButton("📥 Analiz Et && Seçime Uygula")
         apply_btn.setObjectName("primaryBtn")
         apply_btn.clicked.connect(self.accept)
         btns.addWidget(cancel_btn)
@@ -662,13 +663,27 @@ class AiPasteDialog(QDialog):
         lay.addLayout(btns)
 
 
+def _create_option_help_badge(tooltip_text: str, on_click: Any, size: int = 20) -> QPushButton:
+    btn = QPushButton("?")
+    btn.setFixedSize(size, size)
+    btn.setCursor(Qt.CursorShape.PointingHandCursor)
+    btn.setStyleSheet(
+        f"QPushButton {{ background-color: #172554; color: #93c5fd; border: 1px solid #3b82f6; "
+        f"border-radius: {size // 2}px; font-size: 11px; font-weight: 800; padding: 0px; }}"
+        "QPushButton:hover { background-color: #2563eb; color: #ffffff; }"
+    )
+    btn.setToolTip(tooltip_text)
+    btn.clicked.connect(lambda _=False: on_click())
+    return btn
+
+
 class BlenderSkillsDialog(QDialog):
-    """⚙️ Blender Skills (arjun988) — 94 Skill Çoklu Seçim + Çift Yönlü AI Danışma Penceresi."""
+    """⚙️ Blender Skills (arjun988) — 94 Skill Çoklu Seçim + (?) Skill Bilgi Rehberi + Çift Yönlü AI Danışma Penceresi."""
 
     def __init__(self, parent: QWidget, active_skills: set[str], checked_skills: set[str] | None = None) -> None:
         super().__init__(parent)
         self.setWindowTitle("⚙️ Blender Skills (arjun988) — 94 Skill Yöneticisi")
-        self.resize(880, 620)
+        self.resize(920, 660)
         self.draft_active: set[str] = set(active_skills)
         self.checked_items: set[str] = set(checked_skills or set())
         self.saved_result: set[str] | None = None
@@ -715,6 +730,21 @@ class BlenderSkillsDialog(QDialog):
         self.scroll.setWidget(self.grid_host)
         root.addWidget(self.scroll, stretch=1)
 
+        # Canlı Skill Açıklama Kartı (? butonuna tıklanınca veya üzerine gelince ne işe yaradığını anlatır)
+        self.skill_help_card = QFrame()
+        self.skill_help_card.setObjectName("card")
+        self.skill_help_card.setStyleSheet("QFrame#card { border: 1px solid #2563eb; background-color: #132038; }")
+        sh_lay = QVBoxLayout(self.skill_help_card)
+        sh_lay.setContentsMargins(10, 6, 10, 6)
+        sh_lay.setSpacing(3)
+        self.skill_help_title = QLabel("<b>ℹ️ Skill Rehberi:</b> <span style='color:#93c5fd;'>Herhangi bir skill'in yanındaki (?) ikonuna tıklayarak açtığınızda ne işe yaradığını görebilirsiniz.</span>")
+        self.skill_help_body = QLabel(describe_blender_skill("blender-director"))
+        self.skill_help_body.setWordWrap(True)
+        self.skill_help_body.setStyleSheet("color: #cbd5e1; font-size: 11px;")
+        sh_lay.addWidget(self.skill_help_title)
+        sh_lay.addWidget(self.skill_help_body)
+        root.addWidget(self.skill_help_card)
+
         self.prompt_preview = QPlainTextEdit()
         self.prompt_preview.setReadOnly(True)
         self.prompt_preview.setFixedHeight(105)
@@ -727,7 +757,7 @@ class BlenderSkillsDialog(QDialog):
         bot.addStretch()
 
         self.btn_ask_ai = QPushButton("🤖 AI'a Danış (Prompt Kopyala)")
-        self.btn_paste_ai = QPushButton("📥 AI Yanıtını Yapıştır & Uygula")
+        self.btn_paste_ai = QPushButton("📥 AI Yanıtını Yapıştır && Uygula")
         self.btn_cancel = QPushButton("Vazgeç")
         self.btn_save = QPushButton("💾 Kaydet")
         self.btn_save.setObjectName("successBtn")
@@ -742,6 +772,17 @@ class BlenderSkillsDialog(QDialog):
         root.addLayout(bot)
 
         self._rebuild_grid()
+
+    def _show_skill_help(self, skill_name: str) -> None:
+        self.skill_help_title.setText(f"<b>ℹ️ {skill_name}</b> — Açarsan / Kapatırsan Ne Olur?")
+        self.skill_help_body.setText(describe_blender_skill(skill_name))
+
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:  # noqa: N802
+        if event.type() == QEvent.Type.Enter:
+            sk_nm = watched.property("skill_name")
+            if sk_nm:
+                self._show_skill_help(str(sk_nm))
+        return super().eventFilter(watched, event)
 
     def _rebuild_grid(self) -> None:
         while self.grid_layout.count():
@@ -770,11 +811,23 @@ class BlenderSkillsDialog(QDialog):
             card.setObjectName("card")
             row_lay = QHBoxLayout(card)
             row_lay.setContentsMargins(8, 4, 8, 4)
+            row_lay.setSpacing(5)
 
+            desc_txt = describe_blender_skill(sk)
             cb = QCheckBox(sk)
             cb.setChecked(sk in self.checked_items)
+            cb.setToolTip(f"❓ {sk}\n{desc_txt}")
+            cb.setProperty("skill_name", sk)
+            cb.installEventFilter(self)
             cb.toggled.connect(lambda checked, name=sk: self._on_check_toggled(name, checked))
             row_lay.addWidget(cb, stretch=1)
+
+            q_btn = _create_option_help_badge(
+                f"❓ {sk}\n{desc_txt}",
+                lambda name=sk: self._show_skill_help(name),
+                size=18,
+            )
+            row_lay.addWidget(q_btn)
 
             is_on = sk in self.draft_active
             badge = QLabel("AÇIK" if is_on else "KAPALI")
@@ -858,7 +911,7 @@ class BlenderSkillsDialog(QDialog):
 
 
 class ToolGearDialog(QDialog):
-    """⚙️ Standart Araç Teknik Ayarları + Konum Bilgisi + Çift Yönlü AI Danışma Penceresi."""
+    """⚙️ Standart Araç Teknik Ayarları + (?) Özellik Rehberi + Çift Yönlü AI Danışma Penceresi."""
 
     def __init__(
         self,
@@ -874,9 +927,11 @@ class ToolGearDialog(QDialog):
         self.logs = logs
         self.scope_display = scope_display
         self.setWindowTitle(f"⚙️ {tool.name} — Teknik Ayarlar")
-        self.resize(650, 460)
+        self.setMinimumWidth(680)
+        self.resize(700, 560)
 
         lay = QVBoxLayout(self)
+        lay.setSpacing(8)
 
         # Konum / Proje Bilgi Kartı
         loc_card = QFrame()
@@ -889,12 +944,38 @@ class ToolGearDialog(QDialog):
             loc_lay.addWidget(det)
         lay.addWidget(loc_card)
 
+        # Canlı Özellik / Ayar Açıklama Kartı (Aşağıdaki ? butonları ve hover ile güncellenir)
+        self.opt_help_card = QFrame()
+        self.opt_help_card.setObjectName("card")
+        self.opt_help_card.setStyleSheet("QFrame#card { border: 1px solid #2563eb; background-color: #132038; }")
+        oh_lay = QVBoxLayout(self.opt_help_card)
+        oh_lay.setContentsMargins(12, 8, 12, 8)
+        oh_lay.setSpacing(4)
+        self.opt_help_title = QLabel("<b>ℹ️ Özellik Rehberi (Açarsan / Kapatırsan Ne Olur?)</b>")
+        self.opt_help_body = QLabel("")
+        self.opt_help_body.setWordWrap(True)
+        self.opt_help_body.setStyleSheet("color: #dbeafe; font-size: 12px;")
+        oh_lay.addWidget(self.opt_help_title)
+        oh_lay.addWidget(self.opt_help_body)
+
         if tool.param_label:
             p_card = QFrame()
             p_card.setObjectName("card")
             p_lay = QVBoxLayout(p_card)
-            p_lay.addWidget(QLabel(f"<b>{tool.param_label}</b>"))
+            p_hdr = QHBoxLayout()
+            p_hdr.setSpacing(6)
+            p_hdr.addWidget(QLabel(f"<b>{tool.param_label}</b>"))
+            p_help = tool.param_help or f"{tool.param_label} değerini projeye göre özelleştirmenizi sağlar."
+            p_hdr.addWidget(
+                _create_option_help_badge(
+                    f"❓ {tool.param_label}\n{p_help}",
+                    lambda lbl=tool.param_label, h=p_help: self._show_option_help(lbl, h),
+                )
+            )
+            p_hdr.addStretch()
+            p_lay.addLayout(p_hdr)
             self.param_inp = QLineEdit(tool.param_value)
+            self.param_inp.setToolTip(p_help)
             p_lay.addWidget(self.param_inp)
             lay.addWidget(p_card)
         else:
@@ -909,17 +990,64 @@ class ToolGearDialog(QDialog):
             v_lay.addWidget(QLabel(f"🔐 <b>{tool.vault_key_name}:</b> {status_txt}"))
             lay.addWidget(v_card)
 
-        opt_card = QFrame()
-        opt_card.setObjectName("card")
-        opt_lay = QVBoxLayout(opt_card)
-        opt_lay.addWidget(QLabel("<b>Özellikler & Çalışma İzinleri</b>"))
         self.opt_checks: dict[str, QCheckBox] = {}
-        for opt in tool.options:
-            cb = QCheckBox(opt.label)
-            cb.setChecked(opt.enabled)
-            self.opt_checks[opt.key] = cb
-            opt_lay.addWidget(cb)
-        lay.addWidget(opt_card)
+        if tool.options:
+            opt_card = QFrame()
+            opt_card.setObjectName("card")
+            opt_lay = QVBoxLayout(opt_card)
+            opt_lay.setSpacing(6)
+            opt_lay.addWidget(
+                QLabel(
+                    "<b>Özellikler & Çalışma İzinleri</b>  "
+                    "<span style='color:#94a3b8; font-size:11px;'>(Yanındaki <b>?</b> butonuna tıklayarak veya üzerine gelerek ne işe yaradığını okuyun)</span>"
+                )
+            )
+            for opt in tool.options:
+                row_w = QWidget()
+                row_w.setObjectName("cellBox")
+                r_lay = QHBoxLayout(row_w)
+                r_lay.setContentsMargins(2, 2, 2, 2)
+                r_lay.setSpacing(8)
+
+                h_txt = (
+                    opt.help_text
+                    or "✅ AÇARSAN: Bu alt özelliği etkinleştirir.\n⛔ KAPATIRSAN: Bu alt özellik devre dışı kalır."
+                )
+                cb = QCheckBox(opt.label)
+                cb.setChecked(opt.enabled)
+                cb.setCursor(Qt.CursorShape.PointingHandCursor)
+                cb.setToolTip(f"❓ {opt.label}\n\n{h_txt}")
+                cb.installEventFilter(self)
+                cb.setProperty("opt_title", opt.label)
+                cb.setProperty("opt_help", h_txt)
+                self.opt_checks[opt.key] = cb
+                r_lay.addWidget(cb)
+
+                info_btn = _create_option_help_badge(
+                    f"❓ {opt.label}\n\n{h_txt}",
+                    lambda lbl=opt.label, h=h_txt: self._show_option_help(lbl, h),
+                )
+                r_lay.addWidget(info_btn)
+                r_lay.addStretch()
+                opt_lay.addWidget(row_w)
+            lay.addWidget(opt_card)
+
+        lay.addWidget(self.opt_help_card)
+
+        # Açılışta ilk özelliğin (veya parametrenin) açıklamasını rehber kutusunda hemen göster
+        if tool.options:
+            first = tool.options[0]
+            self._show_option_help(
+                first.label,
+                first.help_text or "✅ AÇARSAN: Bu alt özelliği etkinleştirir.\n⛔ KAPATIRSAN: Devre dışı bırakır.",
+            )
+        elif tool.param_label:
+            self._show_option_help(
+                tool.param_label,
+                tool.param_help or f"{tool.param_label} değerini yapılandırır.",
+            )
+        else:
+            self.opt_help_card.hide()
 
         self.prompt_preview = QPlainTextEdit()
         self.prompt_preview.setReadOnly(True)
@@ -931,7 +1059,7 @@ class ToolGearDialog(QDialog):
 
         bot = QHBoxLayout()
         btn_ask = QPushButton("🤖 AI'a Danış (Prompt Kopyala)")
-        btn_paste = QPushButton("📥 AI Yanıtını Yapıştır & Uygula")
+        btn_paste = QPushButton("📥 AI Yanıtını Yapıştır && Uygula")
         btn_cancel = QPushButton("Vazgeç")
         btn_save = QPushButton("💾 Kaydet")
         btn_save.setObjectName("successBtn")
@@ -947,6 +1075,19 @@ class ToolGearDialog(QDialog):
         bot.addWidget(btn_cancel)
         bot.addWidget(btn_save)
         lay.addLayout(bot)
+
+    def _show_option_help(self, title: str, help_body: str) -> None:
+        self.opt_help_title.setText(f"<b>ℹ️ {title}</b>")
+        self.opt_help_body.setText(help_body)
+        self.opt_help_card.show()
+
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:  # noqa: N802
+        if event.type() == QEvent.Type.Enter:
+            t = watched.property("opt_title")
+            h = watched.property("opt_help")
+            if t and h:
+                self._show_option_help(str(t), str(h))
+        return super().eventFilter(watched, event)
 
     def _copy_prompt(self) -> None:
         cur_param = self.param_inp.text().strip() if self.param_inp else ""

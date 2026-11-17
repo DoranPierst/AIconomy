@@ -295,12 +295,16 @@ class StateStore:
                         has_gear=bool(tdata.get("has_gear", False)),
                         param_label=tdata.get("param_label", ""),
                         param_value=tdata.get("param_value", ""),
+                        param_help=tdata.get("param_help", ""),
                         install_cmd=tdata.get("install_cmd", ""),
                         mcp_server_key=tdata.get("mcp_server_key", tid),
                         mcp_command=tdata.get("mcp_command", ""),
                         mcp_args=tdata.get("mcp_args", []),
                         ai_question_hint=tdata.get("ai_question_hint", "Bu aracın ayarlarını projem için nasıl optimize etmeliyim?"),
-                        options=[CheckOption(o["key"], o["label"], o["enabled"]) for o in tdata.get("custom_options", [])],
+                        options=[
+                            CheckOption(o["key"], o["label"], o["enabled"], o.get("help_text", ""))
+                            for o in tdata.get("custom_options", [])
+                        ],
                     )
                 )
         return active_skills, meta
@@ -336,11 +340,15 @@ class StateStore:
                         "has_gear": t.has_gear,
                         "param_label": t.param_label,
                         "param_value": t.param_value,
+                        "param_help": t.param_help,
                         "install_cmd": t.install_cmd,
                         "mcp_server_key": t.mcp_server_key,
                         "mcp_command": t.mcp_command,
                         "mcp_args": t.mcp_args,
-                        "custom_options": [{"key": o.key, "label": o.label, "enabled": o.enabled} for o in t.options],
+                        "custom_options": [
+                            {"key": o.key, "label": o.label, "enabled": o.enabled, "help_text": o.help_text}
+                            for o in t.options
+                        ],
                     }
                 )
             tools_dict[t.id] = entry

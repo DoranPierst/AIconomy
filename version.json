@@ -1,5 +1,5 @@
 {
-  "version": "1.2.3",
+  "version": "1.2.4",
   "update_repo": "https://github.com/DoranPierst/ai-arac-merkezi",
-  "changelog": "Debug & Log sekmesine çoklu log seçimi, tam satır hover ve seçili hataları araç sürümleri/ham çıktılarla birleştiren hazır AI çözüm promptu üretici eklendi."
+  "changelog": "Tüm araçların teknik ayar (çark) pencerelerindeki özelliklerin ve 94 Blender Skill'in yanına 'Açarsan ne olur / Kapatırsan ne olur' (?) bilgi rehberi eklendi."
 }
