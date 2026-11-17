@@ -1,5 +1,5 @@
 {
-  "version": "1.2.2",
+  "version": "1.2.3",
   "update_repo": "https://github.com/DoranPierst/ai-arac-merkezi",
-  "changelog": "Üst hazır ayarlara çoklu seçili kalma + değişiklik öncesi kaydetme uyarısı eklendi; tüm eklentilerin sürümleri tablo satırlarına yazıldı ve program güncelleyici doğrudan DoranPierst/ai-arac-merkezi kanalına bağlandı."
+  "changelog": "Debug & Log sekmesine çoklu log seçimi, tam satır hover ve seçili hataları araç sürümleri/ham çıktılarla birleştiren hazır AI çözüm promptu üretici eklendi."
 }

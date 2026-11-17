@@ -117,3 +117,90 @@ def parse_tool_ai_response(tool: ToolSpec, text: str) -> tuple[set[str], str]:
     if found:
         return found, f"Metinden {len(found)} seçenek anahtarı yakalandı"
     return set(), "Eşleşen seçenek anahtarı bulunamadı"
+
+
+def build_logs_ai_prompt(
+    selected_logs: list[dict],
+    all_tools: list[ToolSpec],
+    app_version: str,
+    gpu_status: str = "",
+) -> str:
+    """Seçilen debug/hata loglarını, ilgili araçların sürümlerini ve ortam bilgisini birleştirerek hazır AI çözüm promptu üretir."""
+    import platform
+
+    by_name = {t.name.lower(): t for t in all_tools}
+    affected_tools: list[ToolSpec] = []
+    seen_ids: set[str] = set()
+
+    for entry in selected_logs:
+        t_nm = str(entry.get("tool", "")).strip().lower()
+        matched_t = by_name.get(t_nm)
+        if matched_t is None:
+            for cand in all_tools:
+                if cand.name.lower() in t_nm or t_nm in cand.name.lower():
+                    matched_t = cand
+                    break
+        if matched_t is not None and matched_t.id not in seen_ids:
+            seen_ids.add(matched_t.id)
+            affected_tools.append(matched_t)
+
+    lines: list[str] = [
+        "[AI Araç & Token Ekonomisi Kontrol Merkezi — Hata Teşhis & Çözüm İsteği]",
+        f"• Program Sürümü: {app_version}v | Sistem: Windows ({platform.release()}) / Python {platform.python_version()}",
+    ]
+    if gpu_status:
+        lines.append(f"• GPU / VRAM Durumu: {gpu_status}")
+
+    # 1) Loglarda adı geçen araçların detaylı sürüm ve yapılandırma bilgisi
+    if affected_tools:
+        lines.extend(["", "=== 1. ETKİLENEN ARAÇLARIN SÜRÜM VE AYAR BİLGİLERİ ==="])
+        for t in affected_tools:
+            cur_v = t.version.strip().lstrip("vV")
+            lat_v = (t.latest_version or "").strip().lstrip("vV")
+            ver_info = f"{cur_v}v (Son sürüm: {lat_v}v)" if (lat_v and lat_v != cur_v) else f"{cur_v}v"
+            port_info = f" | Port: :{t.port}" if t.port else ""
+            mode_info = t.modes[t.mode_index] if (len(t.modes) > 1 and 0 <= t.mode_index < len(t.modes)) else "Standart"
+            clients_on = ", ".join(k for k, v in t.clients.items() if v) or "Kapalı"
+            lines.append(
+                f"- {t.name} | Tür: {t.kind} | Sürüm: {ver_info} | Durum: {'AÇIK' if t.enabled else 'KAPALI'}{port_info}"
+            )
+            lines.append(f"  • Son Yanıt: {t.last_ping} | Mod: {mode_info} | AI İstemcileri: {clients_on} | Kapsam: {t.project_scope}")
+            if t.install_cmd:
+                lines.append(f"  • Kurulum / Çalıştırma Komutu: {t.install_cmd}")
+            if t.live_location_detail:
+                lines.append(f"  • Konum Detayı: {t.live_location_detail}")
+            if t.options:
+                on_opts = [f"{o.key}=Açık" if o.enabled else f"{o.key}=Kapalı" for o in t.options]
+                lines.append(f"  • Alt Seçenekler: {', '.join(on_opts)}")
+
+    # 2) Tüm kurulu/kayıtlı araçların sürüm özeti (çakışma/uyumluluk kontrolü için)
+    lines.extend(["", "=== 2. TÜM ARAÇLAR VE SÜRÜM ÖZETİ ==="])
+    compact_tools = [
+        f"{t.name} ({t.version.lstrip('vV')}v, {'AÇIK' if t.enabled else 'KAPALI'}{f', :{t.port}' if t.port else ''})"
+        for t in all_tools
+    ]
+    lines.append(", ".join(compact_tools))
+
+    # 3) Seçilen hata / debug logları ve ham çıktılar
+    lines.extend(["", f"=== 3. SEÇİLEN LOG VE HATA KAYITLARI ({len(selected_logs)} Adet) ==="])
+    for idx, entry in enumerate(selected_logs, start=1):
+        port_tag = f" | Port: {entry['port']}" if entry.get("port") else ""
+        lines.append(f"\n--- Kayıt #{idx} [{entry.get('ts', '')}] [{entry.get('level', '')}] Araç: {entry.get('tool', '')}{port_tag} ---")
+        lines.append(f"Özet: {entry.get('summary', '')}")
+        raw_det = str(entry.get("raw_detail", "")).strip()
+        if raw_det and raw_det != str(entry.get("summary", "")).strip():
+            lines.append("Ham Teknik Çıktı (stdout / stderr / detay):")
+            lines.append("```text")
+            lines.append(raw_det)
+            lines.append("```")
+
+    lines.extend(
+        [
+            "",
+            "=== BEKLENEN ÇÖZÜM ===",
+            "Yukarıdaki hata kayıtlarını, araç sürümlerini, portları ve ham teknik çıktıları inceleyerek:",
+            "1) Sorunun kök nedenini (root cause) kısaca açıkla.",
+            "2) Sorunu kesin olarak çözmek için çalıştırmam gereken komutları veya değiştirmem gereken ayarları adım adım yaz.",
+        ]
+    )
+    return "\n".join(lines)
