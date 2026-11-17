@@ -1,0 +1,19 @@
+# Kişisel veriler, şifreli kasa ve SQLite logları (Asla GitHub'a yüklenmez)
+data/
+dist/data/
+*.dpapi.json
+*.db
+*.db-journal
+*.aihub
+ai_arac_ayarlar*.json
+*.bak
+
+# Derleme ve sanal ortam çıktıları
+.venv/
+__pycache__/
+*.py[cod]
+build/
+dist/
+*.spec
+_apply_update.bat
+*.exe.new
