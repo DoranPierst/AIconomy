@@ -95,7 +95,8 @@ QPushButton#warnBtn { background-color: #7c2d12; border-color: #ea580c; color: #
 QLineEdit, QComboBox, QPlainTextEdit { background-color: #0f141c; border: 1px solid #2e3d54; border-radius: 5px; padding: 4px 8px; color: #e6edf3; }
 QTableWidget { background-color: #111823; alternate-background-color: #151e2b; gridline-color: #1f2a3c; border: 1px solid #243042; border-radius: 6px; }
 QWidget#cellBox { background: transparent; }
-QHeaderView::section { background-color: #182232; color: #94a3b8; padding: 6px; border: none; border-bottom: 1px solid #243042; font-weight: 600; }
+QHeaderView::section { background-color: #182232; color: #94a3b8; padding: 6px 10px; border: none; border-right: 1px solid #2c3d55; border-bottom: 1px solid #2c3d55; font-weight: 600; }
+QHeaderView::section:hover { background-color: #1f2e45; color: #e2e8f0; }
 QFrame#card { background-color: #151e2b; border: 1px solid #243042; border-radius: 6px; }
 QProgressBar { border: 1px solid #2e3d54; border-radius: 4px; background: #0f141c; text-align: center; color: #e6edf3; min-height: 18px; }
 QProgressBar::chunk { background-color: #2563eb; border-radius: 3px; }
@@ -115,7 +116,8 @@ QPushButton#warnBtn { background-color: #ea580c; border-color: #ea580c; color: #
 QLineEdit, QComboBox, QPlainTextEdit { background-color: #ffffff; border: 1px solid #cbd5e1; border-radius: 5px; padding: 4px 8px; color: #1e293b; }
 QTableWidget { background-color: #ffffff; alternate-background-color: #f8fafc; gridline-color: #e2e8f0; border: 1px solid #cbd5e1; border-radius: 6px; }
 QWidget#cellBox { background: transparent; }
-QHeaderView::section { background-color: #f1f5f9; color: #475569; padding: 6px; border: none; border-bottom: 1px solid #cbd5e1; font-weight: 600; }
+QHeaderView::section { background-color: #f1f5f9; color: #475569; padding: 6px 10px; border: none; border-right: 1px solid #cbd5e1; border-bottom: 1px solid #cbd5e1; font-weight: 600; }
+QHeaderView::section:hover { background-color: #e2e8f0; color: #0f172a; }
 QFrame#card { background-color: #f8fafc; border: 1px solid #cbd5e1; border-radius: 6px; }
 """
 
@@ -1453,6 +1455,7 @@ class MainWindow(QMainWindow):
         self.table.setColumnWidth(5, AiMatrixHeaderView.AI_COL_WIDTH)
         hdr.setSectionResizeMode(6, QHeaderView.ResizeMode.ResizeToContents)
         hdr.setSectionResizeMode(7, QHeaderView.ResizeMode.ResizeToContents)
+        hdr.setCursor(Qt.CursorShape.PointingHandCursor)
         hdr.sectionClicked.connect(self._on_header_clicked)
         self.table.horizontalScrollBar().valueChanged.connect(lambda *_: hdr.sync_ai_bar_geometry())
         lay.addWidget(self.table, stretch=1)
@@ -1522,7 +1525,7 @@ class MainWindow(QMainWindow):
         self.set_status(f"📁 Yeni proje tanımlandı: {proj_key} ({p_path})")
 
     def _on_header_clicked(self, col: int) -> None:
-        key_map = {0: "name", 1: "kind", 2: "project", 3: "ping", 4: "usage", 7: "enabled"}
+        key_map = {0: "name", 1: "kind", 2: "project", 3: "ping", 4: "usage", 6: "mode", 7: "enabled"}
         if col not in key_map:
             return
         k = key_map[col]
@@ -1531,20 +1534,64 @@ class MainWindow(QMainWindow):
         else:
             self.sort_key = k
             self.sort_desc = col in (3, 4, 7)
+        self._save_state()
         self._refresh_table()
+
+    def _update_panel_header_indicators(self) -> None:
+        base_labels = [
+            "Araç",
+            "Tür",
+            "Proje / Konum",
+            "Son Yanıt",
+            "Kullanım",
+            "",
+            "Çalışma Modu",
+            "Detay / Durum",
+        ]
+        key_to_col = {
+            "name": 0,
+            "kind": 1,
+            "project": 2,
+            "ping": 3,
+            "usage": 4,
+            "mode": 6,
+            "enabled": 7,
+        }
+        active_col = key_to_col.get(self.sort_key, -1)
+        arrow = " ▼" if self.sort_desc else " ▲"
+        labels = [
+            f"{lbl}{arrow}" if (idx == active_col and lbl) else lbl
+            for idx, lbl in enumerate(base_labels)
+        ]
+        self.table.setHorizontalHeaderLabels(labels)
 
     def _tool_sort_value(self, item: ToolSpec) -> Any:
         if self.sort_key == "name":
             return item.name.lower()
         if self.sort_key == "kind":
-            return item.kind.lower()
+            return (item.kind.lower(), item.name.lower())
         if self.sort_key == "project":
-            return (item.project_scope if item.scope_selectable else item.fixed_location_label).lower()
+            if item.scope_selectable:
+                vis = "tüm projeler" if item.project_scope == "GLOBAL" else item.project_scope.lower()
+            else:
+                raw = (item.fixed_location_label or "sistem geneli").strip()
+                vis = raw.lstrip("🖥️🌐📁📍🟢⚠️☁️ ").lower()
+            return (vis, item.name.lower())
         if self.sort_key == "ping":
-            return item.last_latency_ms if item.last_latency_ms >= 0 else 999999
+            if item.last_latency_ms >= 0:
+                return (1, -item.last_latency_ms, item.name.lower())
+            return (0, 0, item.last_ping.lower(), item.name.lower())
+        if self.sort_key == "mode":
+            if item.id == "blender_skills":
+                m_txt = f"{len(self.active_skills):02d}/94"
+            elif len(item.modes) > 1:
+                m_txt = item.modes[item.mode_index].lower()
+            else:
+                m_txt = "~"
+            return (m_txt, item.name.lower())
         if self.sort_key == "enabled":
-            return (1 if item.enabled else 0, item.usage_count)
-        return item.usage_count
+            return (1 if item.enabled else 0, item.usage_count, item.name.lower())
+        return (item.usage_count, item.name.lower())
 
     def _calculate_token_economy(self) -> tuple[int, int]:
         active_tok = 0
@@ -1587,6 +1634,7 @@ class MainWindow(QMainWindow):
                     continue
             rows.append(t)
 
+        self._update_panel_header_indicators()
         rows.sort(key=self._tool_sort_value, reverse=self.sort_desc)
         panel_checked_set = self._get_panel_checked_set()
         self.panel_row_checks.clear()

@@ -1,5 +1,5 @@
 {
-  "version": "1.2.8",
+  "version": "1.2.9",
   "update_repo": "https://github.com/DoranPierst/ai-arac-merkezi",
-  "changelog": "Kullanıcıya özel isimli config/ayar kaydı (💾 Kayıtlarım) kutusu eklendi: istediğiniz isimle kaydedip açılır listeden geçmiş kayıtlarınıza tek tıkla dönebilirsiniz."
+  "changelog": "Tablo sütun başlıkları dikey çizgiler ve aktif sıralama oklarıyla (▲/▼) netleştirildi; Son Yanıt, Proje/Konum ve Çalışma Modu sıralamaları ekrandaki değerlere göre düzeltildi."
 }
