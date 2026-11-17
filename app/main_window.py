@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QGridLayout,
     QHBoxLayout,
     QHeaderView,
+    QInputDialog,
     QLabel,
     QLineEdit,
     QMainWindow,
@@ -1175,6 +1176,7 @@ class MainWindow(QMainWindow):
         for t in self.tools:
             t.live_location_detail = resolve_disk_location(t, self.projects_map, {})
         self._rebuild_project_filter_combo()
+        self._rebuild_custom_presets_combo()
         self._refresh_table()
         self._refresh_plugins_tab()
         self._refresh_vault_tab()
@@ -1383,9 +1385,42 @@ class MainWindow(QMainWindow):
         flt.addWidget(btn_add_proj)
 
         flt.addStretch()
-        hint_lbl = QLabel("📍 / 🟢 ikonunun üzerine gelerek canlı süreç ve dosya konumunu görebilirsiniz.")
-        hint_lbl.setStyleSheet("color: #64748b; font-size: 11px;")
-        flt.addWidget(hint_lbl)
+
+        # ÖZEL KAYITLI AYARLARIM KUTUSU (Üstteki Hazır Ayarlardan ayrı, kullanıcıya özel isimli kayıtlar)
+        preset_box = QFrame()
+        preset_box.setObjectName("card")
+        pb_lay = QHBoxLayout(preset_box)
+        pb_lay.setContentsMargins(8, 3, 8, 3)
+        pb_lay.setSpacing(6)
+
+        pb_lay.addWidget(QLabel("<b>💾 Kayıtlarım:</b>"))
+
+        self.saved_presets_cmb = QComboBox()
+        self.saved_presets_cmb.setMinimumWidth(220)
+        self.saved_presets_cmb.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.saved_presets_cmb.setToolTip(
+            "Daha önce isim vererek kaydettiğiniz özel araç/proje düzenlerini listeler.\n"
+            "• Bir kayıt seçtiğinizde tüm araçlar (AÇIK/KAPALI, AI istemcileri, proje kapsamı, modlar) o kayda döner."
+        )
+        self.saved_presets_cmb.currentIndexChanged.connect(self._on_custom_preset_selected)
+        pb_lay.addWidget(self.saved_presets_cmb)
+
+        btn_save_preset = QPushButton("💾 Kaydet")
+        btn_save_preset.setObjectName("primaryBtn")
+        btn_save_preset.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_save_preset.setToolTip("Şu anki araç, AI ve proje ayarlarınızı istediğiniz bir isimle kaydeder")
+        btn_save_preset.clicked.connect(self._save_custom_preset)
+        pb_lay.addWidget(btn_save_preset)
+
+        self.btn_del_preset = QPushButton("🗑️")
+        self.btn_del_preset.setFixedSize(28, 26)
+        self.btn_del_preset.setStyleSheet("padding: 0px; font-size: 13px;")
+        self.btn_del_preset.setEnabled(False)
+        self.btn_del_preset.setToolTip("Seçili kayıtlı ayarı sil")
+        self.btn_del_preset.clicked.connect(self._delete_custom_preset)
+        pb_lay.addWidget(self.btn_del_preset)
+
+        flt.addWidget(preset_box)
         lay.addLayout(flt)
 
         self.table = HoverTableWidget(0, 8, self)
@@ -2677,6 +2712,163 @@ class MainWindow(QMainWindow):
         self._refresh_logs_tab()
         self._sync_live_environment_async(target_tools=list(self.tools))
 
+    def _get_custom_presets(self) -> dict[str, dict[str, Any]]:
+        raw = self.meta.get("custom_presets")
+        if not isinstance(raw, dict):
+            raw = {}
+            self.meta["custom_presets"] = raw
+        return raw
+
+    def _rebuild_custom_presets_combo(self, selected_name: str = "") -> None:
+        if not hasattr(self, "saved_presets_cmb"):
+            return
+        presets = self._get_custom_presets()
+        self.saved_presets_cmb.blockSignals(True)
+        self.saved_presets_cmb.clear()
+        self.saved_presets_cmb.addItem(f"— Kayıtlı Ayar Seç ({len(presets)}) —", "")
+        # En son kaydedilenler üstte görünsün
+        ordered = sorted(
+            presets.items(),
+            key=lambda kv: str(kv[1].get("saved_at", "")),
+            reverse=True,
+        )
+        for p_name, p_data in ordered:
+            en_cnt = int(p_data.get("enabled_count", 0))
+            saved_at = str(p_data.get("saved_at", ""))
+            short_dt = saved_at[5:16] if len(saved_at) >= 16 else saved_at
+            lbl = f"📁 {p_name} ({en_cnt} açık · {short_dt})" if short_dt else f"📁 {p_name} ({en_cnt} açık)"
+            self.saved_presets_cmb.addItem(lbl, p_name)
+
+        idx = self.saved_presets_cmb.findData(selected_name) if selected_name else 0
+        self.saved_presets_cmb.setCurrentIndex(max(0, idx))
+        self.saved_presets_cmb.blockSignals(False)
+        if hasattr(self, "btn_del_preset"):
+            self.btn_del_preset.setEnabled(self.saved_presets_cmb.currentIndex() > 0)
+
+    def _save_custom_preset(self) -> None:
+        cur_sel = str(self.saved_presets_cmb.currentData() or "")
+        default_name = cur_sel or (next(iter(self.projects_map.keys()), "") or "Özel Ayarım")
+        name, ok = QInputDialog.getText(
+            self,
+            "💾 Ayar Düzenini Kaydet",
+            "Bu araç/proje yapılandırmasını hangi isimle kaydetmek istersiniz?\n"
+            "(Açık/kapalı araçlar, AI seçimleri, proje kapsamları ve çalışma modları saklanır)",
+            text=default_name,
+        )
+        if not ok:
+            return
+        name = name.strip()
+        if not name:
+            QMessageBox.warning(self, "Geçersiz İsim", "Lütfen boş olmayan bir kayıt adı girin.")
+            return
+
+        presets = self._get_custom_presets()
+        if name in presets and name != cur_sel:
+            ans = QMessageBox.question(
+                self,
+                "Aynı İsimde Kayıt Var",
+                f"'{name}' adında bir kaydınız zaten bulunuyor. Üzerine yazmak ister misiniz?",
+            )
+            if ans != QMessageBox.StandardButton.Yes:
+                return
+
+        presets[name] = {
+            "name": name,
+            "saved_at": dt.datetime.now().strftime("%Y-%m-%d %H:%M"),
+            "enabled_count": sum(1 for t in self.tools if t.enabled),
+            "active_blender_skills": sorted(self.active_skills),
+            "tools": {
+                t.id: {
+                    "enabled": bool(t.enabled),
+                    "clients": dict(t.clients),
+                    "project_scope": t.project_scope,
+                    "mode_index": int(t.mode_index),
+                    "param_value": t.param_value,
+                    "options": {o.key: bool(o.enabled) for o in t.options},
+                }
+                for t in self.tools
+            },
+        }
+        self._save_state()
+        self._rebuild_custom_presets_combo(selected_name=name)
+        self.logs.add("INFO", "Kayıtlı Ayarlar", f"'{name}' adıyla ayar düzeni kaydedildi ({presets[name]['enabled_count']} araç açık).")
+        self.set_status(f"💾 '{name}' kaydı oluşturuldu — artık Kayıtlarım listesinden tek tıkla dönebilirsiniz.")
+        self._refresh_logs_tab()
+
+    def _on_custom_preset_selected(self, idx: int) -> None:
+        if idx <= 0:
+            if hasattr(self, "btn_del_preset"):
+                self.btn_del_preset.setEnabled(False)
+            return
+        name = str(self.saved_presets_cmb.currentData() or "")
+        if name:
+            self.apply_custom_preset(name)
+
+    def apply_custom_preset(self, name: str) -> None:
+        presets = self._get_custom_presets()
+        pdata = presets.get(name)
+        if not isinstance(pdata, dict):
+            return
+
+        tools_snap = pdata.get("tools", {})
+        if isinstance(tools_snap, dict):
+            for t in self.tools:
+                saved = tools_snap.get(t.id)
+                if not isinstance(saved, dict):
+                    continue
+                if "enabled" in saved:
+                    t.enabled = bool(saved["enabled"])
+                if isinstance(saved.get("clients"), dict):
+                    for k, v in saved["clients"].items():
+                        if k in t.clients:
+                            t.clients[k] = bool(v)
+                if "project_scope" in saved and t.scope_selectable:
+                    t.project_scope = str(saved["project_scope"])
+                if "mode_index" in saved and t.modes:
+                    t.mode_index = max(0, min(int(saved["mode_index"]), len(t.modes) - 1))
+                if "param_value" in saved:
+                    t.param_value = str(saved["param_value"])
+                if isinstance(saved.get("options"), dict):
+                    for o in t.options:
+                        if o.key in saved["options"]:
+                            o.enabled = bool(saved["options"][o.key])
+
+        if isinstance(pdata.get("active_blender_skills"), list):
+            self.active_skills = {str(s) for s in pdata["active_blender_skills"]}
+
+        self.meta["active_profiles"] = []
+        self._update_profile_buttons_ui()
+        self._save_state()
+        if hasattr(self, "btn_del_preset"):
+            self.btn_del_preset.setEnabled(True)
+
+        en_cnt = sum(1 for t in self.tools if t.enabled)
+        self.logs.add("INFO", "Kayıtlı Ayarlar", f"'{name}' kaydı yüklendi ({en_cnt} araç açık).")
+        self.set_status(f"💾 '{name}' kaydı uygulandı ({en_cnt} araç açık) — canlı config'ler güncelleniyor.")
+        self._refresh_table()
+        self._refresh_plugins_tab()
+        self._refresh_logs_tab()
+        self._sync_live_environment_async(target_tools=list(self.tools))
+
+    def _delete_custom_preset(self) -> None:
+        name = str(self.saved_presets_cmb.currentData() or "")
+        if not name:
+            return
+        ans = QMessageBox.question(
+            self,
+            "Kaydı Sil",
+            f"'{name}' adlı kayıtlı ayar düzenini silmek istediğinize emin misiniz?",
+        )
+        if ans != QMessageBox.StandardButton.Yes:
+            return
+        presets = self._get_custom_presets()
+        presets.pop(name, None)
+        self._save_state()
+        self._rebuild_custom_presets_combo()
+        self.logs.add("INFO", "Kayıtlı Ayarlar", f"'{name}' kaydı silindi.")
+        self.set_status(f"🗑️ '{name}' kaydı silindi.")
+        self._refresh_logs_tab()
+
     def open_gear(self, tool: ToolSpec) -> None:
         if tool.gear_kind == "skills94":
             saved_chk = set(self.meta.get("checked_blender_skills", []))
@@ -2907,6 +3099,7 @@ class MainWindow(QMainWindow):
         self.tabs.setTabText(0, f"📊 Araç Paneli ({len(self.tools)})")
         self._update_profile_buttons_ui()
         self._rebuild_project_filter_combo()
+        self._rebuild_custom_presets_combo()
         self._refresh_table()
         self._refresh_plugins_tab()
         self.run_health_scan()
