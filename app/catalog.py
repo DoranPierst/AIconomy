@@ -87,6 +87,9 @@ class ToolSpec:
     version: str
     repo_url: str
     schema_tokens: int
+    latest_version: str = ""
+    has_update: bool = False
+    release_notes_url: str = ""
     enabled: bool = True
     clients: dict[str, bool] = field(default_factory=lambda: {"AGY": True, "CDX": True, "CLD": False, "CUR": False})
     scope_selectable: bool = True

@@ -88,6 +88,7 @@ class UpdateCheckResult:
     local_version: str
     remote_version: str
     changelog: str
+    release_notes_url: str
     exe_download_url: str
     repo_url: str
     can_git_pull: bool
@@ -105,17 +106,18 @@ def check_for_app_updates(repo_input: str, github_token: str = "") -> UpdateChec
                 local_version=local_ver,
                 remote_version=local_ver,
                 changelog="",
+                release_notes_url="",
                 exe_download_url="",
                 repo_url="",
                 can_git_pull=False,
-                message="Henüz bir GitHub güncelleme reposu tanımlanmadı. Aşağıdaki kutuya GitHub repo adresinizi yazıp kaydedin.",
+                message="Henüz bir GitHub güncelleme reposu tanımlanmadı.",
             )
         repo_input = detected
 
     try:
         owner, repo = parse_github_owner_repo(repo_input)
     except ValueError as exc:
-        return UpdateCheckResult(False, False, local_ver, local_ver, "", "", repo_input, False, str(exc))
+        return UpdateCheckResult(False, False, local_ver, local_ver, "", "", "", repo_input, False, str(exc))
 
     clean_repo_url = f"https://github.com/{owner}/{repo}"
     headers = {"User-Agent": "AI-Arac-Merkezi-Updater/1.1"}
@@ -124,9 +126,10 @@ def check_for_app_updates(repo_input: str, github_token: str = "") -> UpdateChec
 
     remote_ver = ""
     changelog = ""
+    notes_url = f"{clean_repo_url}/releases"
     exe_url = ""
 
-    # 1) GitHub Releases (Hazır .exe var mı?)
+    # 1) GitHub Releases (Hazır .exe ve sürüm notu linki var mı?)
     try:
         req = urllib.request.Request(f"https://api.github.com/repos/{owner}/{repo}/releases/latest", headers=headers)
         with urllib.request.urlopen(req, timeout=7) as resp:
@@ -135,6 +138,8 @@ def check_for_app_updates(repo_input: str, github_token: str = "") -> UpdateChec
             if tag:
                 remote_ver = tag
                 changelog = str(rel.get("body", "")).strip()
+            if rel.get("html_url"):
+                notes_url = str(rel["html_url"])
             for asset in rel.get("assets", []):
                 name = str(asset.get("name", ""))
                 if name.lower().endswith(".exe"):
@@ -143,7 +148,7 @@ def check_for_app_updates(repo_input: str, github_token: str = "") -> UpdateChec
     except Exception:
         pass
 
-    # 2) main dalındaki version.json (Kaynak kod / anlık commit güncellemeleri için)
+    # 2) main dalındaki version.json
     for branch in ("main", "master"):
         try:
             v_req = urllib.request.Request(
@@ -156,6 +161,8 @@ def check_for_app_updates(repo_input: str, github_token: str = "") -> UpdateChec
                 if v_str and (not remote_ver or parse_semver(v_str) > parse_semver(remote_ver)):
                     remote_ver = v_str
                     changelog = str(v_data.get("changelog", changelog)).strip()
+                    if notes_url == f"{clean_repo_url}/releases":
+                        notes_url = f"{clean_repo_url}/commits/{branch}"
                 break
         except Exception:
             continue
@@ -167,10 +174,11 @@ def check_for_app_updates(repo_input: str, github_token: str = "") -> UpdateChec
             local_version=local_ver,
             remote_version=local_ver,
             changelog="",
+            release_notes_url="",
             exe_download_url="",
             repo_url=clean_repo_url,
             can_git_pull=False,
-            message=f"{clean_repo_url} üzerinde henüz yayınlanmış bir sürüm (version.json veya Release) bulunamadı.",
+            message=f"{clean_repo_url} üzerinde henüz yayınlanmış bir sürüm bulunamadı.",
         )
 
     has_upd = parse_semver(remote_ver) > parse_semver(local_ver)
@@ -178,9 +186,9 @@ def check_for_app_updates(repo_input: str, github_token: str = "") -> UpdateChec
     git_dir_exists = (src_root / ".git").is_dir() or (src_root.parent / ".git").is_dir()
 
     if has_upd:
-        msg = f"Yeni sürüm bulundu: v{local_ver} → v{remote_ver}!"
+        msg = f"Güncelleme Mevcut: {local_ver}v > {remote_ver}v"
     else:
-        msg = f"Programınız güncel (v{local_ver})."
+        msg = f"Program güncel ({local_ver}v)"
 
     return UpdateCheckResult(
         ok=True,
@@ -188,6 +196,7 @@ def check_for_app_updates(repo_input: str, github_token: str = "") -> UpdateChec
         local_version=local_ver,
         remote_version=remote_ver,
         changelog=changelog,
+        release_notes_url=notes_url,
         exe_download_url=exe_url,
         repo_url=clean_repo_url,
         can_git_pull=git_dir_exists,

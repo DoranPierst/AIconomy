@@ -1,6 +1,7 @@
 """Gerçek Sistem İşlemleri: Port/Sağlık Taraması, Canlı Konum Algılama, RTX VRAM, Zombie Port Temizleyici, GitHub Analizi ve Proje/Global AI Config Senkronizasyonu."""
 from __future__ import annotations
 
+import concurrent.futures
 import json
 import os
 import pathlib
@@ -18,6 +19,7 @@ import psutil
 
 from .catalog import ToolSpec
 from .storage import WindowsDpapiVault
+from .updater import parse_semver
 
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
 
@@ -679,6 +681,115 @@ PYPI_PACKAGE_MAP: dict[str, str] = {
     "blender_mcp": "blender-mcp",
     "elevenlabs_mcp": "elevenlabs-mcp",
 }
+
+
+def _fmt_ver_short(v: str) -> str:
+    clean = v.strip().lstrip("vV")
+    return f"{clean}v" if clean else ""
+
+
+def check_single_tool_update(tool: ToolSpec, github_token: str = "") -> tuple[bool, str, str]:
+    """Hiçbir şey indirmeden (salt-okunur) aracın güncel sürümünü ve sürüm notu bağlantısını kontrol eder.
+    Dönüş: (has_update, latest_version_tag, release_notes_url)
+    """
+    local_ver = tool.version.strip().lstrip("vV") or "1.0.0"
+    remote_ver = local_ver
+    notes_url = ""
+
+    gh_match = re.search(r"github\.com/([^/\s]+)/([^/\s#?]+)", tool.repo_url)
+    if gh_match:
+        gh_owner, gh_repo = gh_match.group(1), gh_match.group(2).removesuffix(".git")
+        notes_url = f"https://github.com/{gh_owner}/{gh_repo}/releases"
+    else:
+        gh_owner, gh_repo = "", ""
+
+    headers = {"User-Agent": "AI-Arac-Merkezi/1.1"}
+    if github_token:
+        headers["Authorization"] = f"Bearer {github_token}"
+
+    try:
+        if tool.id == "blender_skills":
+            notes_url = "https://github.com/arjun988/blender-skills/blob/main/CHANGELOG.md"
+            p_json = pathlib.Path.home() / ".gemini" / "config" / "plugins" / "blender-skills" / "plugin.json"
+            if p_json.is_file():
+                try:
+                    disk_v = str(json.loads(p_json.read_text(encoding="utf-8")).get("version", "")).strip().lstrip("vV")
+                    if disk_v:
+                        local_ver = disk_v
+                        tool.version = f"v{disk_v}"
+                except Exception:
+                    pass
+            req = urllib.request.Request(
+                "https://raw.githubusercontent.com/arjun988/blender-skills/main/version.json",
+                headers={"User-Agent": "AI-Arac-Merkezi/1.1"},
+            )
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                v_raw = str(json.loads(resp.read().decode("utf-8")).get("version", "")).strip().lstrip("vV")
+                if v_raw:
+                    remote_ver = v_raw
+
+        elif tool.id in NPM_PACKAGE_MAP:
+            pkg = NPM_PACKAGE_MAP[tool.id]
+            encoded_pkg = pkg.replace("/", "%2F")
+            req = urllib.request.Request(
+                f"https://registry.npmjs.org/{encoded_pkg}/latest",
+                headers={"User-Agent": "AI-Arac-Merkezi/1.1"},
+            )
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                meta = json.loads(resp.read().decode("utf-8"))
+                v_raw = str(meta.get("version", "")).strip().lstrip("vV")
+                if v_raw:
+                    remote_ver = v_raw
+            if not notes_url:
+                notes_url = f"https://www.npmjs.com/package/{pkg}?activeTab=versions"
+
+        elif tool.id in PYPI_PACKAGE_MAP:
+            pkg = PYPI_PACKAGE_MAP[tool.id]
+            req = urllib.request.Request(
+                f"https://pypi.org/pypi/{pkg}/json",
+                headers={"User-Agent": "AI-Arac-Merkezi/1.1"},
+            )
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                meta = json.loads(resp.read().decode("utf-8"))
+                v_raw = str(meta.get("info", {}).get("version", "")).strip().lstrip("vV")
+                if v_raw:
+                    remote_ver = v_raw
+            if not notes_url:
+                notes_url = f"https://pypi.org/project/{pkg}/#history"
+
+        elif tool.id in ("unity_pipeline", "trellis"):
+            remote_ver = local_ver
+            notes_url = tool.repo_url if tool.repo_url.startswith("http") else ""
+
+        elif gh_owner and gh_repo:
+            req = urllib.request.Request(
+                f"https://api.github.com/repos/{gh_owner}/{gh_repo}/releases/latest",
+                headers=headers,
+            )
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                rel = json.loads(resp.read().decode("utf-8"))
+                tag = str(rel.get("tag_name", "")).strip().lstrip("vV")
+                if tag:
+                    remote_ver = tag
+                if rel.get("html_url"):
+                    notes_url = str(rel["html_url"])
+    except Exception:
+        pass
+
+    has_upd = parse_semver(remote_ver) > parse_semver(local_ver)
+    latest_tag = f"v{remote_ver}"
+    tool.latest_version = latest_tag
+    tool.has_update = has_upd
+    tool.release_notes_url = notes_url
+    return has_upd, latest_tag, notes_url
+
+
+def check_all_tools_updates_parallel(tools: list[ToolSpec], github_token: str = "") -> int:
+    """Tüm araçların güncellemelerini paralel kontrol eder; güncellemesi olanların sayısını döndürür."""
+    with concurrent.futures.ThreadPoolExecutor(max_workers=6) as pool:
+        futures = [pool.submit(check_single_tool_update, t, github_token) for t in tools]
+        concurrent.futures.wait(futures)
+    return sum(1 for t in tools if t.has_update)
 
 
 def update_single_tool(

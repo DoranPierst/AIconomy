@@ -50,6 +50,7 @@ from .catalog import (
 )
 from .storage import LogDatabase, StateStore, WindowsDpapiVault
 from .system_ops import (
+    check_all_tools_updates_parallel,
     detect_running_dcc_apps,
     free_trellis_vram,
     inspect_github_repo,
@@ -129,6 +130,7 @@ def create_app_icon() -> QIcon:
 class WorkerBridge(QObject):
     health_done = Signal(object)
     repo_done = Signal(object)
+    plugin_check_done = Signal(int, bool)
     update_progress = Signal(int, int, str)
     update_all_done = Signal(int, int, str)
     app_check_done = Signal(object)
@@ -164,6 +166,16 @@ class AppUpdateDialog(QDialog):
         row.addWidget(self.btn_check)
         r_lay.addLayout(row)
         lay.addWidget(repo_card)
+
+        status_row = QHBoxLayout()
+        self.status_badge = QLabel("Durum kontrol bekliyor...")
+        self.status_badge.setStyleSheet("font-weight: 700; font-size: 13px;")
+        status_row.addWidget(self.status_badge, stretch=1)
+
+        self.notes_link_lbl = QLabel("")
+        self.notes_link_lbl.setOpenExternalLinks(True)
+        status_row.addWidget(self.notes_link_lbl)
+        lay.addLayout(status_row)
 
         self.info_box = QPlainTextEdit()
         self.info_box.setReadOnly(True)
@@ -220,24 +232,42 @@ class AppUpdateDialog(QDialog):
         self.last_check = res
         if res.repo_url and not self.repo_inp.text().strip():
             self.repo_inp.setText(res.repo_url)
+
+        if not res.ok:
+            self.status_badge.setText(f"⚠️ {res.message}")
+            self.status_badge.setStyleSheet("color: #f59e0b; font-weight: 700; font-size: 13px;")
+            self.notes_link_lbl.setText("")
+        elif res.has_update:
+            self.status_badge.setText(f"🔔 Güncelleme Mevcut:  {res.local_version}v > {res.remote_version}v")
+            self.status_badge.setStyleSheet("color: #f59e0b; font-weight: 700; font-size: 13px;")
+            if res.release_notes_url:
+                self.notes_link_lbl.setText(f"<a style='color:#60a5fa;' href='{res.release_notes_url}'>📄 Güncelleme Notları ↗</a>")
+        else:
+            self.status_badge.setText(f"✓ Program güncel ({res.local_version}v)")
+            self.status_badge.setStyleSheet("color: #22c55e; font-weight: 700; font-size: 13px;")
+            if res.release_notes_url:
+                self.notes_link_lbl.setText(f"<a style='color:#60a5fa;' href='{res.release_notes_url}'>📄 Sürüm Geçmişi ↗</a>")
+
         lines = [
-            f"Durum: {res.message}",
-            f"Yerel Sürüm: v{res.local_version}   |   GitHub Son Sürüm: v{res.remote_version}",
+            f"Sürüm Karşılaştırması: {res.local_version}v > {res.remote_version}v" if res.has_update else f"Mevcut Sürüm: {res.local_version}v (Güncel)",
         ]
         if res.repo_url:
-            lines.append(f"Kanal: {res.repo_url}")
+            lines.append(f"GitHub Deposu: {res.repo_url}")
+        if res.release_notes_url:
+            lines.append(f"Güncelleme Notları: {res.release_notes_url}")
         if res.exe_download_url:
-            lines.append("Paket Türü: Hazır AI-Arac-Merkezi.exe (Otomatik sıcak değişim destekli)")
+            lines.append("İndirme Türü: Hazır AI-Arac-Merkezi.exe (Tek tıkla otomatik yenileme)")
         elif res.can_git_pull:
-            lines.append("Paket Türü: Git Kaynak Deposu (git pull ile anında çekilebilir)")
+            lines.append("İndirme Türü: Git Kaynak Deposu (git pull)")
         if res.changelog:
-            lines.extend(["", "--- Sürüm Notları ---", res.changelog])
+            lines.extend(["", "--- Değişiklik Özeti ---", res.changelog])
         self.info_box.setPlainText("\n".join(lines))
-        self.btn_apply.setEnabled(res.ok and (res.has_update or res.can_git_pull))
+
+        self.btn_apply.setEnabled(res.ok and res.has_update)
         if res.has_update:
-            self.btn_apply.setText(f"⚡ Programı Güncelle (v{res.remote_version})")
+            self.btn_apply.setText(f"⚡ Güncellemeyi Başlat ({res.local_version}v > {res.remote_version}v)")
         else:
-            self.btn_apply.setText("⚡ GitHub'dan Yeniden Çek / Güncelle")
+            self.btn_apply.setText("✓ Sürüm Güncel")
 
     def run_apply(self) -> None:
         if not self.last_check:
@@ -663,13 +693,16 @@ class MainWindow(QMainWindow):
         self.bridge = WorkerBridge()
         self.bridge.health_done.connect(self._on_health_results)
         self.bridge.repo_done.connect(self._on_repo_inspected)
+        self.bridge.plugin_check_done.connect(self._on_plugin_check_done)
         self.bridge.update_progress.connect(self._on_update_progress)
         self.bridge.update_all_done.connect(self._on_update_all_done)
         self.bridge.app_check_done.connect(self._on_bg_app_check_done)
         self.plugin_checks: dict[str, QCheckBox] = {}
         self.updating_busy = False
+        self.checking_plugins_busy = False
         self.latest_app_check: UpdateCheckResult | None = None
         self._silent_app_check = False
+        self._startup_app_check = False
 
         app_ver = get_current_app_version()
         self.setWindowTitle(f"AI Araç & Token Ekonomisi Kontrol Merkezi v{app_ver}")
@@ -693,6 +726,9 @@ class MainWindow(QMainWindow):
         self.tick_timer.start(1000)
 
         QTimer.singleShot(250, self.run_health_scan)
+        # Açılışta otomatik güncelleme kontrolü (yalnız kontrol eder; başlatmak kullanıcıya aittir)
+        QTimer.singleShot(900, lambda: self.run_plugin_update_check(manual=False))
+        QTimer.singleShot(1400, self._run_startup_app_update_check)
 
     @property
     def projects_map(self) -> dict[str, str]:
@@ -749,10 +785,10 @@ class MainWindow(QMainWindow):
         btn_refresh.clicked.connect(self.run_health_scan)
         prof_bar.addWidget(btn_refresh)
 
-        self.btn_top_update_all = QPushButton("⬆️ Tümünü Güncelle")
+        self.btn_top_update_all = QPushButton("🔍 Eklenti Güncelleme Kontrol")
         self.btn_top_update_all.setObjectName("primaryBtn")
-        self.btn_top_update_all.setToolTip("Listedeki tüm araçların sürümlerini ve paketlerini arka planda günceller")
-        self.btn_top_update_all.clicked.connect(lambda: self._run_batch_update(self.tools, install_if_missing=False))
+        self.btn_top_update_all.setToolTip("Eklentiler için yeni sürüm var mı kontrol eder (güncelleme varsa Eklentiler ekranını açar)")
+        self.btn_top_update_all.clicked.connect(self._handle_top_plugin_update_btn)
         prof_bar.addWidget(self.btn_top_update_all)
 
         btn_sync = QPushButton("🔄 AI Config'lere Yaz")
@@ -1124,13 +1160,18 @@ class MainWindow(QMainWindow):
         btn_clr_all.clicked.connect(lambda: self._set_all_plugin_checks(False))
         top.addWidget(btn_clr_all)
 
-        self.btn_plugins_update_all = QPushButton("⬆️ Tümünü Güncelle")
-        self.btn_plugins_update_all.setObjectName("primaryBtn")
-        self.btn_plugins_update_all.clicked.connect(lambda: self._run_batch_update(self.tools, install_if_missing=False))
+        self.btn_plugins_check = QPushButton("🔍 Güncellemeleri Kontrol Et")
+        self.btn_plugins_check.setObjectName("primaryBtn")
+        self.btn_plugins_check.clicked.connect(lambda: self.run_plugin_update_check(manual=True))
+        top.addWidget(self.btn_plugins_check)
+
+        self.btn_plugins_update_all = QPushButton("⬆️ Mevcut Güncellemeleri Başlat (0)")
+        self.btn_plugins_update_all.setObjectName("successBtn")
+        self.btn_plugins_update_all.setEnabled(False)
+        self.btn_plugins_update_all.clicked.connect(self._handle_start_available_updates)
         top.addWidget(self.btn_plugins_update_all)
 
         self.btn_plugins_install_sel = QPushButton("📦 Seçilenleri Kur / Güncelle")
-        self.btn_plugins_install_sel.setObjectName("successBtn")
         self.btn_plugins_install_sel.clicked.connect(self._handle_update_selected_plugins)
         top.addWidget(self.btn_plugins_install_sel)
 
@@ -1146,6 +1187,16 @@ class MainWindow(QMainWindow):
         btn_import.clicked.connect(self._import_settings)
         top.addWidget(btn_import)
         lay.addLayout(top)
+
+        # Güncelleme Durum Özeti Çubuğu (Pop-up açmadan temiz bilgi verir)
+        banner = QFrame()
+        banner.setObjectName("card")
+        b_lay = QHBoxLayout(banner)
+        b_lay.setContentsMargins(10, 6, 10, 6)
+        self.plugins_banner_lbl = QLabel("🔍 Açılış güncelleme kontrolü yapılıyor...")
+        self.plugins_banner_lbl.setStyleSheet("font-weight: 600;")
+        b_lay.addWidget(self.plugins_banner_lbl, stretch=1)
+        lay.addWidget(banner)
 
         self.update_prog = QProgressBar()
         self.update_prog.hide()
@@ -1188,6 +1239,10 @@ class MainWindow(QMainWindow):
             if item.widget():
                 item.widget().deleteLater()
 
+        upd_count = sum(1 for t in self.tools if t.has_update)
+        self.btn_plugins_update_all.setText(f"⬆️ Mevcut Güncellemeleri Başlat ({upd_count})")
+        self.btn_plugins_update_all.setEnabled(upd_count > 0 and not self.updating_busy)
+
         for t in self.tools:
             card = QFrame()
             card.setObjectName("card")
@@ -1199,13 +1254,30 @@ class MainWindow(QMainWindow):
             self.plugin_checks[t.id] = cb
             row.addWidget(cb)
 
-            row.addWidget(QLabel(f"<b>{t.name}</b>  <span style='color:#94a3b8;'>({t.version} · {t.kind})</span>"))
-            row.addStretch()
-            cmd_lbl = QLabel(f"<code>{t.install_cmd or 'Yerel kurulum hazır'}</code>")
-            cmd_lbl.setStyleSheet("color: #94a3b8;")
-            row.addWidget(cmd_lbl)
+            cur_v = t.version.strip().lstrip("vV")
+            lat_v = (t.latest_version or t.version).strip().lstrip("vV")
 
-            upd_one = QPushButton("🔄 Kur / Güncelle")
+            if t.has_update:
+                ver_html = (
+                    f"<span style='color:#f59e0b; font-weight:700;'>🔔 Güncelleme Mevcut:  {cur_v}v &gt; {lat_v}v</span>"
+                )
+            else:
+                ver_html = f"<span style='color:#22c55e; font-weight:600;'>✓ Güncel ({cur_v}v)</span>"
+
+            row.addWidget(QLabel(f"<b>{t.name}</b>  <span style='color:#94a3b8;'>({t.kind})</span>   {ver_html}"))
+            row.addStretch()
+
+            if t.release_notes_url:
+                notes_lbl = QLabel(f"<a style='color:#60a5fa;' href='{t.release_notes_url}'>📄 Sürüm Notları ↗</a>")
+                notes_lbl.setOpenExternalLinks(True)
+                notes_lbl.setToolTip(t.release_notes_url)
+                row.addWidget(notes_lbl)
+
+            if t.has_update:
+                upd_one = QPushButton(f"⬆️ Güncelle ({cur_v}v > {lat_v}v)")
+                upd_one.setObjectName("warnBtn")
+            else:
+                upd_one = QPushButton("🔄 Kur / Yenile")
             upd_one.clicked.connect(lambda _=False, tool_obj=t: self._run_batch_update([tool_obj], install_if_missing=True))
             row.addWidget(upd_one)
 
@@ -1406,8 +1478,8 @@ class MainWindow(QMainWindow):
             menu.addAction(act_p)
 
         menu.addSeparator()
-        act_upd_all = QAction("⬆️ Tüm Araçları Güncelle", self)
-        act_upd_all.triggered.connect(lambda: self._run_batch_update(self.tools, install_if_missing=False))
+        act_upd_all = QAction("🔍 Eklenti Güncellemelerini Kontrol Et", self)
+        act_upd_all.triggered.connect(lambda: self.run_plugin_update_check(manual=True))
         menu.addAction(act_upd_all)
 
         act_vram = QAction("🧹 Trellis GPU VRAM Boşalt", self)
@@ -1754,6 +1826,67 @@ class MainWindow(QMainWindow):
         self.tabs.setCurrentIndex(0)
         self.set_status(f"📚 {info['name']} kütüphaneye ve ana panele eklendi!")
 
+    def _handle_top_plugin_update_btn(self) -> None:
+        if any(t.has_update for t in self.tools):
+            self.tabs.setCurrentIndex(1)
+            return
+        self.run_plugin_update_check(manual=True)
+
+    def run_plugin_update_check(self, manual: bool = False) -> None:
+        if self.checking_plugins_busy or self.updating_busy:
+            return
+        self.checking_plugins_busy = True
+        self.btn_plugins_check.setEnabled(False)
+        self.btn_top_update_all.setEnabled(False)
+        self.plugins_banner_lbl.setText("🔍 Eklenti sürümleri kontrol ediliyor...")
+        self.plugins_banner_lbl.setStyleSheet("color: #94a3b8; font-weight: 600;")
+        if manual:
+            self.set_status("🔍 Tüm eklentiler için güncel sürüm kontrolü yapılıyor...")
+
+        snap = list(self.tools)
+        tok = self.vault.get_secret("GITHUB_TOKEN")
+
+        def worker() -> None:
+            cnt = check_all_tools_updates_parallel(snap, tok)
+            self.bridge.plugin_check_done.emit(cnt, manual)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_plugin_check_done(self, upd_count: int, manual: bool) -> None:
+        self.checking_plugins_busy = False
+        self.btn_plugins_check.setEnabled(True)
+        self.btn_top_update_all.setEnabled(True)
+
+        if upd_count == 0:
+            self.plugins_banner_lbl.setText("✓ Tüm eklentiler güncel.")
+            self.plugins_banner_lbl.setStyleSheet("color: #22c55e; font-weight: 700;")
+            self.tabs.setTabText(1, "🧩 Eklentiler")
+            self.btn_top_update_all.setText("🔍 Eklenti Güncelleme Kontrol")
+            self.btn_top_update_all.setObjectName("primaryBtn")
+            self.set_status("✓ Tüm eklentiler güncel.")
+        else:
+            self.plugins_banner_lbl.setText(
+                f"🔔 Güncelleme Mevcut ({upd_count} eklenti) — Güncellemeyi başlatmak için aşağıdaki butonları kullanabilirsiniz."
+            )
+            self.plugins_banner_lbl.setStyleSheet("color: #f59e0b; font-weight: 700;")
+            self.tabs.setTabText(1, f"🧩 Eklentiler (🔔 {upd_count})")
+            self.btn_top_update_all.setText(f"🔔 Güncelleme Mevcut ({upd_count})")
+            self.btn_top_update_all.setObjectName("warnBtn")
+            self.set_status(f"🔔 {upd_count} eklenti için güncelleme mevcut — başlatmak size bağlıdır.")
+            if manual:
+                self.tabs.setCurrentIndex(1)
+
+        self.style().unpolish(self.btn_top_update_all)
+        self.style().polish(self.btn_top_update_all)
+        self._refresh_plugins_tab()
+
+    def _handle_start_available_updates(self) -> None:
+        targets = [t for t in self.tools if t.has_update]
+        if not targets:
+            self.set_status("✓ Tüm eklentiler zaten güncel.")
+            return
+        self._run_batch_update(targets, install_if_missing=True)
+
     def _handle_update_selected_plugins(self) -> None:
         selected = [t for t in self.tools if self.plugin_checks.get(t.id) and self.plugin_checks[t.id].isChecked()]
         if not selected:
@@ -1766,15 +1899,16 @@ class MainWindow(QMainWindow):
             return
         self.updating_busy = True
         self.btn_top_update_all.setEnabled(False)
+        self.btn_plugins_check.setEnabled(False)
         self.btn_plugins_update_all.setEnabled(False)
         self.btn_plugins_install_sel.setEnabled(False)
 
         total = len(target_tools)
         self.update_prog.setMaximum(total)
         self.update_prog.setValue(0)
-        self.update_prog.setFormat(f"Güncelleme başlatılıyor (0/{total})...")
+        self.update_prog.setFormat(f"Güncelleme uygulanıyor (0/{total})...")
         self.update_prog.show()
-        self.set_status(f"⬆️ {total} araç için güncelleme kontrolü başlatıldı...")
+        self.set_status(f"⬆️ {total} araç güncelleniyor...")
 
         wanted_skills = set(self.active_skills)
         items = list(target_tools)
@@ -1785,16 +1919,21 @@ class MainWindow(QMainWindow):
             details: list[str] = []
             for idx, tool_obj in enumerate(items, start=1):
                 self.bridge.update_progress.emit(idx, total, tool_obj.name)
+                prev_v = tool_obj.version.strip().lstrip("vV")
                 ok, new_ver, msg = update_single_tool(tool_obj, wanted_skills, install_if_missing=install_if_missing)
-                if new_ver:
-                    tool_obj.version = new_ver
+                target_v = (tool_obj.latest_version or new_ver or tool_obj.version).strip().lstrip("vV")
                 if ok:
                     ok_cnt += 1
-                    self.logs.add("INFO", tool_obj.name, f"Güncelleme tamamlandı ({tool_obj.version})", msg)
+                    tool_obj.version = f"v{target_v}"
+                    tool_obj.latest_version = f"v{target_v}"
+                    tool_obj.has_update = False
+                    ver_note = f"{prev_v}v > {target_v}v" if prev_v != target_v else f"{target_v}v"
+                    self.logs.add("INFO", tool_obj.name, f"Güncellendi ({ver_note})", msg)
+                    details.append(f"✓ {tool_obj.name} ({ver_note}): {msg}")
                 else:
                     fail_cnt += 1
                     self.logs.add("WARN", tool_obj.name, "Güncelleme uyarısı", msg)
-                details.append(f"{'✓' if ok else '⚠'} {tool_obj.name}: {msg}")
+                    details.append(f"⚠ {tool_obj.name}: {msg}")
             self.bridge.update_all_done.emit(ok_cnt, fail_cnt, "\n".join(details))
 
         threading.Thread(target=worker, daemon=True).start()
@@ -1807,22 +1946,31 @@ class MainWindow(QMainWindow):
     def _on_update_all_done(self, ok_cnt: int, fail_cnt: int, summary_text: str) -> None:
         self.updating_busy = False
         self.btn_top_update_all.setEnabled(True)
-        self.btn_plugins_update_all.setEnabled(True)
+        self.btn_plugins_check.setEnabled(True)
         self.btn_plugins_install_sel.setEnabled(True)
         self.update_prog.setValue(self.update_prog.maximum())
-        self.update_prog.setFormat(f"Tamamlandı: {ok_cnt} güncel, {fail_cnt} uyarı")
-        QTimer.singleShot(4000, self.update_prog.hide)
+        self.update_prog.setFormat(f"Tamamlandı: {ok_cnt} güncellendi, {fail_cnt} uyarı")
+        QTimer.singleShot(3500, self.update_prog.hide)
 
+        rem = sum(1 for t in self.tools if t.has_update)
+        self._on_plugin_check_done(rem, manual=False)
         self._save_state()
-        self._refresh_plugins_tab()
         self._refresh_logs_tab()
         self.run_health_scan()
-        self.set_status(f"⬆️ Güncelleme tamamlandı: {ok_cnt} araç güncel, {fail_cnt} uyarı.")
-        QMessageBox.information(
-            self,
-            "Güncelleme Özeti",
-            f"Toplam {ok_cnt + fail_cnt} araç denetlendi ({ok_cnt} başarılı, {fail_cnt} uyarı):\n\n{summary_text}",
-        )
+        self.set_status(f"⬆️ Güncelleme tamamlandı ({ok_cnt} başarılı, {fail_cnt} uyarı).")
+
+    def _run_startup_app_update_check(self) -> None:
+        repo = str(self.meta.get("app_update_repo") or detect_git_origin_url()).strip()
+        if not repo:
+            return
+        tok = self.vault.get_secret("GITHUB_TOKEN")
+        self._startup_app_check = True
+
+        def worker() -> None:
+            res = check_for_app_updates(repo, tok)
+            self.bridge.app_check_done.emit(res)
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def _handle_quick_check_app_update(self) -> None:
         repo = str(self.meta.get("app_update_repo") or detect_git_origin_url()).strip()
@@ -1843,22 +1991,34 @@ class MainWindow(QMainWindow):
     def _on_bg_app_check_done(self, res: UpdateCheckResult) -> None:
         self.latest_app_check = res
         self.btn_chk_app_upd.setEnabled(True)
+
+        if self._startup_app_check:
+            self._startup_app_check = False
+            if res.ok and res.has_update:
+                self.btn_do_app_upd.setText(f"🔔 Güncelleme Mevcut ({res.local_version}v > {res.remote_version}v)")
+                self.btn_do_app_upd.setObjectName("warnBtn")
+                self.style().unpolish(self.btn_do_app_upd)
+                self.style().polish(self.btn_do_app_upd)
+                self.set_status(f"🔔 Program güncellemesi mevcut: {res.local_version}v > {res.remote_version}v")
+            return
+
         if not self._silent_app_check:
             return
         self._silent_app_check = False
         self.set_status(res.message)
         if res.has_update:
-            self.btn_do_app_upd.setText(f"⚡ Programı Güncelle (v{res.remote_version})")
-            self.btn_do_app_upd.setObjectName("successBtn")
+            self.btn_do_app_upd.setText(f"🔔 Güncelleme Mevcut ({res.local_version}v > {res.remote_version}v)")
+            self.btn_do_app_upd.setObjectName("warnBtn")
             self.style().unpolish(self.btn_do_app_upd)
             self.style().polish(self.btn_do_app_upd)
             self._open_app_update_dialog(res)
         elif res.ok:
-            QMessageBox.information(self, "Program Güncel", f"{res.message}\n\nKanal: {res.repo_url}")
+            self.set_status(f"✓ Program güncel ({res.local_version}v).")
         else:
             self._open_app_update_dialog(res)
 
     def _open_app_update_dialog(self, initial_res: UpdateCheckResult | None = None) -> None:
         self._silent_app_check = False
+        self._startup_app_check = False
         dlg = AppUpdateDialog(self, initial_res)
         dlg.exec()
