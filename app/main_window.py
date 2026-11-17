@@ -1268,7 +1268,14 @@ class MainWindow(QMainWindow):
 
         btn_sync = QPushButton("🔄 AI Config'lere Yaz")
         btn_sync.setObjectName("successBtn")
-        btn_sync.setToolTip("Global ve Proje Bazlı (.mcp.json / .agents/skills) yapılandırmaları yedek alarak uygular")
+        btn_sync.setToolTip(
+            "Global ve Proje Bazlı yapılandırmaları yedek (.bak) alarak yazar:\n"
+            "• Antigravity (AGY): ~/.gemini/config/mcp_config.json\n"
+            "• Codex (CDX): ~/.codex/config.toml\n"
+            "• Claude Code (CLD): ~/.claude.json ve <proje>/.mcp.json\n"
+            "• Cursor (CUR): ~/.cursor/mcp.json ve <proje>/.cursor/mcp.json\n"
+            "• Program Ayar Yedeği: data/hub_state.json"
+        )
         btn_sync.clicked.connect(self._handle_sync_configs)
         prof_bar.addWidget(btn_sync)
 
@@ -1633,7 +1640,8 @@ class MainWindow(QMainWindow):
                 proj_l.addWidget(fixed_lbl, stretch=1)
 
             loc_btn = QPushButton("🟢" if is_live else ("⚠️" if is_warn else "📍"))
-            loc_btn.setFixedWidth(28)
+            loc_btn.setFixedSize(32, 26)
+            loc_btn.setStyleSheet("padding: 0px; font-size: 13px;")
             loc_btn.setToolTip(f"{tooltip_full}\n(Konum bilgisini panoya kopyalamak için tıklayın)")
             loc_btn.clicked.connect(
                 lambda _=False, info=tooltip_full, nm=t.name: (
@@ -1709,7 +1717,8 @@ class MainWindow(QMainWindow):
             act_l.addStretch()
             if t.has_gear:
                 g_btn = QPushButton("⚙️")
-                g_btn.setFixedWidth(34)
+                g_btn.setFixedSize(34, 26)
+                g_btn.setStyleSheet("padding: 0px; font-size: 13px;")
                 g_btn.setToolTip(f"{t.name} Detaylı Ayarlar, Konum & AI'a Danış")
                 g_btn.clicked.connect(lambda _=False, tool_obj=t: self.open_gear(tool_obj))
                 act_l.addWidget(g_btn)
@@ -2828,7 +2837,17 @@ class MainWindow(QMainWindow):
         self.logs.add("INFO", "Config Senkronizasyon", summary)
         self._refresh_logs_tab()
         self.set_status(f"🔄 AI Config dosyaları güncellendi: {summary}")
-        QMessageBox.information(self, "AI Config Senkronizasyonu Tamamlandı", summary)
+        home = pathlib.Path.home()
+        paths_info = (
+            f"{summary}\n\n"
+            "Yazılan / Güncellenen Konumlar:\n"
+            f"• AGY: {home / '.gemini' / 'config' / 'mcp_config.json'}\n"
+            f"• CDX: {home / '.codex' / 'config.toml'}\n"
+            f"• CLD: {home / '.claude.json'} (ve proje içi .mcp.json)\n"
+            f"• CUR: {home / '.cursor' / 'mcp.json'} (ve proje içi .cursor/mcp.json)\n"
+            f"• Program Kaydı: {self.store.state_file}"
+        )
+        QMessageBox.information(self, "AI Config Senkronizasyonu Tamamlandı", paths_info)
 
     def _export_settings(self) -> None:
         path, _ = QFileDialog.getSaveFileName(

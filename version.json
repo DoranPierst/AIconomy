@@ -1,5 +1,5 @@
 {
-  "version": "1.2.6",
+  "version": "1.2.7",
   "update_repo": "https://github.com/DoranPierst/ai-arac-merkezi",
-  "changelog": "Detay / Durum (AÇIK/KAPALI) sütununa tıklayarak sıralama özelliği eklendi."
+  "changelog": "Konum/durum emoji butonundaki (🟢/⚠️/📍) kırpılma düzeltildi ve yazılan AI config dosya yolları senkronizasyon bilgisinde gösterildi."
 }
