@@ -402,8 +402,6 @@ def enforce_tool_runtime_state(tool: ToolSpec, projects_map: dict[str, str]) -> 
                 if tool.project_scope != "GLOBAL" and proj_dir and pathlib.Path(proj_dir).is_dir():
                     cmd.extend(["--project", proj_dir])
                 opt_map = {o.key: o.enabled for o in tool.options}
-                if opt_map.get("read_only", False):
-                    cmd.append("--read-only")
                 if opt_map.get("no_dashboard", True):
                     cmd.extend(["--open-web-dashboard", "False", "--enable-gui-log-window", "False"])
                 try:
