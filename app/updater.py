@@ -9,13 +9,14 @@ import re
 import subprocess
 import sys
 import traceback
+import urllib.error
 import urllib.request
 from typing import Callable
 
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
 
-FALLBACK_VERSION = "1.2.0"
-DEFAULT_APP_REPO = ""  # version.json ("update_repo") veya git origin üzerinden otomatik gömülür
+FALLBACK_VERSION = "1.2.2"
+DEFAULT_APP_REPO = "https://github.com/DoranPierst/ai-arac-merkezi"
 
 
 def get_source_root() -> pathlib.Path:
@@ -189,11 +190,13 @@ def check_for_app_updates(repo_input: str, github_token: str = "") -> UpdateChec
     changelog = ""
     notes_url = f"{clean_repo_url}/releases"
     exe_url = ""
+    github_reachable = False
 
-    # 1) GitHub Releases (Hazır .exe ve sürüm notu linki var mı?)
+    # 1) GitHub Releases (Hazır .exe ve sürüm notu var mı?)
     try:
         req = urllib.request.Request(f"https://api.github.com/repos/{owner}/{repo}/releases/latest", headers=headers)
         with urllib.request.urlopen(req, timeout=7) as resp:
+            github_reachable = True
             rel = json.loads(resp.read().decode("utf-8"))
             tag = str(rel.get("tag_name", "")).lstrip("vV")
             if tag:
@@ -206,6 +209,8 @@ def check_for_app_updates(repo_input: str, github_token: str = "") -> UpdateChec
                 if name.lower().endswith(".exe"):
                     exe_url = str(asset.get("browser_download_url", ""))
                     break
+    except urllib.error.HTTPError:
+        github_reachable = True
     except Exception:
         pass
 
@@ -217,6 +222,7 @@ def check_for_app_updates(repo_input: str, github_token: str = "") -> UpdateChec
                 headers=headers,
             )
             with urllib.request.urlopen(v_req, timeout=6) as resp:
+                github_reachable = True
                 v_data = json.loads(resp.read().decode("utf-8"))
                 v_str = str(v_data.get("version", "")).lstrip("vV").strip()
                 if v_str and (not remote_ver or parse_semver(v_str) > parse_semver(remote_ver)):
@@ -225,10 +231,26 @@ def check_for_app_updates(repo_input: str, github_token: str = "") -> UpdateChec
                     if notes_url == f"{clean_repo_url}/releases":
                         notes_url = f"{clean_repo_url}/commits/{branch}"
                 break
+        except urllib.error.HTTPError:
+            github_reachable = True
+            continue
         except Exception:
             continue
 
     if not remote_ver:
+        if github_reachable:
+            return UpdateCheckResult(
+                ok=True,
+                has_update=False,
+                local_version=local_ver,
+                remote_version=local_ver,
+                changelog="",
+                release_notes_url=notes_url,
+                exe_download_url="",
+                repo_url=clean_repo_url,
+                can_git_pull=False,
+                message=f"Program güncel ({local_ver}v) — GitHub üzerinde yayınlanmış daha yeni bir sürüm yok.",
+            )
         return UpdateCheckResult(
             ok=False,
             has_update=False,
@@ -239,7 +261,7 @@ def check_for_app_updates(repo_input: str, github_token: str = "") -> UpdateChec
             exe_download_url="",
             repo_url=clean_repo_url,
             can_git_pull=False,
-            message=f"{clean_repo_url} üzerinde henüz yayınlanmış bir sürüm bulunamadı.",
+            message="GitHub sunucusuna ulaşılamadı (internet bağlantınızı kontrol edin).",
         )
 
     has_upd = parse_semver(remote_ver) > parse_semver(local_ver)

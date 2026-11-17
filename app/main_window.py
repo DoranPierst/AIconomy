@@ -533,7 +533,8 @@ class AppUpdateDialog(QDialog):
             self.status_badge.setText(f"⚠️ {res.message}")
             self.status_badge.setStyleSheet("color: #f59e0b; font-weight: 700; font-size: 13px;")
             self.notes_link_lbl.setText("")
-            self.repo_card.show()
+            if not res.repo_url:
+                self.repo_card.show()
         elif res.has_update:
             self.status_badge.setText(f"🔔 Güncelleme Mevcut:  {res.local_version}v > {res.remote_version}v")
             self.status_badge.setStyleSheet("color: #f59e0b; font-weight: 700; font-size: 14px;")
@@ -1006,6 +1007,7 @@ class MainWindow(QMainWindow):
         self.bridge.app_check_done.connect(self._on_bg_app_check_done)
         self.plugin_checks: dict[str, QCheckBox] = {}
         self.panel_row_checks: dict[str, QCheckBox] = {}
+        self.profile_btns: dict[str, QPushButton] = {}
         self.updating_busy = False
         self.checking_plugins_busy = False
         self.latest_app_check: UpdateCheckResult | None = None
@@ -1013,13 +1015,14 @@ class MainWindow(QMainWindow):
         self._startup_app_check = False
 
         app_ver = get_current_app_version()
-        self.setWindowTitle(f"AI Araç & Token Ekonomisi Kontrol Merkezi v{app_ver}")
+        self.setWindowTitle(f"AI Araç & Token Ekonomisi Kontrol Merkezi — Program Sürümü: {app_ver}v")
         self.setWindowIcon(create_app_icon())
         self.resize(1340, 760)
 
         self._build_ui()
         self._build_tray()
         self._apply_theme(self.meta.get("theme", "dark"))
+        self._update_profile_buttons_ui()
         for t in self.tools:
             t.live_location_detail = resolve_disk_location(t, self.projects_map, {})
         self._rebuild_project_filter_combo()
@@ -1057,13 +1060,19 @@ class MainWindow(QMainWindow):
         main_lay.setContentsMargins(12, 10, 12, 8)
         main_lay.setSpacing(8)
 
-        # 1. ÜST BAR: Hazır İş Modu Profilleri + Oto-Algılama + VRAM + Sayaç
+        # 1. ÜST BAR: Hazır İş Modu Profilleri (Çoklu Seçilebilir) + Oto-Algılama + VRAM + Sayaç
         prof_bar = QHBoxLayout()
-        prof_bar.addWidget(QLabel("<b>🎯 İş Modu:</b>"))
+        prof_bar.addWidget(QLabel("<b>🎯 Hazır Ayar:</b>"))
         for p_key, p_info in PROFILES.items():
             btn = QPushButton(p_info["title"].replace("&", "&&"))
-            btn.setToolTip(p_info["desc"])
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.setToolTip(
+                f"{p_info['desc']}\n"
+                "• Tıkladığınızda seçili kalır; birden fazla hazır ayarı birlikte seçebilirsiniz.\n"
+                "• Seçili olana tekrar tıkladığınızda seçimi kaldırır."
+            )
             btn.clicked.connect(lambda _=False, k=p_key: self.apply_profile(k))
+            self.profile_btns[p_key] = btn
             prof_bar.addWidget(btn)
 
         self.auto_detect_cb = QCheckBox("👁️ Oto-Algıla")
@@ -1093,13 +1102,13 @@ class MainWindow(QMainWindow):
         btn_refresh.clicked.connect(self.run_health_scan)
         prof_bar.addWidget(btn_refresh)
 
-        self.btn_app_update_top = QPushButton(f"🔄 Program Güncelleme Kontrol (v{get_current_app_version()})")
+        self.btn_app_update_top = QPushButton("🔄 Program Güncelleme")
         self.btn_app_update_top.setObjectName("primaryBtn")
         self.btn_app_update_top.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.btn_app_update_top.setToolTip(
-            "Bu programın (AI Araç Merkezi) yeni bir sürümü var mı GitHub üzerinden kontrol eder.\n"
-            "• Yeni sürüm yayınlandığında paylaştığınız kişiler tekrar indirmeden tek tıkla güncellenir.\n"
-            "• Sağ tık: Güncelleme penceresini / kanal ayarını doğrudan açar."
+            "Bu programın (DoranPierst/ai-arac-merkezi) yeni bir sürümü var mı doğrudan kontrol eder.\n"
+            "• Yeni sürüm çıktığında tek tıkla indirip programı otomatik yeniler.\n"
+            "• Sağ tık: Program sürüm detaylarını açar."
         )
         self.btn_app_update_top.clicked.connect(self._handle_quick_check_app_update)
         self.btn_app_update_top.customContextMenuRequested.connect(lambda _pos: self._open_app_update_dialog(self.latest_app_check))
@@ -1153,8 +1162,8 @@ class MainWindow(QMainWindow):
         self.status_lbl = QLabel("Hazır — Sağ alt sistem tepsisinde (Tray) kesintisiz çalışır.")
         foot.addWidget(self.status_lbl, stretch=1)
 
-        self.btn_do_app_upd = QPushButton(f"📦 Sürüm && Güncelleme Kanalı (v{get_current_app_version()})")
-        self.btn_do_app_upd.setToolTip("Program sürüm notlarını, değişiklik geçmişini ve GitHub güncelleme kanalını açar")
+        self.btn_do_app_upd = QPushButton(f"📦 Program Sürümü: {get_current_app_version()}v")
+        self.btn_do_app_upd.setToolTip("Kullandığınız programın sürüm notlarını ve güncelleme detaylarını açar")
         self.btn_do_app_upd.clicked.connect(lambda: self._open_app_update_dialog(self.latest_app_check))
         foot.addWidget(self.btn_do_app_upd)
 
@@ -1410,6 +1419,22 @@ class MainWindow(QMainWindow):
             if t.summary or t.live_location_detail:
                 nm_lbl.setToolTip(f"{t.summary}\n\n{t.live_location_detail}".strip())
             nm_l.addWidget(nm_lbl)
+
+            cur_v = t.version.strip().lstrip("vV")
+            lat_v = (t.latest_version or t.version).strip().lstrip("vV")
+            if t.has_update and lat_v != cur_v:
+                ver_lbl = QLabel(f"{cur_v}v > {lat_v}v")
+                ver_lbl.setStyleSheet(
+                    "color: #f59e0b; background-color: #271a0c; border: 1px solid #f59e0b; "
+                    "border-radius: 4px; padding: 1px 5px; font-size: 10px; font-weight: 700;"
+                )
+                ver_lbl.setToolTip(f"Eklenti güncellemesi mevcut: {cur_v}v -> {lat_v}v")
+            else:
+                ver_lbl = QLabel(f"{cur_v}v")
+                ver_lbl.setStyleSheet("color: #64748b; font-size: 11px; font-weight: 600;")
+                ver_lbl.setToolTip(f"{t.name} kurulu sürümü: {cur_v}v")
+            nm_l.addWidget(ver_lbl)
+
             nm_l.addWidget(self._make_info_btn(t))
             nm_l.addStretch()
             self.table.setCellWidget(r_idx, 0, nm_w)
@@ -2122,6 +2147,8 @@ class MainWindow(QMainWindow):
         self.setStyleSheet(LIGHT_QSS if mode == "light" else DARK_QSS)
         if hasattr(self, "bulk_client_btns"):
             self._update_bulk_client_buttons()
+        if hasattr(self, "profile_btns"):
+            self._update_profile_buttons_ui()
 
     def _on_auto_detect_toggled(self, checked: bool) -> None:
         self.meta["auto_detect_apps"] = checked
@@ -2221,14 +2248,95 @@ class MainWindow(QMainWindow):
         self._save_state()
         self.set_status(f"{tool.name} çalışma modu '{tool.modes[idx]}' olarak seçildi.")
 
-    def apply_profile(self, profile_key: str) -> None:
+    def _get_active_profiles_set(self) -> set[str]:
+        raw = self.meta.get("active_profiles")
+        if isinstance(raw, list):
+            return {str(k) for k in raw if str(k) in PROFILES}
+        return set()
+
+    def _update_profile_buttons_ui(self) -> None:
+        active_set = self._get_active_profiles_set()
+        for p_key, btn in self.profile_btns.items():
+            base_lbl = PROFILES[p_key]["title"].replace("&", "&&")
+            if p_key in active_set:
+                btn.setText(f"✓ {base_lbl}")
+                btn.setStyleSheet(
+                    "QPushButton { background-color: #2563eb; color: #ffffff; border: 1.5px solid #93c5fd; "
+                    "border-radius: 5px; padding: 5px 10px; font-weight: 700; }"
+                    "QPushButton:hover { background-color: #1d4ed8; }"
+                )
+            else:
+                btn.setText(base_lbl)
+                btn.setStyleSheet("")
+
+    def apply_profile(self, profile_key: str, ask_confirm: bool = True) -> None:
         prof = PROFILES[profile_key]
-        en_set = prof["enable"]
+        active_set = self._get_active_profiles_set()
+        is_currently_selected = profile_key in active_set
+
+        if is_currently_selected:
+            next_set = active_set - {profile_key}
+            action_phrase = f"'{prof['title']}' hazır ayar seçimini kaldırmak"
+        else:
+            if profile_key == "zero_token":
+                next_set = {"zero_token"}
+            else:
+                next_set = (active_set - {"zero_token"}) | {profile_key}
+            action_phrase = f"'{prof['title']}' hazır ayarını etkinleştirmek"
+
+        if ask_confirm:
+            msg_box = QMessageBox(self)
+            msg_box.setIcon(QMessageBox.Icon.Warning)
+            msg_box.setWindowTitle("⚠️ Mevcut Ayarlarınız Değişecektir")
+            msg_box.setText("<b>Şu anki araç ayarlarınız değişecektir!</b>")
+            msg_box.setInformativeText(
+                f"{action_phrase} üzeresiniz.\n"
+                "Tablodaki açık/kapalı araç düzeniniz seçili hazır ayarlara göre güncellenecektir.\n\n"
+                "Değiştirmeden önce şu anki ayarlarınızı dışa aktarıp kaydetmek ister misiniz?"
+            )
+            btn_save_go = msg_box.addButton("💾 Mevcut Ayarları Kaydet ve Uygula", QMessageBox.ButtonRole.AcceptRole)
+            btn_just_go = msg_box.addButton("⚡ Kaydetmeden Değiştir", QMessageBox.ButtonRole.DestructiveRole)
+            btn_cancel = msg_box.addButton("İptal", QMessageBox.ButtonRole.RejectRole)
+            msg_box.setDefaultButton(btn_save_go)
+            msg_box.exec()
+
+            clicked = msg_box.clickedButton()
+            if clicked == btn_cancel or clicked is None:
+                self._update_profile_buttons_ui()
+                return
+            if clicked == btn_save_go:
+                save_path, _ = QFileDialog.getSaveFileName(
+                    self,
+                    "Mevcut Ayarları Kaydet (Export)",
+                    "ai_arac_yedek_ayarlar.json",
+                    "Ayar Dosyası (*.json *.aihub)",
+                )
+                if not save_path:
+                    self._update_profile_buttons_ui()
+                    return
+                self.export_to_file(pathlib.Path(save_path))
+
+        ordered_active = [k for k in PROFILES if k in next_set]
+        self.meta["active_profiles"] = ordered_active
+
+        combined_enable: set[str] = set()
+        for k in ordered_active:
+            combined_enable |= set(PROFILES[k]["enable"])
+
         for t in self.tools:
-            t.enabled = t.id in en_set
+            t.enabled = t.id in combined_enable
+
+        self._update_profile_buttons_ui()
         self._save_state()
-        self.logs.add("INFO", "Profil", f"{prof['title']} profili etkinleştirildi.", prof["desc"])
-        self.set_status(f"🎯 {prof['title']} etkinleştirildi — {prof['desc']}")
+
+        if ordered_active:
+            titles = " + ".join(PROFILES[k]["title"] for k in ordered_active)
+            summary_msg = f"🎯 Aktif hazır ayarlar: {titles} ({sum(1 for t in self.tools if t.enabled)} araç açık)"
+        else:
+            summary_msg = f"🎯 '{prof['title']}' seçimi kaldırıldı (aktif hazır ayar kalmadı, araçlar kapatıldı)."
+
+        self.logs.add("INFO", "Hazır Ayar", summary_msg)
+        self.set_status(summary_msg)
         self._refresh_table()
         self._refresh_logs_tab()
 
@@ -2405,6 +2513,7 @@ class MainWindow(QMainWindow):
             sync_blender_skills_on_disk(self.active_skills, bs_tool.enabled, bs_tool.project_scope, self.projects_map)
 
         self.tabs.setTabText(0, f"📊 Araç Paneli ({len(self.tools)})")
+        self._update_profile_buttons_ui()
         self._rebuild_project_filter_combo()
         self._refresh_table()
         self._refresh_plugins_tab()
@@ -2534,6 +2643,7 @@ class MainWindow(QMainWindow):
             if manual:
                 self.tabs.setCurrentIndex(1)
 
+        self._refresh_table()
         self._refresh_plugins_tab()
 
     def _handle_start_available_updates(self) -> None:
@@ -2624,9 +2734,9 @@ class MainWindow(QMainWindow):
     def _apply_app_update_visual_state(self, res: UpdateCheckResult) -> None:
         if res.ok and res.has_update:
             ver_cmp = f"{res.local_version}v > {res.remote_version}v"
-            self.btn_app_update_top.setText(f"⬆️ Program Güncellemesi Var! ({ver_cmp})")
+            self.btn_app_update_top.setText(f"⬆️ Yeni Program Sürümü ({ver_cmp})")
             self.btn_app_update_top.setObjectName("warnBtn")
-            self.btn_do_app_upd.setText(f"🔔 Yeni Sürüm Mevcut ({ver_cmp})")
+            self.btn_do_app_upd.setText(f"🔔 Program Güncellemesi ({ver_cmp})")
             self.btn_do_app_upd.setObjectName("warnBtn")
             self.app_update_banner_lbl.setText(f"🚀 Bu programın yeni bir sürümü yayınlandı:  {ver_cmp}")
             if res.release_notes_url:
@@ -2635,9 +2745,9 @@ class MainWindow(QMainWindow):
                 )
             self.app_update_banner.show()
         elif res.ok:
-            self.btn_app_update_top.setText(f"✓ Program Güncel (v{res.local_version})")
+            self.btn_app_update_top.setText("✓ Program Güncel")
             self.btn_app_update_top.setObjectName("primaryBtn")
-            self.btn_do_app_upd.setText(f"📦 Sürüm && Güncelleme Kanalı (v{res.local_version})")
+            self.btn_do_app_upd.setText(f"📦 Program Sürümü: {res.local_version}v")
             self.btn_do_app_upd.setObjectName("")
             self.app_update_banner.hide()
 
@@ -2663,12 +2773,9 @@ class MainWindow(QMainWindow):
             self._open_app_update_dialog(self.latest_app_check)
             return
         repo = resolve_effective_app_repo(str(self.meta.get("app_update_repo", "")))
-        if not repo:
-            self._open_app_update_dialog(None)
-            return
         self.btn_app_update_top.setEnabled(False)
         self.btn_app_update_top.setText("🔍 Program Kontrol Ediliyor...")
-        self.set_status("🔍 GitHub üzerinden bu programın yeni sürümü olup olmadığı kontrol ediliyor...")
+        self.set_status(f"🔍 {repo} üzerinden bu programın yeni sürümü kontrol ediliyor...")
         tok = self.vault.get_secret("GITHUB_TOKEN")
         self._silent_app_check = True
 
@@ -2696,10 +2803,10 @@ class MainWindow(QMainWindow):
             self.set_status(f"🔔 Yeni program sürümü bulundu: {res.local_version}v > {res.remote_version}v")
             self._open_app_update_dialog(res)
         elif res.ok:
-            self.set_status(f"✓ Kullandığınız program güncel (v{res.local_version}) — yeni sürüm bulunmuyor.")
+            self.set_status(f"✓ Kullandığınız program son sürümde ({res.local_version}v) — yeni güncelleme bulunmuyor.")
         else:
-            self.btn_app_update_top.setText(f"🔄 Program Güncelleme Kontrol (v{get_current_app_version()})")
-            self._open_app_update_dialog(res)
+            self.btn_app_update_top.setText("🔄 Program Güncelleme")
+            self.set_status(f"⚠️ {res.message}")
 
     def _open_app_update_dialog(self, initial_res: UpdateCheckResult | None = None) -> None:
         self._silent_app_check = False
