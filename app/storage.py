@@ -170,6 +170,10 @@ class LogDatabase:
                 (ts, level, tool, summary, raw_detail or summary, port),
             )
 
+    def clear(self) -> None:
+        with self._connect() as conn, conn:
+            conn.execute("DELETE FROM logs")
+
     def query(self, level: str = "ALL", tool: str = "ALL", search: str = "", limit: int = 200) -> list[dict[str, Any]]:
         clauses: list[str] = []
         params: list[Any] = []

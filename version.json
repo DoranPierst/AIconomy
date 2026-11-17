@@ -1,5 +1,5 @@
 {
-  "version": "1.2.9",
+  "version": "1.2.10",
   "update_repo": "https://github.com/DoranPierst/ai-arac-merkezi",
-  "changelog": "Tablo sütun başlıkları dikey çizgiler ve aktif sıralama oklarıyla (▲/▼) netleştirildi; Son Yanıt, Proje/Konum ve Çalışma Modu sıralamaları ekrandaki değerlere göre düzeltildi."
+  "changelog": "Serena (:9121) ve Unity MCP (:8080) için otomatik kurtarma (auto-heal) eklendi: açık işaretli servisler kapandıysa program kendi kendine yeniden başlatır. Tekrarlayan WARN spam'i önlendi ve Debug & Log sekmesine Logları Temizle butonu eklendi."
 }

@@ -5,6 +5,7 @@ import datetime as dt
 import json
 import pathlib
 import threading
+import time
 from typing import Any
 
 from PySide6.QtCore import QEvent, QObject, QTimer, Qt, Signal
@@ -1160,6 +1161,8 @@ class MainWindow(QMainWindow):
         self.checked_log_ids: set[int] = set()
         self.log_row_checks: dict[int, QCheckBox] = {}
         self.profile_btns: dict[str, QPushButton] = {}
+        self._auto_heal_cooldown: dict[str, float] = {}
+        self._last_warn_time: dict[str, float] = {}
         self.updating_busy = False
         self.checking_plugins_busy = False
         self.latest_app_check: UpdateCheckResult | None = None
@@ -2291,6 +2294,11 @@ class MainWindow(QMainWindow):
         btn_l_clr.clicked.connect(lambda: self._set_log_checks("none"))
         log_act_bar.addWidget(btn_l_clr)
 
+        btn_l_wipe = QPushButton("🧹 Logları Temizle")
+        btn_l_wipe.setToolTip("Eski / çözülmüş tüm log kayıtlarını veritabanından temizler")
+        btn_l_wipe.clicked.connect(self._clear_all_logs)
+        log_act_bar.addWidget(btn_l_wipe)
+
         log_act_bar.addStretch()
 
         self.btn_copy_logs_ai = QPushButton("🤖 Seçili Loglar İçin Hazır AI Çözüm Promptu Kopyala (0)")
@@ -2431,6 +2439,13 @@ class MainWindow(QMainWindow):
             self.style().polish(self.btn_copy_logs_ai)
 
         QTimer.singleShot(1800, _restore_log_btn)
+
+    def _clear_all_logs(self) -> None:
+        self.logs.clear()
+        self.checked_log_ids.clear()
+        self._refresh_logs_tab()
+        self.log_raw_view.clear()
+        self.set_status("🧹 Tüm eski log kayıtları temizlendi.")
 
     def _on_log_row_selected(self) -> None:
         idxs = self.log_table.selectionModel().selectedRows()
@@ -3041,8 +3056,16 @@ class MainWindow(QMainWindow):
                 t.last_ping = ping_str
                 t.last_latency_ms = ms
                 t.live_location_detail = loc_detail
-                if not silent and t.enabled and t.port and not ok and tid != "trellis":
-                    self.logs.add("WARN", t.name, f"Açık işaretli servis yanıt vermedi ({ping_str})", detail, t.port)
+                if t.enabled and t.port and not ok and tid != "trellis":
+                    now_mono = time.monotonic()
+                    if tid in ("serena", "unity_mcp") and self.sync_live_environment:
+                        if now_mono - self._auto_heal_cooldown.get(tid, 0.0) > 45.0:
+                            self._auto_heal_cooldown[tid] = now_mono
+                            self._auto_heal_tool_async(t)
+                            continue
+                    if not silent and now_mono - self._last_warn_time.get(tid, 0.0) > 300.0:
+                        self._last_warn_time[tid] = now_mono
+                        self.logs.add("WARN", t.name, f"Açık işaretli servis yanıt vermedi ({ping_str})", detail, t.port)
 
         if silent:
             if state_changed and QApplication.activePopupWidget() is None:
@@ -3053,6 +3076,23 @@ class MainWindow(QMainWindow):
         self._refresh_logs_tab()
         self._update_vram_bar()
         self.set_status("Canlı süreç, port ve konum taraması tamamlandı (3 sn'de bir anlık izleniyor).")
+
+    def _auto_heal_tool_async(self, tool: ToolSpec) -> None:
+        """AÇIK işaretli arka plan servisleri (Serena :9121, Unity MCP :8080) kapandıysa kullanıcıya sormadan otomatik başlatır."""
+        proj_snap = dict(self.projects_map)
+
+        def worker() -> None:
+            note = enforce_tool_runtime_state(tool, proj_snap)
+            if note:
+                self.logs.add("INFO", tool.name, f"Otomatik Kurtarma:{note}")
+                time.sleep(1.5)
+                live_map = scan_live_process_locations()
+                ok, ping_str, ms, detail, loc_detail = probe_tool_health(
+                    tool, len(self.active_skills), proj_snap, live_map
+                )
+                self.bridge.health_done.emit([(tool.id, ok, ping_str, ms, detail, loc_detail)], True)
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def _handle_free_vram(self) -> None:
         ok, msg = free_trellis_vram()

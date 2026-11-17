@@ -346,6 +346,36 @@ def enforce_tool_runtime_state(tool: ToolSpec, projects_map: dict[str, str]) -> 
         ok, msg = free_trellis_vram()
         return f" ({msg})" if ok and "PID" in msg else ""
 
+    if tool.id == "unity_mcp":
+        port = int(tool.port or 8080)
+        owner_pid, owner_name = find_port_owner(port)
+        if not tool.enabled and owner_pid and owner_name.lower() != "unity.exe":
+            try:
+                psutil.Process(owner_pid).terminate()
+                return f" (Unity MCP PID {owner_pid} durduruldu)"
+            except Exception:
+                return ""
+        if tool.enabled and not owner_pid:
+            local_bin = pathlib.Path.home() / ".local" / "bin"
+            cmd: list[str] | None = None
+            for exe_name in ("mcp-for-unity.exe", "unity-mcp.exe"):
+                cand = local_bin / exe_name
+                if cand.is_file():
+                    cmd = [str(cand), "--transport", "http", "--http-host", "127.0.0.1", "--http-port", str(port)]
+                    break
+            if cmd is None:
+                which_exe = shutil.which("mcp-for-unity") or shutil.which("unity-mcp")
+                if which_exe:
+                    cmd = [which_exe, "--transport", "http", "--http-host", "127.0.0.1", "--http-port", str(port)]
+                elif shutil.which("uvx"):
+                    cmd = ["uvx", "--python", "3.12", "mcpforunityserver", "--transport", "http", "--http-host", "127.0.0.1", "--http-port", str(port)]
+            if cmd:
+                try:
+                    subprocess.Popen(cmd, creationflags=NO_WINDOW)
+                    return f" (Unity MCP :{port} otomatik başlatıldı)"
+                except Exception:
+                    return ""
+
     if tool.id == "serena":
         port = int(tool.port or 9121)
         owner_pid, _ = find_port_owner(port)
@@ -402,6 +432,36 @@ def free_trellis_vram() -> tuple[bool, str]:
 
 def resolve_disk_location(tool: ToolSpec, projects_map: dict[str, str], live_map: dict[str, str]) -> str:
     """Her araç için gerçek dosya yolunu veya canlı çalıştığı proje bilgisini döndürür."""
+    if tool.id == "unity_mcp":
+        port = int(tool.port or 8080)
+        owner_pid, owner_name = find_port_owner(port)
+        if not tool.enabled and owner_pid and owner_name.lower() != "unity.exe":
+            try:
+                psutil.Process(owner_pid).terminate()
+                return f" (Unity MCP PID {owner_pid} durduruldu)"
+            except Exception:
+                return ""
+        if tool.enabled and not owner_pid:
+            local_bin = pathlib.Path.home() / ".local" / "bin"
+            cmd: list[str] | None = None
+            for exe_name in ("mcp-for-unity.exe", "unity-mcp.exe"):
+                cand = local_bin / exe_name
+                if cand.is_file():
+                    cmd = [str(cand), "--transport", "http", "--http-host", "127.0.0.1", "--http-port", str(port)]
+                    break
+            if cmd is None:
+                which_exe = shutil.which("mcp-for-unity") or shutil.which("unity-mcp")
+                if which_exe:
+                    cmd = [which_exe, "--transport", "http", "--http-host", "127.0.0.1", "--http-port", str(port)]
+                elif shutil.which("uvx"):
+                    cmd = ["uvx", "--python", "3.12", "mcpforunityserver", "--transport", "http", "--http-host", "127.0.0.1", "--http-port", str(port)]
+            if cmd:
+                try:
+                    subprocess.Popen(cmd, creationflags=NO_WINDOW)
+                    return f" (Unity MCP :{port} otomatik başlatıldı)"
+                except Exception:
+                    return ""
+
     if tool.id == "serena":
         if "serena" in live_map:
             return live_map["serena"]
