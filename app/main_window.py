@@ -138,6 +138,70 @@ class WorkerBridge(QObject):
     app_apply_done = Signal(bool, str, str)
 
 
+class AiMatrixHeaderView(QHeaderView):
+    """Sütun 5 başlığının tam içine alt satırlarla birebir hizalı [AGY] [CDX] [CLD] [CUR] toplu kontrol butonları yerleştirir."""
+
+    AI_COL = 5
+    AI_COL_WIDTH = 161  # 4px sol + 4x36px buton + 3x3px boşluk + 4px sağ = 161px
+
+    def __init__(self, parent_table: QTableWidget, main_win: "MainWindow") -> None:
+        super().__init__(Qt.Orientation.Horizontal, parent_table)
+        self.main_win = main_win
+        self.setSectionsClickable(True)
+        self.setMinimumHeight(34)
+
+        self.ai_bar = QWidget(self.viewport())
+        self.ai_bar.setStyleSheet("background: transparent; border: none;")
+        bar_lay = QHBoxLayout(self.ai_bar)
+        bar_lay.setContentsMargins(4, 2, 4, 2)
+        bar_lay.setSpacing(3)
+
+        self.buttons: dict[str, QPushButton] = {}
+        for code, full_lbl in AI_CLIENTS:
+            b_btn = QPushButton(code, self.ai_bar)
+            b_btn.setFixedWidth(36)
+            b_btn.setFixedHeight(22)
+            b_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            b_btn.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+            b_btn.setToolTip(
+                f"{full_lbl} — Sol tık: Tüm sütunu tek tıkla komple AÇ / KAPAT\n"
+                "Sağ tık: Gelişmiş toplu seçim menüsü"
+            )
+            b_btn.clicked.connect(lambda _=False, c=code: self.main_win._toggle_client_all(c, mode="auto"))
+            b_btn.customContextMenuRequested.connect(
+                lambda pos, c=code, btn=b_btn: self.main_win._show_bulk_client_menu(c, btn, pos)
+            )
+            self.buttons[code] = b_btn
+            bar_lay.addWidget(b_btn)
+
+        self.sectionResized.connect(lambda *_: self.sync_ai_bar_geometry())
+        self.sectionMoved.connect(lambda *_: self.sync_ai_bar_geometry())
+        self.geometriesChanged.connect(self.sync_ai_bar_geometry)
+
+    def sync_ai_bar_geometry(self) -> None:
+        if self.count() <= self.AI_COL or self.isSectionHidden(self.AI_COL):
+            self.ai_bar.hide()
+            return
+        x = self.sectionViewportPosition(self.AI_COL)
+        w = self.sectionSize(self.AI_COL)
+        vh = self.viewport().height() or self.height()
+        self.ai_bar.setGeometry(x, 0, w, max(24, vh - 1))
+        self.ai_bar.show()
+        self.ai_bar.raise_()
+
+    def updateGeometries(self) -> None:
+        super().updateGeometries()
+        self.sync_ai_bar_geometry()
+
+    def resizeEvent(self, event: Any) -> None:
+        super().resizeEvent(event)
+        self.sync_ai_bar_geometry()
+
+    def showEvent(self, event: Any) -> None:
+        super().showEvent(event)
+        self.sync_ai_bar_geometry()
+
+
 class AppUpdateDialog(QDialog):
     """GitHub Üzerinden Açık Kaynak Program Güncelleme Kontrol & Tek Tık İndirme Penceresi."""
 
@@ -871,23 +935,15 @@ class MainWindow(QMainWindow):
         flt.addWidget(btn_add_proj)
 
         flt.addStretch()
-        flt.addWidget(QLabel("<b>🤖 Toplu AI:</b>"))
-        self.bulk_client_btns: dict[str, QPushButton] = {}
-        for code, full_lbl in AI_CLIENTS:
-            b_btn = QPushButton(code)
-            b_btn.setToolTip(
-                f"{full_lbl} — Sol tık: Tüm araçlarda tek tıkla komple AÇ / KAPAT\nSağ tık: Gelişmiş toplu seçim menüsü"
-            )
-            b_btn.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-            b_btn.clicked.connect(lambda _=False, c=code: self._toggle_client_all(c, mode="auto"))
-            b_btn.customContextMenuRequested.connect(
-                lambda pos, c=code, btn=b_btn: self._show_bulk_client_menu(c, btn, pos)
-            )
-            self.bulk_client_btns[code] = b_btn
-            flt.addWidget(b_btn)
+        hint_lbl = QLabel("📍 / 🟢 ikonunun üzerine gelerek canlı süreç ve dosya konumunu görebilirsiniz.")
+        hint_lbl.setStyleSheet("color: #64748b; font-size: 11px;")
+        flt.addWidget(hint_lbl)
         lay.addLayout(flt)
 
         self.table = QTableWidget(0, 8)
+        self.ai_header = AiMatrixHeaderView(self.table, self)
+        self.bulk_client_btns: dict[str, QPushButton] = self.ai_header.buttons
+        self.table.setHorizontalHeader(self.ai_header)
         self.table.setAlternatingRowColors(True)
         self.table.verticalHeader().setVisible(False)
         self.table.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
@@ -898,21 +954,24 @@ class MainWindow(QMainWindow):
                 "Proje / Konum",
                 "Son Yanıt",
                 "Kullanım",
-                "Hangi AI'da Açık",
+                "",
                 "Çalışma Modu",
                 "Detay / Durum",
             ]
         )
-        hdr = self.table.horizontalHeader()
+        hdr = self.ai_header
         hdr.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
         hdr.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
         hdr.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
         hdr.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
-        hdr.setSectionResizeMode(5, QHeaderView.ResizeMode.ResizeToContents)
+        hdr.setSectionResizeMode(5, QHeaderView.ResizeMode.Fixed)
+        hdr.resizeSection(5, AiMatrixHeaderView.AI_COL_WIDTH)
+        self.table.setColumnWidth(5, AiMatrixHeaderView.AI_COL_WIDTH)
         hdr.setSectionResizeMode(6, QHeaderView.ResizeMode.ResizeToContents)
         hdr.setSectionResizeMode(7, QHeaderView.ResizeMode.ResizeToContents)
         hdr.sectionClicked.connect(self._on_header_clicked)
+        self.table.horizontalScrollBar().valueChanged.connect(lambda *_: hdr.sync_ai_bar_geometry())
         lay.addWidget(self.table, stretch=1)
 
         self.tabs.addTab(tab, "📊 Araç Paneli (14)")
@@ -1009,6 +1068,7 @@ class MainWindow(QMainWindow):
             return item.usage_count
 
         rows.sort(key=sort_val, reverse=self.sort_desc)
+        self.table.setRowCount(0)
         self.table.setRowCount(len(rows))
 
         for r_idx, t in enumerate(rows):
@@ -1110,6 +1170,7 @@ class MainWindow(QMainWindow):
                 mod_l.addWidget(sk_btn)
             elif len(t.modes) > 1:
                 cmb = QComboBox()
+                cmb.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
                 cmb.addItems(t.modes)
                 cmb.setCurrentIndex(t.mode_index)
                 cmb.currentIndexChanged.connect(lambda idx, tool_obj=t: self._change_mode(tool_obj, idx))
@@ -1146,7 +1207,9 @@ class MainWindow(QMainWindow):
         self.token_summary_lbl.setText(
             f"Aktif Şema Yükü: ~{active_k}K tok  |  Korunan (Tasarruf): +{saved_k}K tok"
         )
+        self.table.resizeColumnToContents(6)
         self._update_bulk_client_buttons()
+        self.ai_header.sync_ai_bar_geometry()
 
     def _on_tool_scope_changed(self, tool: ToolSpec, new_scope: str) -> None:
         if new_scope == "__ADD_NEW__":
@@ -1573,6 +1636,8 @@ class MainWindow(QMainWindow):
     def _apply_theme(self, mode: str) -> None:
         self.meta["theme"] = mode
         self.setStyleSheet(LIGHT_QSS if mode == "light" else DARK_QSS)
+        if hasattr(self, "bulk_client_btns"):
+            self._update_bulk_client_buttons()
 
     def _on_auto_detect_toggled(self, checked: bool) -> None:
         self.meta["auto_detect_apps"] = checked
@@ -1594,21 +1659,38 @@ class MainWindow(QMainWindow):
 
     def _update_bulk_client_buttons(self) -> None:
         total = len(self.tools)
+        is_light = self.meta.get("theme", "dark") == "light"
         for code, full_lbl in AI_CLIENTS:
             btn = self.bulk_client_btns.get(code)
             if not btn:
                 continue
             on_cnt = sum(1 for t in self.tools if t.clients.get(code, False))
-            if on_cnt > 0:
-                btn.setText(f"{code} ({on_cnt}/{total})")
-                btn.setStyleSheet("background-color: #1d4ed8; color: #ffffff; font-weight: 700; padding: 4px 8px;")
+            btn.setText(code)
+            if total > 0 and on_cnt == total:
+                btn.setStyleSheet(
+                    "background-color: #2563eb; color: #ffffff; border: 1px solid #93c5fd; "
+                    "border-radius: 4px; font-size: 10px; font-weight: 700; padding: 1px 0px;"
+                )
+            elif on_cnt > 0:
+                btn.setStyleSheet(
+                    "background-color: #dbeafe; color: #1d4ed8; border: 1px dashed #2563eb; "
+                    "border-radius: 4px; font-size: 10px; font-weight: 700; padding: 1px 0px;"
+                    if is_light
+                    else "background-color: #1e3a8a; color: #bfdbfe; border: 1px dashed #60a5fa; "
+                    "border-radius: 4px; font-size: 10px; font-weight: 700; padding: 1px 0px;"
+                )
             else:
-                btn.setText(f"{code} (Kapalı)")
-                btn.setStyleSheet("color: #64748b; padding: 4px 8px;")
+                btn.setStyleSheet(
+                    "background-color: #e2e8f0; color: #64748b; border: 1px solid #cbd5e1; "
+                    "border-radius: 4px; font-size: 10px; font-weight: 600; padding: 1px 0px;"
+                    if is_light
+                    else "background-color: #111823; color: #64748b; border: 1px solid #2e3d54; "
+                    "border-radius: 4px; font-size: 10px; font-weight: 600; padding: 1px 0px;"
+                )
             btn.setToolTip(
-                f"{full_lbl}: {on_cnt}/{total} araçta açık.\n"
-                f"Sol tık: {'Tümünde KAPAT' if on_cnt > 0 else 'Tümünde AÇ'}\n"
-                "Sağ tık: Sadece açık araçlarda aç / Tümünde aç / Tümünde kapat"
+                f"🤖 {full_lbl} ({code}): {on_cnt}/{total} araçta açık\n"
+                f"• Sol tık: Tüm sütunu tek tıkla {'KAPAT' if on_cnt > 0 else 'AÇ'}\n"
+                "• Sağ tık: Sadece açık araçlarda aç / Tümünde aç / Tümünde kapat"
             )
 
     def _toggle_client_all(self, client_code: str, mode: str = "auto") -> None:
