@@ -60,8 +60,10 @@ from .system_ops import (
     detect_running_dcc_apps,
     enforce_tool_runtime_state,
     free_trellis_vram,
+    get_missing_host_dependencies,
     inspect_github_repo,
     kill_zombie_port_process,
+    launch_host_app_for_tool,
     probe_tool_health,
     query_gpu_vram,
     resolve_disk_location,
@@ -1163,6 +1165,7 @@ class MainWindow(QMainWindow):
         self.profile_btns: dict[str, QPushButton] = {}
         self._auto_heal_cooldown: dict[str, float] = {}
         self._last_warn_time: dict[str, float] = {}
+        self._latest_live_map: dict[str, str] = {}
         self.updating_busy = False
         self.checking_plugins_busy = False
         self.latest_app_check: UpdateCheckResult | None = None
@@ -1427,6 +1430,23 @@ class MainWindow(QMainWindow):
 
         flt.addWidget(preset_box)
         lay.addLayout(flt)
+
+        # BAĞIMLI PROGRAM UYARI ÇUBUĞU (Yalnızca AÇIK bir aracın bağlı olduğu program kapalıysa görünür)
+        self.host_dep_banner = QFrame()
+        self.host_dep_banner.setObjectName("card")
+        self.host_dep_banner.setStyleSheet("QFrame#card { border: 1px solid #f59e0b; background-color: #271a0c; }")
+        hdb_lay = QHBoxLayout(self.host_dep_banner)
+        hdb_lay.setContentsMargins(10, 5, 10, 5)
+        hdb_lay.setSpacing(8)
+        self.host_dep_lbl = QLabel("")
+        self.host_dep_lbl.setStyleSheet("color: #fde68a; font-weight: 600;")
+        self.host_dep_lbl.setWordWrap(True)
+        hdb_lay.addWidget(self.host_dep_lbl, stretch=1)
+        self.host_dep_btns_lay = QHBoxLayout()
+        self.host_dep_btns_lay.setSpacing(6)
+        hdb_lay.addLayout(self.host_dep_btns_lay)
+        self.host_dep_banner.hide()
+        lay.addWidget(self.host_dep_banner)
 
         self.table = HoverTableWidget(0, 8, self)
         self.ai_header = AiMatrixHeaderView(self.table, self)
@@ -2987,6 +3007,7 @@ class MainWindow(QMainWindow):
         def worker() -> None:
             try:
                 live_map = scan_live_process_locations()
+                self._latest_live_map = live_map
                 out = []
                 for t in snap_tools:
                     ok, ping_str, ms, detail, loc_detail = probe_tool_health(t, sk_cnt, proj_snap, live_map)
@@ -3026,6 +3047,7 @@ class MainWindow(QMainWindow):
 
         def worker() -> None:
             live_map = scan_live_process_locations()
+            self._latest_live_map = live_map
             out = []
             for t in snap_tools:
                 ok, ping_str, ms, detail, loc_detail = probe_tool_health(t, sk_cnt, proj_snap, live_map)
@@ -3070,12 +3092,53 @@ class MainWindow(QMainWindow):
         if silent:
             if state_changed and QApplication.activePopupWidget() is None:
                 self._refresh_table()
+                self._refresh_host_dep_banner()
             return
 
         self._refresh_table()
+        self._refresh_host_dep_banner()
         self._refresh_logs_tab()
         self._update_vram_bar()
         self.set_status("Canlı süreç, port ve konum taraması tamamlandı (3 sn'de bir anlık izleniyor).")
+
+    def _refresh_host_dep_banner(self) -> None:
+        if not hasattr(self, "host_dep_banner"):
+            return
+        missing = get_missing_host_dependencies(self.tools, self._latest_live_map, self.projects_map)
+        while self.host_dep_btns_lay.count():
+            item = self.host_dep_btns_lay.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.deleteLater()
+
+        if not missing:
+            self.host_dep_banner.hide()
+            return
+
+        titles = "  |  ".join(m["title"] for m in missing)
+        self.host_dep_lbl.setText(f"⚠️ <b>Bağımlı Program Kapalı:</b> {titles} — Tek tıkla başlatabilirsiniz:")
+        for m in missing:
+            btn = QPushButton(m["btn_label"])
+            btn.setObjectName("warnBtn")
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.setToolTip(m["detail"])
+            btn.clicked.connect(lambda _=False, info=m: self._handle_launch_host_app(info))
+            self.host_dep_btns_lay.addWidget(btn)
+        self.host_dep_banner.show()
+
+    def _handle_launch_host_app(self, dep_info: dict[str, Any]) -> None:
+        tr = next((t for t in self.tools if t.id == "trellis"), None)
+        ok, msg = launch_host_app_for_tool(
+            host_kind=str(dep_info.get("host", "")),
+            projects_map=self.projects_map,
+            target_scope=str(dep_info.get("scope", "GLOBAL")),
+            headless=bool(dep_info.get("headless", True)),
+            trellis_root=tr.param_value if tr else "",
+        )
+        self.logs.add("INFO" if ok else "WARN", "Bağımlı Program", msg)
+        self.set_status(f"🚀 {msg}" if ok else f"⚠️ {msg}")
+        self._refresh_logs_tab()
+        QTimer.singleShot(2500, self.run_health_scan)
 
     def _auto_heal_tool_async(self, tool: ToolSpec) -> None:
         """AÇIK işaretli arka plan servisleri (Serena :9121, Unity MCP :8080) kapandıysa kullanıcıya sormadan otomatik başlatır."""

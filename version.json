@@ -1,5 +1,5 @@
 {
-  "version": "1.2.10",
+  "version": "1.2.11",
   "update_repo": "https://github.com/DoranPierst/ai-arac-merkezi",
-  "changelog": "Serena (:9121) ve Unity MCP (:8080) için otomatik kurtarma (auto-heal) eklendi: açık işaretli servisler kapandıysa program kendi kendine yeniden başlatır. Tekrarlayan WARN spam'i önlendi ve Debug & Log sekmesine Logları Temizle butonu eklendi."
+  "changelog": "Bağımlı program uyarı & başlatıcı eklendi: Blender MCP, Unity MCP/Pipeline, RenderDoc veya Trellis AÇIK iken bağlı olduğu program kapalıysa tablonun üstünde tek tıkla (UI'sız/simge modunda) başlatma uyarısı çıkar."
 }
