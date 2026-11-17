@@ -67,9 +67,10 @@ from .updater import (
     UpdateCheckResult,
     apply_self_update,
     check_for_app_updates,
-    detect_git_origin_url,
     get_current_app_version,
+    resolve_effective_app_repo,
     restart_running_python_app,
+    stamp_repo_into_version_json,
 )
 
 DARK_QSS = """
@@ -202,48 +203,153 @@ class AiMatrixHeaderView(QHeaderView):
         self.sync_ai_bar_geometry()
 
 
+class ToolInfoDialog(QDialog):
+    """Eklentinin ne işe yaradığını, ne zaman açılıp kapatılacağını ve teknik gereksinimlerini anlatan bilgi kartı."""
+
+    def __init__(self, parent: "MainWindow", tool: ToolSpec) -> None:
+        super().__init__(parent)
+        self.main_win = parent
+        self.tool = tool
+        self.setWindowTitle(f"❓ {tool.name} — Ne İşe Yarar?")
+        self.setMinimumWidth(620)
+        self.resize(640, 500)
+
+        lay = QVBoxLayout(self)
+        lay.setSpacing(10)
+
+        hdr_row = QHBoxLayout()
+        title_lbl = QLabel(f"<span style='font-size:15px; font-weight:700;'>{tool.name}</span>")
+        hdr_row.addWidget(title_lbl)
+        badge_lbl = QLabel(f"  <span style='color:#60a5fa; font-weight:600;'>[{tool.kind} · {tool.version}]</span>")
+        hdr_row.addWidget(badge_lbl)
+        hdr_row.addStretch()
+        lay.addLayout(hdr_row)
+
+        # 1) Ne İşe Yarar?
+        what_card = QFrame()
+        what_card.setObjectName("card")
+        w_lay = QVBoxLayout(what_card)
+        w_lay.setSpacing(6)
+        w_lay.addWidget(QLabel("<b>🎯 Ne İşe Yarar?</b>"))
+        sum_txt = tool.summary or "Bu eklenti yapay zeka istemcinize ek araç ve yetenekler kazandırır."
+        det_txt = tool.details or ""
+        full_what = f"{sum_txt}\n\n{det_txt}".strip() if det_txt else sum_txt
+        what_lbl = QLabel(full_what)
+        what_lbl.setWordWrap(True)
+        w_lay.addWidget(what_lbl)
+        lay.addWidget(what_card)
+
+        # 2) Ne Zaman Açmalı / Kapatmalı?
+        when_card = QFrame()
+        when_card.setObjectName("card")
+        wh_lay = QVBoxLayout(when_card)
+        wh_lay.addWidget(QLabel("<b>💡 Ne Zaman Açmalı / Ne Zaman Kapatmalı?</b>"))
+        when_lbl = QLabel(
+            tool.when_to_use
+            or "İlgili projede aktif olarak ihtiyacınız olduğunda AÇIN; kullanmadığınız zamanlarda gereksiz şema tokenı harcamaması için KAPATIN."
+        )
+        when_lbl.setWordWrap(True)
+        wh_lay.addWidget(when_lbl)
+        lay.addWidget(when_card)
+
+        # 3) Teknik Özet & Bağlantı
+        tech_card = QFrame()
+        tech_card.setObjectName("card")
+        t_lay = QVBoxLayout(tech_card)
+        t_lay.addWidget(QLabel("<b>📊 Teknik & Kaynak Özeti</b>"))
+
+        if tool.id == "blender_skills":
+            tok_info = "Seçilen her skill ~350 token (94 skill tamamı açılırsa ~33,000 token)"
+        else:
+            tok_info = f"~{tool.schema_tokens:,} şema tokenı (Kapalıyken 0 token)"
+
+        key_info = (
+            f"🔐 <b>{tool.vault_key_name}</b> gerekir (Şifreli Kasa sekmesinden girilir)"
+            if tool.vault_key_name
+            else "✓ Ücretsiz / API Anahtarı Gerekmez"
+        )
+        t_lay.addWidget(QLabel(f"• <b>Bağlam Yükü:</b> {tok_info}"))
+        t_lay.addWidget(QLabel(f"• <b>Anahtar İhtiyacı:</b> {key_info}"))
+        if tool.install_cmd:
+            t_lay.addWidget(QLabel(f"• <b>Kurulum / Çalıştırma:</b> <code>{tool.install_cmd}</code>"))
+        if tool.repo_url:
+            link_lbl = QLabel(f"• <b>Resmi Kaynak:</b> <a style='color:#60a5fa;' href='{tool.repo_url}'>{tool.repo_url} ↗</a>")
+            link_lbl.setOpenExternalLinks(True)
+            t_lay.addWidget(link_lbl)
+        lay.addWidget(tech_card)
+
+        lay.addStretch()
+        bot = QHBoxLayout()
+        if tool.has_gear:
+            btn_gear = QPushButton("⚙️ Bu Eklentinin Ayarlarını Aç")
+            btn_gear.clicked.connect(lambda: (self.accept(), self.main_win.open_gear(tool)))
+            bot.addWidget(btn_gear)
+        bot.addStretch()
+        btn_ok = QPushButton("Tamam")
+        btn_ok.setObjectName("primaryBtn")
+        btn_ok.clicked.connect(self.accept)
+        bot.addWidget(btn_ok)
+        lay.addLayout(bot)
+        self.adjustSize()
+
+
 class AppUpdateDialog(QDialog):
-    """GitHub Üzerinden Açık Kaynak Program Güncelleme Kontrol & Tek Tık İndirme Penceresi."""
+    """Paylaşılan Kullanıcılar ve Geliştirici İçin Tek Tık Program Güncelleme Merkezi."""
 
     def __init__(self, parent: "MainWindow", initial_result: UpdateCheckResult | None = None) -> None:
         super().__init__(parent)
         self.main_win = parent
         self.last_check: UpdateCheckResult | None = initial_result
-        self.setWindowTitle(f"🔄 Program Güncelleme Merkezi (Mevcut: v{get_current_app_version()})")
-        self.resize(620, 360)
+        cur_ver = get_current_app_version()
+        self.setWindowTitle(f"🔄 Program Güncelleme Merkezi (Kullandığınız Sürüm: v{cur_ver})")
+        self.resize(620, 380)
 
         lay = QVBoxLayout(self)
 
-        repo_card = QFrame()
-        repo_card.setObjectName("card")
-        r_lay = QVBoxLayout(repo_card)
-        r_lay.addWidget(QLabel("<b>GitHub Kaynak Repo Adresi (Açık Kaynak Güncelleme Kanalı)</b>"))
+        cur_repo = resolve_effective_app_repo(str(parent.meta.get("app_update_repo", "")))
+
+        top_bar = QHBoxLayout()
+        self.status_badge = QLabel("🔍 Güncel sürüm kontrol ediliyor..." if cur_repo else "⚠️ Güncelleme kanalı henüz bağlanmadı")
+        self.status_badge.setStyleSheet("font-weight: 700; font-size: 14px;")
+        top_bar.addWidget(self.status_badge, stretch=1)
+
+        self.notes_link_lbl = QLabel("")
+        self.notes_link_lbl.setOpenExternalLinks(True)
+        top_bar.addWidget(self.notes_link_lbl)
+
+        self.btn_toggle_channel = QPushButton("⚙️ Kanal Ayarı")
+        self.btn_toggle_channel.setToolTip("Güncellemelerin çekildiği GitHub depo adresini görüntüler veya değiştirir")
+        self.btn_toggle_channel.clicked.connect(self._toggle_repo_card)
+        top_bar.addWidget(self.btn_toggle_channel)
+        lay.addLayout(top_bar)
+
+        # Gelişmiş / Kanal Ayarı Kartı (Repo zaten gömülüyse sade görünüm için gizli başlar; yoksa açık gelir)
+        self.repo_card = QFrame()
+        self.repo_card.setObjectName("card")
+        r_lay = QVBoxLayout(self.repo_card)
+        r_lay.addWidget(
+            QLabel(
+                "<b>GitHub Güncelleme Kanalı</b> "
+                "<span style='color:#94a3b8;'>(Kaydettiğinizde ürettiğiniz .exe içine gömülür; paylaştığınız kişiler adres girmeden günceller)</span>"
+            )
+        )
         row = QHBoxLayout()
-        cur_repo = str(parent.meta.get("app_update_repo") or detect_git_origin_url())
         self.repo_inp = QLineEdit(cur_repo)
         self.repo_inp.setPlaceholderText("https://github.com/kullanici_adiniz/ai-arac-merkezi")
         row.addWidget(self.repo_inp, stretch=1)
 
-        self.btn_check = QPushButton("🔍 Güncelleme Kontrol Et")
-        self.btn_check.setObjectName("primaryBtn")
-        self.btn_check.clicked.connect(self.run_check)
-        row.addWidget(self.btn_check)
+        btn_save_repo = QPushButton("💾 Kanalı Kaydet && Kontrol Et")
+        btn_save_repo.setObjectName("primaryBtn")
+        btn_save_repo.clicked.connect(self.run_check)
+        row.addWidget(btn_save_repo)
         r_lay.addLayout(row)
-        lay.addWidget(repo_card)
-
-        status_row = QHBoxLayout()
-        self.status_badge = QLabel("Durum kontrol bekliyor...")
-        self.status_badge.setStyleSheet("font-weight: 700; font-size: 13px;")
-        status_row.addWidget(self.status_badge, stretch=1)
-
-        self.notes_link_lbl = QLabel("")
-        self.notes_link_lbl.setOpenExternalLinks(True)
-        status_row.addWidget(self.notes_link_lbl)
-        lay.addLayout(status_row)
+        if cur_repo:
+            self.repo_card.hide()
+        lay.addWidget(self.repo_card)
 
         self.info_box = QPlainTextEdit()
         self.info_box.setReadOnly(True)
-        self.info_box.setPlaceholderText("Güncelleme kontrolü yaptığınızda sürüm karşılaştırması ve değişiklik notları burada görünür...")
+        self.info_box.setPlaceholderText("Sürüm karşılaştırması ve güncelleme notları burada görünür...")
         lay.addWidget(self.info_box, stretch=1)
 
         self.dl_bar = QProgressBar()
@@ -251,10 +357,14 @@ class AppUpdateDialog(QDialog):
         lay.addWidget(self.dl_bar)
 
         bot = QHBoxLayout()
+        self.btn_check = QPushButton("🔍 Şimdi Tekrar Kontrol Et")
+        self.btn_check.clicked.connect(self.run_check)
+        bot.addWidget(self.btn_check)
+
         bot.addStretch()
         btn_close = QPushButton("Kapat")
         btn_close.clicked.connect(self.reject)
-        self.btn_apply = QPushButton("⚡ Programı Şimdi Güncelle")
+        self.btn_apply = QPushButton("✓ Sürüm Güncel")
         self.btn_apply.setObjectName("successBtn")
         self.btn_apply.setEnabled(False)
         self.btn_apply.clicked.connect(self.run_apply)
@@ -266,18 +376,33 @@ class AppUpdateDialog(QDialog):
         parent.bridge.app_dl_progress.connect(self._on_dl_prog)
         parent.bridge.app_apply_done.connect(self._on_applied)
 
-        if initial_result is not None:
+        if initial_result is not None and initial_result.ok:
             self._render_result(initial_result)
         elif cur_repo:
-            QTimer.singleShot(150, self.run_check)
+            QTimer.singleShot(120, self.run_check)
+        else:
+            self.info_box.setPlainText(
+                "Bu programı arkadaşlarınıza veya topluluğa gönderdiğinizde tek tıkla güncelleme alabilmeleri için:\n\n"
+                "1) GitHub'da oluşturduğunuz açık kaynak (Public) repo linkini yukarıdaki kutuya yapıştırıp kaydedin.\n"
+                "2) Siz yeni bir sürüm yayınladığınızda, programı paylaştığınız herkes üst bardaki '🔄 Program Güncelle' butonuna basarak (veya programı açtığında gelen bildirimle) tekrar indirme yapmadan otomatik güncellenir."
+            )
+
+    def _toggle_repo_card(self) -> None:
+        self.repo_card.setVisible(not self.repo_card.isVisible())
 
     def run_check(self) -> None:
         repo = self.repo_inp.text().strip()
-        self.main_win.meta["app_update_repo"] = repo
-        self.main_win._save_state()
+        if repo:
+            self.main_win.meta["app_update_repo"] = repo
+            stamp_repo_into_version_json(repo)
+            self.main_win._save_state()
+        else:
+            repo = resolve_effective_app_repo(str(self.main_win.meta.get("app_update_repo", "")))
         self.btn_check.setEnabled(False)
         self.btn_apply.setEnabled(False)
-        self.info_box.setPlainText("GitHub üzerinden son sürüm kontrol ediliyor...")
+        self.status_badge.setText("🔍 GitHub üzerinden son sürüm kontrol ediliyor...")
+        self.status_badge.setStyleSheet("color: #94a3b8; font-weight: 700; font-size: 14px;")
+        self.info_box.setPlainText("GitHub üzerinden son sürüm ve değişiklik notları kontrol ediliyor...")
         tok = self.main_win.vault.get_secret("GITHUB_TOKEN")
 
         def worker() -> None:
@@ -304,35 +429,36 @@ class AppUpdateDialog(QDialog):
             self.status_badge.setText(f"⚠️ {res.message}")
             self.status_badge.setStyleSheet("color: #f59e0b; font-weight: 700; font-size: 13px;")
             self.notes_link_lbl.setText("")
+            self.repo_card.show()
         elif res.has_update:
             self.status_badge.setText(f"🔔 Güncelleme Mevcut:  {res.local_version}v > {res.remote_version}v")
-            self.status_badge.setStyleSheet("color: #f59e0b; font-weight: 700; font-size: 13px;")
+            self.status_badge.setStyleSheet("color: #f59e0b; font-weight: 700; font-size: 14px;")
             if res.release_notes_url:
                 self.notes_link_lbl.setText(f"<a style='color:#60a5fa;' href='{res.release_notes_url}'>📄 Güncelleme Notları ↗</a>")
         else:
-            self.status_badge.setText(f"✓ Program güncel ({res.local_version}v)")
-            self.status_badge.setStyleSheet("color: #22c55e; font-weight: 700; font-size: 13px;")
+            self.status_badge.setText(f"✓ Programınız güncel ({res.local_version}v)")
+            self.status_badge.setStyleSheet("color: #22c55e; font-weight: 700; font-size: 14px;")
             if res.release_notes_url:
                 self.notes_link_lbl.setText(f"<a style='color:#60a5fa;' href='{res.release_notes_url}'>📄 Sürüm Geçmişi ↗</a>")
 
         lines = [
-            f"Sürüm Karşılaştırması: {res.local_version}v > {res.remote_version}v" if res.has_update else f"Mevcut Sürüm: {res.local_version}v (Güncel)",
+            f"Sürüm Karşılaştırması: {res.local_version}v > {res.remote_version}v" if res.has_update else f"Mevcut Sürüm: {res.local_version}v (En güncel sürümdesiniz)",
         ]
         if res.repo_url:
-            lines.append(f"GitHub Deposu: {res.repo_url}")
+            lines.append(f"Güncelleme Kanalı: {res.repo_url}")
         if res.release_notes_url:
             lines.append(f"Güncelleme Notları: {res.release_notes_url}")
         if res.exe_download_url:
-            lines.append("İndirme Türü: Hazır AI-Arac-Merkezi.exe (Tek tıkla otomatik yenileme)")
+            lines.append("Güncelleme Yöntemi: Doğrudan AI-Arac-Merkezi.exe otomatik yenileme (ayarlarınız korunur)")
         elif res.can_git_pull:
-            lines.append("İndirme Türü: Git Kaynak Deposu (git pull)")
+            lines.append("Güncelleme Yöntemi: Git Kaynak Deposu (git pull)")
         if res.changelog:
-            lines.extend(["", "--- Değişiklik Özeti ---", res.changelog])
+            lines.extend(["", "--- Bu Sürümdeki Yenilikler ---", res.changelog])
         self.info_box.setPlainText("\n".join(lines))
 
         self.btn_apply.setEnabled(res.ok and res.has_update)
         if res.has_update:
-            self.btn_apply.setText(f"⚡ Güncellemeyi Başlat ({res.local_version}v > {res.remote_version}v)")
+            self.btn_apply.setText(f"⚡ Şimdi Güncelle ve Yeniden Başlat ({res.local_version}v > {res.remote_version}v)")
         else:
             self.btn_apply.setText("✓ Sürüm Güncel")
 
@@ -343,7 +469,7 @@ class AppUpdateDialog(QDialog):
         self.btn_check.setEnabled(False)
         self.dl_bar.setMaximum(100)
         self.dl_bar.setValue(0)
-        self.dl_bar.setFormat("GitHub'dan çekiliyor...")
+        self.dl_bar.setFormat("Yeni sürüm GitHub'dan indiriliyor...")
         self.dl_bar.show()
         tok = self.main_win.vault.get_secret("GITHUB_TOKEN")
         chk = self.last_check
@@ -382,14 +508,17 @@ class AppUpdateDialog(QDialog):
             self.btn_apply.setEnabled(True)
             QMessageBox.warning(self, "Güncelleme Hatası", f"{msg.splitlines()[0]}\n\n(Tam teknik çıktı Debug & Log sekmesine kaydedildi.)")
             return
-        QMessageBox.information(self, "Güncelleme Tamamlandı", msg)
         if mode == "swap_exe":
+            # _apply_update.bat arka planda yeni .exe'yi taşımak için mevcut sürecin kapanmasını bekler; bloklamadan hemen kapatıyoruz
             self.accept()
             self.main_win._quit_app()
-        elif mode == "restart_py":
+            return
+        if mode == "restart_py":
             self.accept()
             self.main_win._save_state()
             restart_running_python_app()
+            return
+        QMessageBox.information(self, "Güncelleme Tamamlandı", msg)
 
 
 class AiPasteDialog(QDialog):
@@ -859,11 +988,17 @@ class MainWindow(QMainWindow):
         btn_refresh.clicked.connect(self.run_health_scan)
         prof_bar.addWidget(btn_refresh)
 
-        self.btn_top_update_all = QPushButton("🔍 Eklenti Güncelleme Kontrol")
-        self.btn_top_update_all.setObjectName("primaryBtn")
-        self.btn_top_update_all.setToolTip("Eklentiler için yeni sürüm var mı kontrol eder (güncelleme varsa Eklentiler ekranını açar)")
-        self.btn_top_update_all.clicked.connect(self._handle_top_plugin_update_btn)
-        prof_bar.addWidget(self.btn_top_update_all)
+        self.btn_app_update_top = QPushButton(f"🔄 Program Güncelleme Kontrol (v{get_current_app_version()})")
+        self.btn_app_update_top.setObjectName("primaryBtn")
+        self.btn_app_update_top.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.btn_app_update_top.setToolTip(
+            "Bu programın (AI Araç Merkezi) yeni bir sürümü var mı GitHub üzerinden kontrol eder.\n"
+            "• Yeni sürüm yayınlandığında paylaştığınız kişiler tekrar indirmeden tek tıkla güncellenir.\n"
+            "• Sağ tık: Güncelleme penceresini / kanal ayarını doğrudan açar."
+        )
+        self.btn_app_update_top.clicked.connect(self._handle_quick_check_app_update)
+        self.btn_app_update_top.customContextMenuRequested.connect(lambda _pos: self._open_app_update_dialog(self.latest_app_check))
+        prof_bar.addWidget(self.btn_app_update_top)
 
         btn_sync = QPushButton("🔄 AI Config'lere Yaz")
         btn_sync.setObjectName("successBtn")
@@ -877,6 +1012,27 @@ class MainWindow(QMainWindow):
 
         main_lay.addLayout(prof_bar)
 
+        # YENİ SÜRÜM BİLDİRİM ÇUBUĞU (Yalnızca bu programın yeni sürümü çıktığında otomatik görünür)
+        self.app_update_banner = QFrame()
+        self.app_update_banner.setObjectName("card")
+        self.app_update_banner.setStyleSheet("QFrame#card { border: 1px solid #f59e0b; background-color: #271a0c; }")
+        ub_lay = QHBoxLayout(self.app_update_banner)
+        ub_lay.setContentsMargins(12, 6, 12, 6)
+        self.app_update_banner_lbl = QLabel("")
+        self.app_update_banner_lbl.setStyleSheet("color: #fde68a; font-weight: 700;")
+        ub_lay.addWidget(self.app_update_banner_lbl, stretch=1)
+
+        self.app_update_notes_lbl = QLabel("")
+        self.app_update_notes_lbl.setOpenExternalLinks(True)
+        ub_lay.addWidget(self.app_update_notes_lbl)
+
+        btn_banner_upd = QPushButton("⚡ Tek Tıkla Programı Güncelle")
+        btn_banner_upd.setObjectName("warnBtn")
+        btn_banner_upd.clicked.connect(lambda: self._open_app_update_dialog(self.latest_app_check))
+        ub_lay.addWidget(btn_banner_upd)
+        self.app_update_banner.hide()
+        main_lay.addWidget(self.app_update_banner)
+
         # 2. SEKMELER
         self.tabs = QTabWidget()
         main_lay.addWidget(self.tabs, stretch=1)
@@ -887,18 +1043,13 @@ class MainWindow(QMainWindow):
         self._init_repo_tab()
         self._init_logs_tab()
 
-        # 3. ALT DURUM ÇUBUĞU + PROGRAM GÜNCELLEME BUTONLARI
+        # 3. ALT DURUM ÇUBUĞU + SÜRÜM/KANAL BUTONU
         foot = QHBoxLayout()
         self.status_lbl = QLabel("Hazır — Sağ alt sistem tepsisinde (Tray) kesintisiz çalışır.")
         foot.addWidget(self.status_lbl, stretch=1)
 
-        self.btn_chk_app_upd = QPushButton(f"🔍 Güncelleme Kontrol (v{get_current_app_version()})")
-        self.btn_chk_app_upd.setToolTip("GitHub deposundan programın yeni bir sürümü olup olmadığını kontrol eder")
-        self.btn_chk_app_upd.clicked.connect(self._handle_quick_check_app_update)
-        foot.addWidget(self.btn_chk_app_upd)
-
-        self.btn_do_app_upd = QPushButton("⚡ Programı Güncelle")
-        self.btn_do_app_upd.setToolTip("Tekrar el ile indirmeden doğrudan GitHub üzerinden programı günceller")
+        self.btn_do_app_upd = QPushButton(f"📦 Sürüm && Güncelleme Kanalı (v{get_current_app_version()})")
+        self.btn_do_app_upd.setToolTip("Program sürüm notlarını, değişiklik geçmişini ve GitHub güncelleme kanalını açar")
         self.btn_do_app_upd.clicked.connect(lambda: self._open_app_update_dialog(self.latest_app_check))
         foot.addWidget(self.btn_do_app_upd)
 
@@ -907,6 +1058,30 @@ class MainWindow(QMainWindow):
         foot.addWidget(self.token_summary_lbl)
         main_lay.addLayout(foot)
 
+    def _make_info_btn(self, tool: ToolSpec) -> QPushButton:
+        btn = QPushButton("?")
+        btn.setFixedSize(20, 20)
+        btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        is_light = self.meta.get("theme", "dark") == "light"
+        btn.setStyleSheet(
+            "QPushButton { background-color: #dbeafe; color: #1d4ed8; border: 1px solid #60a5fa; "
+            "border-radius: 10px; font-size: 11px; font-weight: 800; padding: 0px; }"
+            "QPushButton:hover { background-color: #2563eb; color: #ffffff; }"
+            if is_light
+            else "QPushButton { background-color: #172554; color: #93c5fd; border: 1px solid #3b82f6; "
+            "border-radius: 10px; font-size: 11px; font-weight: 800; padding: 0px; }"
+            "QPushButton:hover { background-color: #2563eb; color: #ffffff; }"
+        )
+        tip_parts = [f"❓ {tool.name} — Ne İşe Yarar?"]
+        if tool.summary:
+            tip_parts.append(tool.summary)
+        if tool.when_to_use:
+            tip_parts.append(f"\n💡 Ne zaman kullanılır:\n{tool.when_to_use}")
+        tip_parts.append("\n(Detaylı açıklama kartını açmak için tıklayın)")
+        btn.setToolTip("\n".join(tip_parts))
+        btn.clicked.connect(lambda _=False, t_obj=tool: ToolInfoDialog(self, t_obj).exec())
+        return btn
+
     # --- SEKME 1: ANA PANEL (8 SÜTUN — PROJE / KONUM DAHİL) ---
     def _init_panel_tab(self) -> None:
         tab = QWidget()
@@ -914,7 +1089,7 @@ class MainWindow(QMainWindow):
 
         flt = QHBoxLayout()
         self.search_inp = QLineEdit()
-        self.search_inp.setPlaceholderText("Araç veya konum ara (örn: Serena, project-train, BLA)...")
+        self.search_inp.setPlaceholderText("Araç, görev veya konum ara (örn: Serena, shader, ses, doküman)...")
         self.search_inp.setFixedWidth(250)
         self.search_inp.textChanged.connect(self._refresh_table)
         flt.addWidget(self.search_inp)
@@ -1042,6 +1217,7 @@ class MainWindow(QMainWindow):
             if q and (
                 q not in t.name.lower()
                 and q not in t.kind.lower()
+                and q not in t.summary.lower()
                 and q not in t.project_scope.lower()
                 and q not in t.live_location_detail.lower()
             ):
@@ -1074,14 +1250,18 @@ class MainWindow(QMainWindow):
         for r_idx, t in enumerate(rows):
             self.table.setRowHeight(r_idx, 38)
 
-            nm_item = QTableWidgetItem(t.name)
-            nm_item.setFlags(Qt.ItemFlag.ItemIsEnabled)
-            font = nm_item.font()
-            font.setBold(True)
-            nm_item.setFont(font)
-            if t.live_location_detail:
-                nm_item.setToolTip(t.live_location_detail)
-            self.table.setItem(r_idx, 0, nm_item)
+            # Sütun 0: Eklenti Adı + (?) Ne İşe Yarar Bilgi Butonu
+            nm_w = QWidget()
+            nm_l = QHBoxLayout(nm_w)
+            nm_l.setContentsMargins(8, 2, 6, 2)
+            nm_l.setSpacing(6)
+            nm_lbl = QLabel(f"<b>{t.name}</b>")
+            if t.summary or t.live_location_detail:
+                nm_lbl.setToolTip(f"{t.summary}\n\n{t.live_location_detail}".strip())
+            nm_l.addWidget(nm_lbl)
+            nm_l.addWidget(self._make_info_btn(t))
+            nm_l.addStretch()
+            self.table.setCellWidget(r_idx, 0, nm_w)
 
             kd_item = QTableWidgetItem(t.kind)
             kd_item.setFlags(Qt.ItemFlag.ItemIsEnabled)
@@ -1355,8 +1535,21 @@ class MainWindow(QMainWindow):
             else:
                 ver_html = f"<span style='color:#22c55e; font-weight:600;'>✓ Güncel ({cur_v}v)</span>"
 
-            row.addWidget(QLabel(f"<b>{t.name}</b>  <span style='color:#94a3b8;'>({t.kind})</span>   {ver_html}"))
-            row.addStretch()
+            info_col = QVBoxLayout()
+            info_col.setSpacing(2)
+            title_row = QHBoxLayout()
+            title_row.setSpacing(6)
+            title_row.addWidget(QLabel(f"<b>{t.name}</b>"))
+            title_row.addWidget(self._make_info_btn(t))
+            title_row.addWidget(QLabel(f"<span style='color:#94a3b8;'>({t.kind})</span>   {ver_html}"))
+            title_row.addStretch()
+            info_col.addLayout(title_row)
+            if t.summary:
+                desc_lbl = QLabel(t.summary)
+                desc_lbl.setStyleSheet("color: #94a3b8; font-size: 11px;")
+                desc_lbl.setWordWrap(True)
+                info_col.addWidget(desc_lbl)
+            row.addLayout(info_col, stretch=1)
 
             if t.release_notes_url:
                 notes_lbl = QLabel(f"<a style='color:#60a5fa;' href='{t.release_notes_url}'>📄 Sürüm Notları ↗</a>")
@@ -1569,6 +1762,10 @@ class MainWindow(QMainWindow):
             menu.addAction(act_p)
 
         menu.addSeparator()
+        act_app_upd = QAction("🔄 Program Güncellemesini Kontrol Et", self)
+        act_app_upd.triggered.connect(lambda: (self._restore_from_tray(), self._handle_quick_check_app_update()))
+        menu.addAction(act_app_upd)
+
         act_upd_all = QAction("🔍 Eklenti Güncellemelerini Kontrol Et", self)
         act_upd_all.triggered.connect(lambda: self.run_plugin_update_check(manual=True))
         menu.addAction(act_upd_all)
@@ -1631,6 +1828,8 @@ class MainWindow(QMainWindow):
     def _toggle_theme(self) -> None:
         nxt = "light" if self.meta.get("theme", "dark") == "dark" else "dark"
         self._apply_theme(nxt)
+        self._refresh_table()
+        self._refresh_plugins_tab()
         self._save_state()
 
     def _apply_theme(self, mode: str) -> None:
@@ -1976,6 +2175,9 @@ class MainWindow(QMainWindow):
             version="v1.0.0",
             repo_url=info["repo_url"],
             schema_tokens=2000,
+            summary=str(info.get("description") or f"{info['name']} özel eklentisi."),
+            details=f"GitHub üzerinden eklenen {info['kind']} aracı ({info['repo_url']}).",
+            when_to_use="İlgili projede bu eklentinin özelliklerine ihtiyacınız olduğunda AÇIN; kullanmadığınızda şema tasarrufu için KAPATIN.",
             enabled=True,
             scope_selectable=True,
             project_scope="GLOBAL",
@@ -1994,18 +2196,11 @@ class MainWindow(QMainWindow):
         self.tabs.setCurrentIndex(0)
         self.set_status(f"📚 {info['name']} kütüphaneye ve ana panele eklendi!")
 
-    def _handle_top_plugin_update_btn(self) -> None:
-        if any(t.has_update for t in self.tools):
-            self.tabs.setCurrentIndex(1)
-            return
-        self.run_plugin_update_check(manual=True)
-
     def run_plugin_update_check(self, manual: bool = False) -> None:
         if self.checking_plugins_busy or self.updating_busy:
             return
         self.checking_plugins_busy = True
         self.btn_plugins_check.setEnabled(False)
-        self.btn_top_update_all.setEnabled(False)
         self.plugins_banner_lbl.setText("🔍 Eklenti sürümleri kontrol ediliyor...")
         self.plugins_banner_lbl.setStyleSheet("color: #94a3b8; font-weight: 600;")
         if manual:
@@ -2032,7 +2227,6 @@ class MainWindow(QMainWindow):
     def _on_plugin_check_done(self, upd_count: int, manual: bool) -> None:
         self.checking_plugins_busy = False
         self.btn_plugins_check.setEnabled(True)
-        self.btn_top_update_all.setEnabled(True)
         self.btn_jump_err_logs.hide()
         self._refresh_logs_tab()
 
@@ -2040,23 +2234,18 @@ class MainWindow(QMainWindow):
             self.plugins_banner_lbl.setText("✓ Tüm eklentiler güncel.")
             self.plugins_banner_lbl.setStyleSheet("color: #22c55e; font-weight: 700;")
             self.tabs.setTabText(1, "🧩 Eklentiler")
-            self.btn_top_update_all.setText("🔍 Eklenti Güncelleme Kontrol")
-            self.btn_top_update_all.setObjectName("primaryBtn")
-            self.set_status("✓ Tüm eklentiler güncel.")
+            if manual:
+                self.set_status("✓ Tüm eklentiler güncel.")
         else:
             self.plugins_banner_lbl.setText(
                 f"🔔 Güncelleme Mevcut ({upd_count} eklenti) — Güncellemeyi başlatmak için aşağıdaki butonları kullanabilirsiniz."
             )
             self.plugins_banner_lbl.setStyleSheet("color: #f59e0b; font-weight: 700;")
             self.tabs.setTabText(1, f"🧩 Eklentiler (🔔 {upd_count})")
-            self.btn_top_update_all.setText(f"🔔 Güncelleme Mevcut ({upd_count})")
-            self.btn_top_update_all.setObjectName("warnBtn")
-            self.set_status(f"🔔 {upd_count} eklenti için güncelleme mevcut — başlatmak size bağlıdır.")
+            self.set_status(f"🔔 {upd_count} eklenti için güncelleme mevcut — Eklentiler sekmesinden başlatabilirsiniz.")
             if manual:
                 self.tabs.setCurrentIndex(1)
 
-        self.style().unpolish(self.btn_top_update_all)
-        self.style().polish(self.btn_top_update_all)
         self._refresh_plugins_tab()
 
     def _handle_start_available_updates(self) -> None:
@@ -2077,7 +2266,6 @@ class MainWindow(QMainWindow):
         if self.updating_busy or not target_tools:
             return
         self.updating_busy = True
-        self.btn_top_update_all.setEnabled(False)
         self.btn_plugins_check.setEnabled(False)
         self.btn_plugins_update_all.setEnabled(False)
         self.btn_plugins_install_sel.setEnabled(False)
@@ -2124,7 +2312,6 @@ class MainWindow(QMainWindow):
 
     def _on_update_all_done(self, ok_cnt: int, fail_cnt: int, summary_text: str) -> None:
         self.updating_busy = False
-        self.btn_top_update_all.setEnabled(True)
         self.btn_plugins_check.setEnabled(True)
         self.btn_plugins_install_sel.setEnabled(True)
         self.update_prog.setValue(self.update_prog.maximum())
@@ -2146,8 +2333,32 @@ class MainWindow(QMainWindow):
         self._refresh_logs_tab()
         self.run_health_scan()
 
+    def _apply_app_update_visual_state(self, res: UpdateCheckResult) -> None:
+        if res.ok and res.has_update:
+            ver_cmp = f"{res.local_version}v > {res.remote_version}v"
+            self.btn_app_update_top.setText(f"⬆️ Program Güncellemesi Var! ({ver_cmp})")
+            self.btn_app_update_top.setObjectName("warnBtn")
+            self.btn_do_app_upd.setText(f"🔔 Yeni Sürüm Mevcut ({ver_cmp})")
+            self.btn_do_app_upd.setObjectName("warnBtn")
+            self.app_update_banner_lbl.setText(f"🚀 Bu programın yeni bir sürümü yayınlandı:  {ver_cmp}")
+            if res.release_notes_url:
+                self.app_update_notes_lbl.setText(
+                    f"<a style='color:#93c5fd; font-weight:600;' href='{res.release_notes_url}'>📄 Yenilikleri Gör ↗</a>"
+                )
+            self.app_update_banner.show()
+        elif res.ok:
+            self.btn_app_update_top.setText(f"✓ Program Güncel (v{res.local_version})")
+            self.btn_app_update_top.setObjectName("primaryBtn")
+            self.btn_do_app_upd.setText(f"📦 Sürüm && Güncelleme Kanalı (v{res.local_version})")
+            self.btn_do_app_upd.setObjectName("")
+            self.app_update_banner.hide()
+
+        for b in (self.btn_app_update_top, self.btn_do_app_upd):
+            self.style().unpolish(b)
+            self.style().polish(b)
+
     def _run_startup_app_update_check(self) -> None:
-        repo = str(self.meta.get("app_update_repo") or detect_git_origin_url()).strip()
+        repo = resolve_effective_app_repo(str(self.meta.get("app_update_repo", "")))
         if not repo:
             return
         tok = self.vault.get_secret("GITHUB_TOKEN")
@@ -2160,12 +2371,16 @@ class MainWindow(QMainWindow):
         threading.Thread(target=worker, daemon=True).start()
 
     def _handle_quick_check_app_update(self) -> None:
-        repo = str(self.meta.get("app_update_repo") or detect_git_origin_url()).strip()
+        if self.latest_app_check and self.latest_app_check.has_update:
+            self._open_app_update_dialog(self.latest_app_check)
+            return
+        repo = resolve_effective_app_repo(str(self.meta.get("app_update_repo", "")))
         if not repo:
             self._open_app_update_dialog(None)
             return
-        self.btn_chk_app_upd.setEnabled(False)
-        self.set_status("🔍 GitHub üzerinden program güncellemesi kontrol ediliyor...")
+        self.btn_app_update_top.setEnabled(False)
+        self.btn_app_update_top.setText("🔍 Program Kontrol Ediliyor...")
+        self.set_status("🔍 GitHub üzerinden bu programın yeni sürümü olup olmadığı kontrol ediliyor...")
         tok = self.vault.get_secret("GITHUB_TOKEN")
         self._silent_app_check = True
 
@@ -2177,31 +2392,25 @@ class MainWindow(QMainWindow):
 
     def _on_bg_app_check_done(self, res: UpdateCheckResult) -> None:
         self.latest_app_check = res
-        self.btn_chk_app_upd.setEnabled(True)
+        self.btn_app_update_top.setEnabled(True)
+        self._apply_app_update_visual_state(res)
 
         if self._startup_app_check:
             self._startup_app_check = False
             if res.ok and res.has_update:
-                self.btn_do_app_upd.setText(f"🔔 Güncelleme Mevcut ({res.local_version}v > {res.remote_version}v)")
-                self.btn_do_app_upd.setObjectName("warnBtn")
-                self.style().unpolish(self.btn_do_app_upd)
-                self.style().polish(self.btn_do_app_upd)
-                self.set_status(f"🔔 Program güncellemesi mevcut: {res.local_version}v > {res.remote_version}v")
+                self.set_status(f"🔔 Program güncellemesi mevcut: {res.local_version}v > {res.remote_version}v — Üstteki butondan güncelleyebilirsiniz.")
             return
 
         if not self._silent_app_check:
             return
         self._silent_app_check = False
-        self.set_status(res.message)
         if res.has_update:
-            self.btn_do_app_upd.setText(f"🔔 Güncelleme Mevcut ({res.local_version}v > {res.remote_version}v)")
-            self.btn_do_app_upd.setObjectName("warnBtn")
-            self.style().unpolish(self.btn_do_app_upd)
-            self.style().polish(self.btn_do_app_upd)
+            self.set_status(f"🔔 Yeni program sürümü bulundu: {res.local_version}v > {res.remote_version}v")
             self._open_app_update_dialog(res)
         elif res.ok:
-            self.set_status(f"✓ Program güncel ({res.local_version}v).")
+            self.set_status(f"✓ Kullandığınız program güncel (v{res.local_version}) — yeni sürüm bulunmuyor.")
         else:
+            self.btn_app_update_top.setText(f"🔄 Program Güncelleme Kontrol (v{get_current_app_version()})")
             self._open_app_update_dialog(res)
 
     def _open_app_update_dialog(self, initial_res: UpdateCheckResult | None = None) -> None:

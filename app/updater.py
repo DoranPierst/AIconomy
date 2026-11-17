@@ -14,8 +14,8 @@ from typing import Callable
 
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
 
-FALLBACK_VERSION = "1.1.0"
-DEFAULT_APP_REPO = ""  # GitHub'a bağlandığında origin URL otomatik okunur veya kullanıcı ayarlardan kaydeder
+FALLBACK_VERSION = "1.2.0"
+DEFAULT_APP_REPO = ""  # version.json ("update_repo") veya git origin üzerinden otomatik gömülür
 
 
 def get_source_root() -> pathlib.Path:
@@ -24,20 +24,80 @@ def get_source_root() -> pathlib.Path:
     return pathlib.Path(__file__).resolve().parent.parent
 
 
+def _iter_version_json_candidates() -> list[pathlib.Path]:
+    out = [get_source_root() / "version.json"]
+    if getattr(sys, "frozen", False):
+        meipass = getattr(sys, "_MEIPASS", "")
+        if meipass:
+            out.append(pathlib.Path(meipass) / "version.json")
+    return out
+
+
 def get_current_app_version() -> str:
-    candidates = [
-        get_source_root() / "version.json",
-        pathlib.Path(getattr(sys, "_MEIPASS", "")) / "version.json" if getattr(sys, "frozen", False) else None,
-    ]
-    for c in candidates:
-        if c and c.is_file():
+    for c in _iter_version_json_candidates():
+        if c.is_file():
             try:
                 v = str(json.loads(c.read_text(encoding="utf-8")).get("version", "")).strip()
                 if v:
-                    return v.lstrip("v")
+                    return v.lstrip("vV")
             except Exception:
                 pass
     return FALLBACK_VERSION
+
+
+def get_bundled_update_repo() -> str:
+    """Paylaşılan .exe içine gömülü version.json dosyasındaki resmi güncelleme reposunu döndürür."""
+    for c in _iter_version_json_candidates():
+        if c.is_file():
+            try:
+                r = str(json.loads(c.read_text(encoding="utf-8")).get("update_repo", "")).strip()
+                if r:
+                    return r
+            except Exception:
+                pass
+    return ""
+
+
+def stamp_repo_into_version_json(repo_url: str) -> None:
+    """Geliştirici ortamında version.json içine update_repo yazar; böylece üretilen .exe paylaşıldığında karşı taraf adres girmeden günceller."""
+    if getattr(sys, "frozen", False):
+        return
+    v_file = get_source_root() / "version.json"
+    if not v_file.is_file():
+        return
+    try:
+        data = json.loads(v_file.read_text(encoding="utf-8"))
+        data["update_repo"] = repo_url.strip()
+        v_file.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    except Exception:
+        pass
+
+
+def auto_stamp_version_json() -> None:
+    """build_exe.bat çalışırken git origin veya data/hub_state.json içindeki repo adresini version.json'a otomatik gömer."""
+    if get_bundled_update_repo():
+        return
+    origin = detect_git_origin_url()
+    if origin:
+        stamp_repo_into_version_json(origin)
+        return
+    for st in (get_source_root() / "data" / "hub_state.json", get_source_root() / "dist" / "data" / "hub_state.json"):
+        if st.is_file():
+            try:
+                saved = str(json.loads(st.read_text(encoding="utf-8")).get("meta", {}).get("app_update_repo", "")).strip()
+                if saved:
+                    stamp_repo_into_version_json(saved)
+                    return
+            except Exception:
+                pass
+
+
+def resolve_effective_app_repo(saved_meta_repo: str = "") -> str:
+    """Kullanıcı ayarı -> .exe içine gömülü update_repo -> git origin sırasıyla güncelleme kanalını bulur."""
+    for candidate in (saved_meta_repo.strip(), get_bundled_update_repo(), detect_git_origin_url(), DEFAULT_APP_REPO):
+        if candidate:
+            return candidate
+    return ""
 
 
 def detect_git_origin_url() -> str:
@@ -99,7 +159,7 @@ class UpdateCheckResult:
 def check_for_app_updates(repo_input: str, github_token: str = "") -> UpdateCheckResult:
     local_ver = get_current_app_version()
     if not repo_input.strip():
-        detected = detect_git_origin_url()
+        detected = resolve_effective_app_repo("")
         if not detected:
             return UpdateCheckResult(
                 ok=False,
@@ -111,7 +171,7 @@ def check_for_app_updates(repo_input: str, github_token: str = "") -> UpdateChec
                 exe_download_url="",
                 repo_url="",
                 can_git_pull=False,
-                message="Henüz bir GitHub güncelleme reposu tanımlanmadı.",
+                message="Henüz bir GitHub güncelleme kanalı bağlanmadı.",
             )
         repo_input = detected
 
@@ -251,8 +311,14 @@ def apply_self_update(
             bat_content = (
                 "@echo off\r\n"
                 "chcp 65001 >nul\r\n"
-                "timeout /t 2 /nobreak >nul\r\n"
-                f'move /y "{new_exe}" "{current_exe}" >nul\r\n'
+                "set /a tries=0\r\n"
+                ":retry\r\n"
+                "timeout /t 1 /nobreak >nul\r\n"
+                f'move /y "{new_exe}" "{current_exe}" >nul 2>&1\r\n'
+                f'if exist "{new_exe}" (\r\n'
+                "  set /a tries+=1\r\n"
+                "  if %tries% lss 15 goto retry\r\n"
+                ")\r\n"
                 f'start "" "{current_exe}"\r\n'
                 'del "%~f0"\r\n'
             )

@@ -2,6 +2,10 @@ name: Build & Release Windows EXE
 
 on:
   push:
+    branches:
+      - main
+    paths:
+      - "version.json"
     tags:
       - "v*"
   workflow_dispatch:
@@ -19,6 +23,17 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v4
 
+      - name: Stamp GitHub repo into version.json & read version
+        id: meta
+        shell: pwsh
+        run: |
+          $v = Get-Content "version.json" -Raw -Encoding UTF8 | ConvertFrom-Json
+          $v | Add-Member -NotePropertyName "update_repo" -NotePropertyValue "https://github.com/${{ github.repository }}" -Force
+          $v | ConvertTo-Json -Depth 4 | Set-Content "version.json" -Encoding UTF8
+          $tag = "v" + ($v.version -replace '^[vV]', '')
+          "tag=$tag" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "changelog=$($v.changelog)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
       - name: Sync dependencies & Build EXE
         run: |
           uv sync --dev
@@ -31,9 +46,11 @@ jobs:
             --exclude-module PySide6.QtQuick `
             main.py
 
-      - name: Upload Release Asset
-        if: startsWith(github.ref, 'refs/tags/v')
+      - name: Publish GitHub Release with AI-Arac-Merkezi.exe
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ steps.meta.outputs.tag }}
+          name: "AI Araç Merkezi ${{ steps.meta.outputs.tag }}"
+          body: ${{ steps.meta.outputs.changelog }}
           files: dist/AI-Arac-Merkezi.exe
           generate_release_notes: true

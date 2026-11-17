@@ -960,6 +960,10 @@ def update_single_tool(
             return True, tool.version, "GitHub kaynağı doğrulandı ve güncel.", tool.repo_url
 
         return True, tool.version, "Sürüm kontrolü tamamlandı.", tool.name
+    except FileNotFoundError as fnf_exc:
+        missing_bin = str(fnf_exc.filename or fnf_exc)
+        hint = "Git (https://git-scm.com), uv (https://docs.astral.sh/uv/) veya Node.js (https://nodejs.org) kurulu olduğundan emin olun."
+        return False, "", f"Gerekli sistem aracı bulunamadı ({missing_bin}). {hint}", traceback.format_exc()
     except Exception as exc:
         return False, "", f"Beklenmeyen güncelleme hatası: {exc}", traceback.format_exc()
 

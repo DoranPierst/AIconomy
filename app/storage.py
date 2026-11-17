@@ -249,7 +249,9 @@ class StateStore:
         saved_projs = saved_meta.get("projects", {})
         merged_projs = default_projects_map()
         if isinstance(saved_projs, dict):
-            merged_projs.update({str(k): str(v) for k, v in saved_projs.items()})
+            for k, v in saved_projs.items():
+                if pathlib.Path(str(v)).exists():
+                    merged_projs[str(k)] = str(v)
         meta.update(saved_meta)
         meta["projects"] = merged_projs
 
@@ -261,7 +263,8 @@ class StateStore:
                 if isinstance(tdata.get("clients"), dict):
                     t.clients.update({k: bool(v) for k, v in tdata["clients"].items()})
                 if t.scope_selectable and "project_scope" in tdata:
-                    t.project_scope = str(tdata["project_scope"])
+                    sc = str(tdata["project_scope"])
+                    t.project_scope = sc if (sc == "GLOBAL" or sc in merged_projs) else "GLOBAL"
                 t.mode_index = int(tdata.get("mode_index", t.mode_index))
                 t.param_value = str(tdata.get("param_value", t.param_value))
                 t.version = str(tdata.get("version", t.version))
@@ -279,6 +282,9 @@ class StateStore:
                         version=tdata.get("version", "v1.0.0"),
                         repo_url=tdata.get("repo_url", ""),
                         schema_tokens=int(tdata.get("schema_tokens", 1800)),
+                        summary=str(tdata.get("summary", "")),
+                        details=str(tdata.get("details", "")),
+                        when_to_use=str(tdata.get("when_to_use", "")),
                         enabled=bool(tdata.get("enabled", True)),
                         clients=tdata.get("clients", {"AGY": True, "CDX": True, "CLD": False, "CUR": False}),
                         scope_selectable=bool(tdata.get("scope_selectable", True)),
@@ -321,6 +327,9 @@ class StateStore:
                         "version": t.version,
                         "repo_url": t.repo_url,
                         "schema_tokens": t.schema_tokens,
+                        "summary": t.summary,
+                        "details": t.details,
+                        "when_to_use": t.when_to_use,
                         "scope_selectable": t.scope_selectable,
                         "fixed_location_label": t.fixed_location_label,
                         "modes": t.modes,
