@@ -1480,7 +1480,7 @@ class MainWindow(QMainWindow):
         self.set_status(f"📁 Yeni proje tanımlandı: {proj_key} ({p_path})")
 
     def _on_header_clicked(self, col: int) -> None:
-        key_map = {0: "name", 1: "kind", 2: "project", 3: "ping", 4: "usage"}
+        key_map = {0: "name", 1: "kind", 2: "project", 3: "ping", 4: "usage", 7: "enabled"}
         if col not in key_map:
             return
         k = key_map[col]
@@ -1488,8 +1488,21 @@ class MainWindow(QMainWindow):
             self.sort_desc = not self.sort_desc
         else:
             self.sort_key = k
-            self.sort_desc = col in (3, 4)
+            self.sort_desc = col in (3, 4, 7)
         self._refresh_table()
+
+    def _tool_sort_value(self, item: ToolSpec) -> Any:
+        if self.sort_key == "name":
+            return item.name.lower()
+        if self.sort_key == "kind":
+            return item.kind.lower()
+        if self.sort_key == "project":
+            return (item.project_scope if item.scope_selectable else item.fixed_location_label).lower()
+        if self.sort_key == "ping":
+            return item.last_latency_ms if item.last_latency_ms >= 0 else 999999
+        if self.sort_key == "enabled":
+            return (1 if item.enabled else 0, item.usage_count)
+        return item.usage_count
 
     def _calculate_token_economy(self) -> tuple[int, int]:
         active_tok = 0
@@ -1532,18 +1545,7 @@ class MainWindow(QMainWindow):
                     continue
             rows.append(t)
 
-        def sort_val(item: ToolSpec) -> Any:
-            if self.sort_key == "name":
-                return item.name.lower()
-            if self.sort_key == "kind":
-                return item.kind.lower()
-            if self.sort_key == "project":
-                return (item.project_scope if item.scope_selectable else item.fixed_location_label).lower()
-            if self.sort_key == "ping":
-                return item.last_latency_ms if item.last_latency_ms >= 0 else 999999
-            return item.usage_count
-
-        rows.sort(key=sort_val, reverse=self.sort_desc)
+        rows.sort(key=self._tool_sort_value, reverse=self.sort_desc)
         panel_checked_set = self._get_panel_checked_set()
         self.panel_row_checks.clear()
         self.table.setRowCount(0)
@@ -1784,18 +1786,7 @@ class MainWindow(QMainWindow):
             )
             return
 
-        def sort_val(item: ToolSpec) -> Any:
-            if self.sort_key == "name":
-                return item.name.lower()
-            if self.sort_key == "kind":
-                return item.kind.lower()
-            if self.sort_key == "project":
-                return (item.project_scope if item.scope_selectable else item.fixed_location_label).lower()
-            if self.sort_key == "ping":
-                return item.last_latency_ms if item.last_latency_ms >= 0 else 999999
-            return item.usage_count
-
-        selected_tools.sort(key=sort_val, reverse=self.sort_desc)
+        selected_tools.sort(key=self._tool_sort_value, reverse=self.sort_desc)
         active_k, saved_k = self._calculate_token_economy()
         en_cnt = sum(1 for t in selected_tools if t.enabled)
         now_str = dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")

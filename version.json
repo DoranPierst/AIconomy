@@ -1,5 +1,5 @@
 {
-  "version": "1.2.5",
+  "version": "1.2.6",
   "update_repo": "https://github.com/DoranPierst/ai-arac-merkezi",
-  "changelog": "Penceresiz asılı kalan zombi blender.exe/köprü süreç tespiti, gerçek pencere doğrulaması ve AÇIK/KAPALI yapıldığında anlık süreç + AI config senkronizasyonu eklendi."
+  "changelog": "Detay / Durum (AÇIK/KAPALI) sütununa tıklayarak sıralama özelliği eklendi."
 }
