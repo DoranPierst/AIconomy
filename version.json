@@ -1,5 +1,5 @@
 {
-  "version": "1.2.4",
+  "version": "1.2.5",
   "update_repo": "https://github.com/DoranPierst/ai-arac-merkezi",
-  "changelog": "Tüm araçların teknik ayar (çark) pencerelerindeki özelliklerin ve 94 Blender Skill'in yanına 'Açarsan ne olur / Kapatırsan ne olur' (?) bilgi rehberi eklendi."
+  "changelog": "Penceresiz asılı kalan zombi blender.exe/köprü süreç tespiti, gerçek pencere doğrulaması ve AÇIK/KAPALI yapıldığında anlık süreç + AI config senkronizasyonu eklendi."
 }

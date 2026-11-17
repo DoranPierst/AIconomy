@@ -56,6 +56,7 @@ from .storage import LogDatabase, StateStore, WindowsDpapiVault
 from .system_ops import (
     check_all_tools_updates_parallel,
     detect_running_dcc_apps,
+    enforce_tool_runtime_state,
     free_trellis_vram,
     inspect_github_repo,
     kill_zombie_port_process,
@@ -135,7 +136,7 @@ def create_app_icon() -> QIcon:
 
 
 class WorkerBridge(QObject):
-    health_done = Signal(object)
+    health_done = Signal(object, bool)
     repo_done = Signal(object)
     plugin_check_done = Signal(int, bool)
     update_progress = Signal(int, int, str)
@@ -1121,9 +1122,10 @@ class ToolGearDialog(QDialog):
 class MainWindow(QMainWindow):
     """AI Araç & Token Ekonomisi Masaüstü Kontrol Merkezi Ana Penceresi."""
 
-    def __init__(self, data_dir: pathlib.Path) -> None:
+    def __init__(self, data_dir: pathlib.Path, sync_live_environment: bool = True) -> None:
         super().__init__()
         self.data_dir = data_dir
+        self.sync_live_environment = sync_live_environment
         self.data_dir.mkdir(parents=True, exist_ok=True)
 
         self.vault = WindowsDpapiVault(self.data_dir / "vault.dpapi.json")
@@ -1136,7 +1138,8 @@ class MainWindow(QMainWindow):
 
         self.sort_key = str(self.meta.get("sort_key", "usage"))
         self.sort_desc = bool(self.meta.get("sort_desc", True))
-        self.seconds_left = 600
+        self.seconds_left = 30
+        self._live_watch_busy = False
         self.last_detected_apps = {"unity": False, "blender": False}
         self.detected_repo_candidate: dict[str, Any] | None = None
         self.tray_notified = False
@@ -1182,7 +1185,10 @@ class MainWindow(QMainWindow):
         self.tick_timer.timeout.connect(self._on_second_tick)
         self.tick_timer.start(1000)
 
-        QTimer.singleShot(250, self.run_health_scan)
+        if self.sync_live_environment:
+            QTimer.singleShot(250, lambda: self._sync_live_environment_async(target_tools=list(self.tools)))
+        else:
+            QTimer.singleShot(250, self.run_health_scan)
         # Açılışta otomatik güncelleme kontrolü (yalnız kontrol eder; başlatmak kullanıcıya aittir)
         QTimer.singleShot(900, lambda: self.run_plugin_update_check(manual=False))
         QTimer.singleShot(1400, self._run_startup_app_update_check)
@@ -1239,7 +1245,7 @@ class MainWindow(QMainWindow):
         btn_vram_free.clicked.connect(self._handle_free_vram)
         prof_bar.addWidget(btn_vram_free)
 
-        self.timer_lbl = QLabel("10:00")
+        self.timer_lbl = QLabel("00:30")
         self.timer_lbl.setStyleSheet("font-family: Consolas, monospace; font-weight: 700; padding: 4px 8px;")
         prof_bar.addWidget(self.timer_lbl)
 
@@ -1596,7 +1602,12 @@ class MainWindow(QMainWindow):
             proj_l.setContentsMargins(4, 2, 4, 2)
             proj_l.setSpacing(4)
 
-            is_live = t.live_location_detail.startswith("🟢")
+            is_live = (
+                t.enabled
+                and t.live_location_detail.startswith("🟢")
+                and (t.id != "blender_mcp" or t.last_latency_ms >= 0)
+            )
+            is_warn = t.live_location_detail.startswith("⚠️")
             tooltip_full = f"{self._format_scope_display(t)}\n{t.live_location_detail}".strip()
 
             if t.scope_selectable:
@@ -1619,7 +1630,7 @@ class MainWindow(QMainWindow):
                 fixed_lbl.setToolTip(tooltip_full)
                 proj_l.addWidget(fixed_lbl, stretch=1)
 
-            loc_btn = QPushButton("🟢" if is_live else "📍")
+            loc_btn = QPushButton("🟢" if is_live else ("⚠️" if is_warn else "📍"))
             loc_btn.setFixedWidth(28)
             loc_btn.setToolTip(f"{tooltip_full}\n(Konum bilgisini panoya kopyalamak için tıklayın)")
             loc_btn.clicked.connect(
@@ -2451,19 +2462,46 @@ class MainWindow(QMainWindow):
         self.meta["auto_detect_apps"] = checked
         self._save_state()
 
+    def _sync_live_environment_async(self, target_tools: list[ToolSpec] | None = None) -> None:
+        """Tablodaki AÇIK/KAPALI ve AI istemci seçimlerini anında gerçek süreçlere ve AI config dosyalarına uygular."""
+        if not self.sync_live_environment:
+            return
+        tools_snap = list(self.tools)
+        targets = list(target_tools) if target_tools is not None else tools_snap
+        skills_snap = set(self.active_skills)
+        proj_snap = dict(self.projects_map)
+
+        def worker() -> None:
+            for t_obj in targets:
+                enforce_tool_runtime_state(t_obj, proj_snap)
+            bs_tool = next((x for x in tools_snap if x.id == "blender_skills"), None)
+            if bs_tool:
+                sync_blender_skills_on_disk(skills_snap, bs_tool.enabled, bs_tool.project_scope, proj_snap)
+            sync_mcp_json_clients(tools_snap, self.vault, proj_snap)
+            live_map = scan_live_process_locations()
+            out = []
+            for x in tools_snap:
+                ok, ping_str, ms, detail, loc_detail = probe_tool_health(x, len(skills_snap), proj_snap, live_map)
+                out.append((x.id, ok, ping_str, ms, detail, loc_detail))
+            self.bridge.health_done.emit(out, True)
+
+        threading.Thread(target=worker, daemon=True).start()
+
     def _toggle_tool(self, tool: ToolSpec) -> None:
         tool.enabled = not tool.enabled
         self._save_state()
         self.logs.add("DBG", tool.name, f"Durum değiştirildi: {'AÇIK' if tool.enabled else 'KAPALI'}")
-        self.set_status(f"{tool.name} {'açıldı' if tool.enabled else 'kapatıldı'}.")
+        self.set_status(f"{tool.name} {'açıldı ve AI yapılandırmasına işlendi' if tool.enabled else 'kapatıldı ve AI yapılandırmasından çıkarıldı'}.")
         self._refresh_table()
         self._refresh_logs_tab()
+        self._sync_live_environment_async(target_tools=[tool])
 
     def _toggle_client(self, tool: ToolSpec, client_code: str, checked: bool) -> None:
         tool.clients[client_code] = checked
         self._save_state()
-        self.set_status(f"{tool.name} -> {client_code} hedefi {'aktif' if checked else 'devre dışı'}.")
+        self.set_status(f"{tool.name} -> {client_code} hedefi {'aktif edildi' if checked else 'kapatıldı'} (config güncellendi).")
         self._refresh_table()
+        self._sync_live_environment_async(target_tools=[])
 
     def _update_bulk_client_buttons(self) -> None:
         total = len(self.tools)
@@ -2523,9 +2561,10 @@ class MainWindow(QMainWindow):
 
         self._save_state()
         self.logs.add("INFO", f"Toplu AI ({client_code})", f"{client_code} {action_desc}.")
-        self.set_status(f"🤖 {client_code} {action_desc}.")
+        self.set_status(f"🤖 {client_code} {action_desc} (config dosyaları güncellendi).")
         self._refresh_table()
         self._refresh_logs_tab()
+        self._sync_live_environment_async(target_tools=[])
 
     def _show_bulk_client_menu(self, client_code: str, btn: QPushButton, pos: Any) -> None:
         menu = QMenu(self)
@@ -2636,6 +2675,7 @@ class MainWindow(QMainWindow):
         self.set_status(summary_msg)
         self._refresh_table()
         self._refresh_logs_tab()
+        self._sync_live_environment_async(target_tools=list(self.tools))
 
     def open_gear(self, tool: ToolSpec) -> None:
         if tool.gear_kind == "skills94":
@@ -2672,10 +2712,35 @@ class MainWindow(QMainWindow):
         m, s = divmod(max(0, self.seconds_left), 60)
         self.timer_lbl.setText(f"{m:02d}:{s:02d}")
 
+        # Her 3 saniyede bir sessiz canlı süreç/port izleyici: Blender veya Unity kapandığı/açıldığı an tabloyu otomatik günceller!
+        if self.seconds_left > 0 and self.seconds_left % 3 == 0:
+            self._run_silent_live_watch()
+
         if self.seconds_left % 10 == 0:
             self._update_vram_bar()
             if self.meta.get("auto_detect_apps", True):
                 self._check_dcc_auto_switch()
+
+    def _run_silent_live_watch(self) -> None:
+        if self._live_watch_busy:
+            return
+        self._live_watch_busy = True
+        snap_tools = list(self.tools)
+        sk_cnt = len(self.active_skills)
+        proj_snap = dict(self.projects_map)
+
+        def worker() -> None:
+            try:
+                live_map = scan_live_process_locations()
+                out = []
+                for t in snap_tools:
+                    ok, ping_str, ms, detail, loc_detail = probe_tool_health(t, sk_cnt, proj_snap, live_map)
+                    out.append((t.id, ok, ping_str, ms, detail, loc_detail))
+                self.bridge.health_done.emit(out, True)
+            finally:
+                self._live_watch_busy = False
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def _update_vram_bar(self) -> None:
         name, used_mb, total_mb = query_gpu_vram()
@@ -2692,13 +2757,13 @@ class MainWindow(QMainWindow):
     def _check_dcc_auto_switch(self) -> None:
         cur = detect_running_dcc_apps()
         if cur["unity"] and not self.last_detected_apps.get("unity"):
-            self.set_status("👁️ Unity.exe algılandı — İsterseniz üstten '🎮 Unity & Shader' profiline geçebilirsiniz.")
+            self.set_status("👁️ Unity.exe algılandı — İsterseniz üstten '🎮 Unity & Shader' hazır ayarını seçebilirsiniz.")
         elif cur["blender"] and not self.last_detected_apps.get("blender"):
-            self.set_status("👁️ blender.exe algılandı — İsterseniz üstten '🎨 3D & Korku Asset' profiline geçebilirsiniz.")
+            self.set_status("👁️ blender.exe algılandı — İsterseniz üstten '🎨 3D & Korku Asset' hazır ayarını seçebilirsiniz.")
         self.last_detected_apps = cur
 
     def run_health_scan(self) -> None:
-        self.seconds_left = 600
+        self.seconds_left = 30
         self.set_status("Sağlık, port ve canlı süreç konumları taranıyor...")
         snap_tools = list(self.tools)
         sk_cnt = len(self.active_skills)
@@ -2710,24 +2775,44 @@ class MainWindow(QMainWindow):
             for t in snap_tools:
                 ok, ping_str, ms, detail, loc_detail = probe_tool_health(t, sk_cnt, proj_snap, live_map)
                 out.append((t.id, ok, ping_str, ms, detail, loc_detail))
-            self.bridge.health_done.emit(out)
+            self.bridge.health_done.emit(out, False)
 
         threading.Thread(target=worker, daemon=True).start()
 
-    def _on_health_results(self, results: list[tuple[str, bool, str, int, str, str]]) -> None:
+    def _on_health_results(self, results: list[tuple[str, bool, str, int, str, str]], silent: bool = False) -> None:
         by_id = {t.id: t for t in self.tools}
+        state_changed = False
+
+        def _ping_bucket(s: str) -> str:
+            # Sadece saat/ms değişimini değil, gerçek durum değişimini (Çalışıyor <-> Kapalı <-> Devre Dışı) ayırt et
+            if " (" in s and ":" in s[:6]:
+                return "LIVE_OK"
+            if s.startswith("Çalışıyor"):
+                return "LIVE_OK"
+            return s
+
         for tid, ok, ping_str, ms, detail, loc_detail in results:
             if tid in by_id:
                 t = by_id[tid]
+                old_bucket = _ping_bucket(t.last_ping)
+                new_bucket = _ping_bucket(ping_str)
+                if old_bucket != new_bucket or t.live_location_detail != loc_detail:
+                    state_changed = True
                 t.last_ping = ping_str
                 t.last_latency_ms = ms
                 t.live_location_detail = loc_detail
-                if t.enabled and t.port and not ok and tid != "trellis":
+                if not silent and t.enabled and t.port and not ok and tid != "trellis":
                     self.logs.add("WARN", t.name, f"Açık işaretli servis yanıt vermedi ({ping_str})", detail, t.port)
+
+        if silent:
+            if state_changed and QApplication.activePopupWidget() is None:
+                self._refresh_table()
+            return
+
         self._refresh_table()
         self._refresh_logs_tab()
         self._update_vram_bar()
-        self.set_status("Sağlık ve konum taraması tamamlandı. Sayaç 10:00'a sıfırlandı.")
+        self.set_status("Canlı süreç, port ve konum taraması tamamlandı (3 sn'de bir anlık izleniyor).")
 
     def _handle_free_vram(self) -> None:
         ok, msg = free_trellis_vram()
