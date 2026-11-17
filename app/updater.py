@@ -8,6 +8,7 @@ import pathlib
 import re
 import subprocess
 import sys
+import traceback
 import urllib.request
 from typing import Callable
 
@@ -260,22 +261,24 @@ def apply_self_update(
             return True, "swap_exe", f"v{check_res.remote_version} indirildi! Program şimdi otomatik yenilenip açılacak."
         except Exception as exc:
             new_exe.unlink(missing_ok=True)
-            return False, "none", f".exe indirme hatası: {exc}"
+            return False, "none", f".exe indirme hatası: {exc}\n\n{traceback.format_exc()}"
 
     # Durum B: Kaynak koddan (veya üst klasöründe .git olan dizinden) çalışıyor -> git pull --ff-only
     src_root = get_source_root()
     git_dir = src_root if (src_root / ".git").is_dir() else (src_root.parent if (src_root.parent / ".git").is_dir() else None)
     if git_dir is not None:
         try:
+            cmd = ["git", "-C", str(git_dir), "pull", "--ff-only"]
             proc = subprocess.run(
-                ["git", "-C", str(git_dir), "pull", "--ff-only"],
+                cmd,
                 capture_output=True,
                 text=True,
                 timeout=45,
                 creationflags=NO_WINDOW,
             )
             if proc.returncode != 0:
-                return False, "none", f"git pull başarısız: {proc.stderr.strip()}"
+                raw = f"Komut: {' '.join(cmd)}\nÇıkış Kodu: {proc.returncode}\nSTDOUT:\n{proc.stdout}\nSTDERR:\n{proc.stderr}"
+                return False, "none", f"git pull başarısız: {proc.stderr.strip() or proc.stdout.strip()}\n\n{raw}"
             if not is_frozen:
                 return True, "restart_py", f"Kaynak kodlar v{check_res.remote_version} sürümüne çekildi! Yeniden başlatılıyor..."
             return (
@@ -284,7 +287,7 @@ def apply_self_update(
                 f"Kaynak kodlar çekildi ({proc.stdout.strip()}). .exe olarak kullandığınız için build_exe.bat çalıştırabilir veya GitHub Release .exe yayınlandığında doğrudan tek tıkla güncelleyebilirsiniz.",
             )
         except Exception as exc:
-            return False, "none", f"Git güncelleme hatası: {exc}"
+            return False, "none", f"Git güncelleme hatası: {exc}\n\n{traceback.format_exc()}"
 
     return (
         False,

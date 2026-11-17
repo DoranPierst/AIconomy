@@ -232,7 +232,7 @@ def build_default_catalog() -> list[ToolSpec]:
             port=8080,
             param_label="Unity HTTP Portu",
             param_value="8080",
-            install_cmd="uv tool install mcp-for-unity",
+            install_cmd="uv tool install --python 3.12 mcpforunityserver",
             mcp_server_key="unity-mcp",
             ai_question_hint="Unity 6 URP sahnesinde güvenli çalışmak ve gereksiz derleme gecikmesi yaşamamak için bu Unity MCP ayarlarım uygun mu?",
             options=[

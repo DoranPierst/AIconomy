@@ -223,6 +223,9 @@ class AppUpdateDialog(QDialog):
         threading.Thread(target=worker, daemon=True).start()
 
     def _on_checked(self, res: UpdateCheckResult) -> None:
+        if not res.ok and res.repo_url:
+            self.main_win.logs.add("WARN", "Program Güncelleyici", f"Sürüm kontrol uyarısı: {res.message}", f"Repo: {res.repo_url}\nDetay: {res.message}")
+            self.main_win._refresh_logs_tab()
         if not self.isVisible():
             return
         self.btn_check.setEnabled(True)
@@ -300,13 +303,20 @@ class AppUpdateDialog(QDialog):
             self.dl_bar.setFormat(f"İndiriliyor: {cur / (1024 * 1024):.1f} / {tot / (1024 * 1024):.1f} MB (%{pct})")
 
     def _on_applied(self, ok: bool, mode: str, msg: str) -> None:
+        if not ok:
+            first_line = msg.splitlines()[0] if msg else "Güncelleme hatası"
+            self.main_win.logs.add("ERR", "Program Güncelleyici", first_line, msg)
+            self.main_win._refresh_logs_tab()
+        else:
+            self.main_win.logs.add("INFO", "Program Güncelleyici", "Program güncellemesi başarıyla uygulandı.", msg)
+            self.main_win._refresh_logs_tab()
         if not self.isVisible():
             return
         self.btn_check.setEnabled(True)
         self.dl_bar.setValue(100 if ok else 0)
         if not ok:
             self.btn_apply.setEnabled(True)
-            QMessageBox.warning(self, "Güncelleme Uyarısı", msg)
+            QMessageBox.warning(self, "Güncelleme Hatası", f"{msg.splitlines()[0]}\n\n(Tam teknik çıktı Debug & Log sekmesine kaydedildi.)")
             return
         QMessageBox.information(self, "Güncelleme Tamamlandı", msg)
         if mode == "swap_exe":
@@ -1196,6 +1206,12 @@ class MainWindow(QMainWindow):
         self.plugins_banner_lbl = QLabel("🔍 Açılış güncelleme kontrolü yapılıyor...")
         self.plugins_banner_lbl.setStyleSheet("font-weight: 600;")
         b_lay.addWidget(self.plugins_banner_lbl, stretch=1)
+
+        self.btn_jump_err_logs = QPushButton("🐛 Hata Logunu Gör")
+        self.btn_jump_err_logs.setObjectName("warnBtn")
+        self.btn_jump_err_logs.hide()
+        self.btn_jump_err_logs.clicked.connect(self._jump_to_error_logs)
+        b_lay.addWidget(self.btn_jump_err_logs)
         lay.addWidget(banner)
 
         self.update_prog = QProgressBar()
@@ -1847,15 +1863,26 @@ class MainWindow(QMainWindow):
         tok = self.vault.get_secret("GITHUB_TOKEN")
 
         def worker() -> None:
-            cnt = check_all_tools_updates_parallel(snap, tok)
+            cnt, chk_errs = check_all_tools_updates_parallel(snap, tok)
+            for t_name, err_det in chk_errs:
+                self.logs.add("WARN", t_name, f"Güncelleme kontrolü sırasında ağ/API hatası: {err_det.splitlines()[0]}", err_det)
             self.bridge.plugin_check_done.emit(cnt, manual)
 
         threading.Thread(target=worker, daemon=True).start()
+
+    def _jump_to_error_logs(self) -> None:
+        self.log_lvl_cmb.setCurrentText("ERR")
+        self._refresh_logs_tab()
+        self.tabs.setCurrentIndex(4)
+        if self.log_table.rowCount() > 0:
+            self.log_table.selectRow(0)
 
     def _on_plugin_check_done(self, upd_count: int, manual: bool) -> None:
         self.checking_plugins_busy = False
         self.btn_plugins_check.setEnabled(True)
         self.btn_top_update_all.setEnabled(True)
+        self.btn_jump_err_logs.hide()
+        self._refresh_logs_tab()
 
         if upd_count == 0:
             self.plugins_banner_lbl.setText("✓ Tüm eklentiler güncel.")
@@ -1920,7 +1947,7 @@ class MainWindow(QMainWindow):
             for idx, tool_obj in enumerate(items, start=1):
                 self.bridge.update_progress.emit(idx, total, tool_obj.name)
                 prev_v = tool_obj.version.strip().lstrip("vV")
-                ok, new_ver, msg = update_single_tool(tool_obj, wanted_skills, install_if_missing=install_if_missing)
+                ok, new_ver, msg, raw_log = update_single_tool(tool_obj, wanted_skills, install_if_missing=install_if_missing)
                 target_v = (tool_obj.latest_version or new_ver or tool_obj.version).strip().lstrip("vV")
                 if ok:
                     ok_cnt += 1
@@ -1928,12 +1955,12 @@ class MainWindow(QMainWindow):
                     tool_obj.latest_version = f"v{target_v}"
                     tool_obj.has_update = False
                     ver_note = f"{prev_v}v > {target_v}v" if prev_v != target_v else f"{target_v}v"
-                    self.logs.add("INFO", tool_obj.name, f"Güncellendi ({ver_note})", msg)
+                    self.logs.add("INFO", tool_obj.name, f"Güncellendi ({ver_note})", raw_log)
                     details.append(f"✓ {tool_obj.name} ({ver_note}): {msg}")
                 else:
                     fail_cnt += 1
-                    self.logs.add("WARN", tool_obj.name, "Güncelleme uyarısı", msg)
-                    details.append(f"⚠ {tool_obj.name}: {msg}")
+                    self.logs.add("ERR", tool_obj.name, f"Güncelleme Hatası: {msg}", raw_log)
+                    details.append(f"🔴 {tool_obj.name}: {msg}")
             self.bridge.update_all_done.emit(ok_cnt, fail_cnt, "\n".join(details))
 
         threading.Thread(target=worker, daemon=True).start()
@@ -1949,15 +1976,23 @@ class MainWindow(QMainWindow):
         self.btn_plugins_check.setEnabled(True)
         self.btn_plugins_install_sel.setEnabled(True)
         self.update_prog.setValue(self.update_prog.maximum())
-        self.update_prog.setFormat(f"Tamamlandı: {ok_cnt} güncellendi, {fail_cnt} uyarı")
+        self.update_prog.setFormat(f"Tamamlandı: {ok_cnt} güncellendi, {fail_cnt} hata")
         QTimer.singleShot(3500, self.update_prog.hide)
 
         rem = sum(1 for t in self.tools if t.has_update)
         self._on_plugin_check_done(rem, manual=False)
+        if fail_cnt > 0:
+            self.plugins_banner_lbl.setText(
+                f"🔴 {fail_cnt} araç güncellenirken hata alındı ({ok_cnt} başarılı) — Hata detayları Debug & Log sekmesine kaydedildi."
+            )
+            self.plugins_banner_lbl.setStyleSheet("color: #ef4444; font-weight: 700;")
+            self.btn_jump_err_logs.show()
+            self.set_status(f"🔴 Güncelleme sırasında {fail_cnt} hata oluştu — Debug & Log sekmesinden tam çıktıyı görebilirsiniz.")
+        else:
+            self.set_status(f"✓ Güncelleme tamamlandı ({ok_cnt} araç güncellendi).")
         self._save_state()
         self._refresh_logs_tab()
         self.run_health_scan()
-        self.set_status(f"⬆️ Güncelleme tamamlandı ({ok_cnt} başarılı, {fail_cnt} uyarı).")
 
     def _run_startup_app_update_check(self) -> None:
         repo = str(self.meta.get("app_update_repo") or detect_git_origin_url()).strip()
