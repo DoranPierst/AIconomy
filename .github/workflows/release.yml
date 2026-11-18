@@ -37,7 +37,7 @@ jobs:
       - name: Sync dependencies & Build EXE
         run: |
           uv sync --dev
-          uv run pyinstaller --noconfirm --onefile --windowed --name "AI-Arac-Merkezi" `
+          uv run pyinstaller --noconfirm --onefile --windowed --name "AIconmy" `
             --add-data "version.json;." `
             --exclude-module PySide6.QtWebEngineCore `
             --exclude-module PySide6.QtWebEngineWidgets `
@@ -46,11 +46,11 @@ jobs:
             --exclude-module PySide6.QtQuick `
             main.py
 
-      - name: Publish GitHub Release with AI-Arac-Merkezi.exe
+      - name: Publish GitHub Release with AIconmy.exe
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.meta.outputs.tag }}
-          name: "AI Araç Merkezi ${{ steps.meta.outputs.tag }}"
+          name: "AIconmy ${{ steps.meta.outputs.tag }}"
           body: ${{ steps.meta.outputs.changelog }}
-          files: dist/AI-Arac-Merkezi.exe
+          files: dist/AIconmy.exe
           generate_release_notes: true

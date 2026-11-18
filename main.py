@@ -31,8 +31,8 @@ def _focus_same_version_or_replace_stale(app_ver: str) -> bool:
         user32.GetWindowTextLengthW.argtypes = [wintypes.HWND]
         user32.GetWindowTextW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
 
-        expected_prefix = "AI Araç & Token Ekonomisi Kontrol Merkezi"
-        expected_ver = f"{app_ver}v"
+        expected_prefix = "AIconmy"
+        expected_ver = f"v{app_ver}"
 
         @WNDENUMPROC
         def _cb(hwnd: int, _lparam: int) -> bool:
@@ -63,7 +63,7 @@ def _focus_same_version_or_replace_stale(app_ver: str) -> bool:
         try:
             pid = int(proc.info.get("pid") or 0)
             nm = (proc.info.get("name") or "").lower()
-            if pid not in self_pids and nm == "ai-arac-merkezi.exe":
+            if pid not in self_pids and nm in ("aiconmy.exe", "ai-arac-merkezi.exe"):
                 proc.terminate()
                 stale.append(proc)
         except Exception:
@@ -91,7 +91,7 @@ def main() -> int:
     data_dir = root_dir / "data"
 
     app = QApplication(sys.argv)
-    app.setApplicationName("AI Araç & Token Ekonomisi Kontrol Merkezi")
+    app.setApplicationName("AIconmy")
     win = MainWindow(data_dir=data_dir)
     win.show()
     code = app.exec()

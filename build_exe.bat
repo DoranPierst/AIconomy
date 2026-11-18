@@ -2,13 +2,14 @@
 chcp 65001 >nul
 cd /d "%~dp0"
 echo Acik olan eski surum kapatiliyor (varsa)...
+taskkill /f /im AIconmy.exe >nul 2>&1
 taskkill /f /im AI-Arac-Merkezi.exe >nul 2>&1
 timeout /t 1 /nobreak >nul
 echo [1/2] Bagimliliklar, surum kanali ve PyInstaller kontrol ediliyor...
 uv sync --dev
 uv run python -c "from app.updater import auto_stamp_version_json; auto_stamp_version_json()"
-echo [2/2] Hafif ve tasinabilir AI-Arac-Merkezi.exe uretiliyor...
-uv run pyinstaller --noconfirm --onefile --windowed --name "AI-Arac-Merkezi" ^
+echo [2/2] Hafif ve tasinabilir AIconmy.exe uretiliyor...
+uv run pyinstaller --noconfirm --onefile --windowed --name "AIconmy" ^
   --add-data "version.json;." ^
   --exclude-module PySide6.QtWebEngineCore ^
   --exclude-module PySide6.QtWebEngineWidgets ^
@@ -17,5 +18,5 @@ uv run pyinstaller --noconfirm --onefile --windowed --name "AI-Arac-Merkezi" ^
   --exclude-module PySide6.QtQuick ^
   main.py
 echo.
-echo Tamamlandi! EXE dosyasi: %~dp0dist\AI-Arac-Merkezi.exe
+echo Tamamlandi! EXE dosyasi: %~dp0dist\AIconmy.exe
 pause

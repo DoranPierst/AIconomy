@@ -1,5 +1,5 @@
 {
-  "version": "1.3.0",
-  "update_repo": "https://github.com/DoranPierst/ai-arac-merkezi",
-  "changelog": "Public sürüm (v1.3.0): 8 dil desteği (TR, EN, DE, FR, ES, RU, JA, ZH), kişisel bilgisayar yollarının genel otomatik algılamayla değiştirilmesi ve tür filtreleme mantığı düzeltmesi."
+  "version": "1.3.1",
+  "update_repo": "https://github.com/DoranPierst/AIconmy",
+  "changelog": "Proje adı ve GitHub reposu AIconmy (https://github.com/DoranPierst/AIconmy) olarak yenilendi; yeni çalıştırılabilir dosya adı AIconmy.exe."
 }

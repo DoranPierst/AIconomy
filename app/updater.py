@@ -15,8 +15,8 @@ from typing import Callable
 
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
 
-FALLBACK_VERSION = "1.2.2"
-DEFAULT_APP_REPO = "https://github.com/DoranPierst/ai-arac-merkezi"
+FALLBACK_VERSION = "1.3.1"
+DEFAULT_APP_REPO = "https://github.com/DoranPierst/AIconmy"
 
 
 def get_source_root() -> pathlib.Path:
