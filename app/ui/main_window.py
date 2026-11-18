@@ -68,6 +68,7 @@ from ..updater import (
     UpdateCheckResult,
     check_for_app_updates,
     get_current_app_version,
+    parse_semver,
     resolve_effective_app_repo,
 )
 from .dialogs import (
@@ -443,7 +444,7 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, QMainWindow):
 
         en_cnt = sum(1 for t in self.tools if t.enabled)
         msg = tr(self.lang, "msg_profile_applied", name=title, n=en_cnt)
-        self.logs.add("INFO", "Profile", msg)
+        self.logs.add("INFO", tr(self.lang, "log_src_profile"), msg)
         self.set_status(msg)
         self._refresh_table()
         self._refresh_logs_tab()
@@ -498,7 +499,7 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, QMainWindow):
         self._rebuild_profile_combo()
         self._rebuild_tray_menu()
         msg = tr(self.lang, "msg_profile_saved", name=name)
-        self.logs.add("INFO", "Profile", msg)
+        self.logs.add("INFO", tr(self.lang, "log_src_profile"), msg)
         self.set_status(msg)
         self._refresh_logs_tab()
         return True
@@ -544,7 +545,7 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, QMainWindow):
 
         en_cnt = sum(1 for t in self.tools if t.enabled)
         msg = tr(self.lang, "msg_profile_applied", name=name, n=en_cnt)
-        self.logs.add("INFO", "Profile", msg)
+        self.logs.add("INFO", tr(self.lang, "log_src_profile"), msg)
         self.set_status(msg)
         self._refresh_table()
         self._refresh_plugins_tab()
@@ -789,7 +790,7 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, QMainWindow):
                     sync_blender_skills_on_disk(
                         skills_snap, bs_tool.enabled, bs_tool.project_scope, proj_snap, lang=lang_snap
                     )
-                sync_mcp_json_clients(tools_snap, self.vault, proj_snap)
+                sync_mcp_json_clients(tools_snap, self.vault, proj_snap, lang=lang_snap)
                 live_map = scan_live_process_locations(lang=lang_snap)
                 out = []
                 for x in tools_snap:
@@ -812,7 +813,7 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, QMainWindow):
             tool.last_ping = tr(self.lang, "st_disabled")
         self._save_state()
         state_word = tr(self.lang, "client_on" if tool.enabled else "client_off").lower()
-        self.logs.add("DBG", tool.name, f"Toggled -> {'ON' if tool.enabled else 'OFF'}")
+        self.logs.add("DBG", tool.name, tr(self.lang, "log_tool_toggled", state=state_word))
         self.set_status(tr(self.lang, "msg_tool_toggled", name=tool.name, state=state_word))
         self._refresh_table()
         self._refresh_logs_tab()
@@ -883,7 +884,7 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, QMainWindow):
         self._rebuild_profile_combo()
         self._save_state()
         msg = tr(self.lang, "msg_bulk_client", code=client_code)
-        self.logs.add("INFO", f"Clients ({client_code})", msg)
+        self.logs.add("INFO", tr(self.lang, "log_src_clients", code=client_code), msg)
         self.set_status(msg)
         self._refresh_table()
         self._refresh_logs_tab()
@@ -926,7 +927,12 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, QMainWindow):
                     lang=self.lang,
                 )
                 self._save_state()
-                self.logs.add("INFO" if ok else "DBG", tool.name, f"Saved {len(self.active_skills)}/94 skills.", disk_msg)
+                self.logs.add(
+                    "INFO" if ok else "DBG",
+                    tool.name,
+                    tr(self.lang, "log_skills_saved", n=len(self.active_skills)),
+                    disk_msg,
+                )
                 self.set_status(tr(self.lang, "msg_skills_saved", on=len(self.active_skills), detail=disk_msg))
                 self._refresh_table()
                 self._refresh_logs_tab()
@@ -934,7 +940,7 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, QMainWindow):
             dlg = ToolGearDialog(self, tool, self._format_scope_display(tool))
             if dlg.exec() == QDialog.DialogCode.Accepted:
                 self._save_state()
-                self.logs.add("INFO", tool.name, "Tool settings saved.")
+                self.logs.add("INFO", tool.name, tr(self.lang, "log_gear_saved"))
                 self.set_status(tr(self.lang, "msg_gear_saved", name=tool.name))
                 self._refresh_table()
                 self._refresh_logs_tab()
@@ -1109,7 +1115,13 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, QMainWindow):
                             continue
                     if not silent and now_mono - self._last_warn_time.get(tid, 0.0) > 300.0:
                         self._last_warn_time[tid] = now_mono
-                        self.logs.add("WARN", t.name, f"Service not responding ({ping_str})", detail, t.port)
+                        self.logs.add(
+                            "WARN",
+                            t.name,
+                            tr(self.lang, "log_srv_no_resp", status=ping_str),
+                            detail,
+                            t.port,
+                        )
 
         self._update_vram_visibility()
         if silent:
@@ -1160,7 +1172,7 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, QMainWindow):
             trellis_root=tr_tool.param_value if tr_tool else "",
             lang=self.lang,
         )
-        self.logs.add("INFO" if ok else "WARN", "Host App", msg)
+        self.logs.add("INFO" if ok else "WARN", tr(self.lang, "log_src_host"), msg)
         self.set_status(msg)
         self._refresh_logs_tab()
         QTimer.singleShot(2500, self.run_health_scan)
@@ -1174,7 +1186,7 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, QMainWindow):
         def worker() -> None:
             note = enforce_tool_runtime_state(tool_snap, proj_snap, allow_stop=False, lang=lang_snap)
             if note:
-                self.logs.add("INFO", tool_snap.name, f"Auto-heal:{note}")
+                self.logs.add("INFO", tool_snap.name, tr(lang_snap, "log_auto_heal", note=note))
                 time.sleep(1.5)
                 live_map = scan_live_process_locations(lang=lang_snap)
                 ok, h_state, ping_str, ms, detail, loc_detail = probe_tool_health(
@@ -1214,7 +1226,7 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, QMainWindow):
             try:
                 ok, msg = kill_zombie_port_process(port, lang=lang_snap)
             except Exception as exc:
-                msg = f"Port :{port} error: {exc}"
+                msg = tr(lang_snap, "log_port_err", port=port, err=exc)
             finally:
                 safe_emit(self.bridge.port_kill_done, port, ok, msg)
 
@@ -1233,9 +1245,9 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, QMainWindow):
             sync_blender_skills_on_disk(
                 self.active_skills, bs_tool.enabled, bs_tool.project_scope, self.projects_map, lang=self.lang
             )
-        msgs = sync_mcp_json_clients(self.tools, self.vault, self.projects_map)
-        summary = " | ".join(msgs) if msgs else "No client config files found."
-        self.logs.add("INFO", "Config Sync", summary)
+        msgs = sync_mcp_json_clients(self.tools, self.vault, self.projects_map, lang=self.lang)
+        summary = " | ".join(msgs) if msgs else tr(self.lang, "log_no_cfg_files")
+        self.logs.add("INFO", tr(self.lang, "log_src_cfg_sync"), summary)
         self._refresh_logs_tab()
         self.set_status(tr(self.lang, "msg_configs_synced", summary=summary))
         home = pathlib.Path.home()
@@ -1339,6 +1351,11 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, QMainWindow):
         repo = resolve_effective_app_repo(str(self.meta.get("app_update_repo", "")))
         if not repo:
             return
+        last_ts = float(self.meta.get("last_app_check_ts", 0.0) or 0.0)
+        cached_remote = str(self.meta.get("cached_app_remote_ver", "") or "")
+        if cached_remote and (time.time() - last_ts) < 1800:
+            if parse_semver(cached_remote) <= parse_semver(get_current_app_version()):
+                return
         tok = self.vault.get_secret("GITHUB_TOKEN")
         self._startup_app_check = True
 
@@ -1369,6 +1386,10 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, QMainWindow):
 
     def _on_bg_app_check_done(self, res: UpdateCheckResult) -> None:
         self.latest_app_check = res
+        if res.ok and res.remote_version:
+            self.meta["last_app_check_ts"] = time.time()
+            self.meta["cached_app_remote_ver"] = res.remote_version
+            self._save_state()
         self._apply_app_update_visual_state(res)
 
         if self._startup_app_check:

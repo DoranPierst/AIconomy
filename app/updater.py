@@ -10,6 +10,7 @@ import subprocess
 import sys
 import traceback
 import urllib.error
+import urllib.parse
 import urllib.request
 from typing import Callable
 
@@ -93,6 +94,66 @@ def parse_github_owner_repo(repo_input: str, lang: str = "en") -> tuple[str, str
     raise ValueError(msg)
 
 
+class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # type: ignore[override]
+        return None
+
+
+def resolve_github_latest_release_web(
+    owner: str,
+    repo: str,
+    ua: str,
+    timeout: float = 6.0,
+) -> tuple[str, str, bool]:
+    """Resolve the latest GitHub release tag via the public /releases/latest 302 redirect.
+
+    Uses zero ``api.github.com`` rate-limit quota and requires no ``GITHUB_TOKEN``.
+    Returns ``(raw_tag, html_url, github_reachable)``.
+    """
+    opener = urllib.request.build_opener(_NoRedirectHandler)
+    url = f"https://github.com/{owner}/{repo}/releases/latest"
+    req = urllib.request.Request(url, method="HEAD", headers={"User-Agent": ua})
+    try:
+        with opener.open(req, timeout=timeout) as resp:
+            final_url = resp.geturl() or url
+            m = re.search(r"/releases/tag/([^/?#\s]+)", final_url)
+            if m:
+                raw_tag = urllib.parse.unquote(m.group(1)).strip()
+                return raw_tag, final_url, True
+            return "", f"https://github.com/{owner}/{repo}/releases", True
+    except urllib.error.HTTPError as http_exc:
+        if http_exc.code in (301, 302, 303, 307, 308):
+            loc = str(http_exc.headers.get("Location", "") or "").strip()
+            if loc.startswith("/"):
+                loc = f"https://github.com{loc}"
+            m = re.search(r"/releases/tag/([^/?#\s]+)", loc)
+            if m:
+                raw_tag = urllib.parse.unquote(m.group(1)).strip()
+                return raw_tag, loc, True
+            return "", loc or f"https://github.com/{owner}/{repo}/releases", True
+        if http_exc.code == 404:
+            return "", "", True
+        return "", "", True
+    except Exception:
+        return "", "", False
+
+
+def _probe_github_release_exe_url(owner: str, repo: str, raw_tag: str, ua: str, timeout: float = 5.0) -> str:
+    """Check whether ``AIconomy.exe`` exists on ``raw_tag`` via a fast non-redirecting HEAD request."""
+    cand = f"https://github.com/{owner}/{repo}/releases/download/{urllib.parse.quote(raw_tag)}/AIconomy.exe"
+    opener = urllib.request.build_opener(_NoRedirectHandler)
+    req = urllib.request.Request(cand, method="HEAD", headers={"User-Agent": ua})
+    try:
+        with opener.open(req, timeout=timeout):
+            return cand
+    except urllib.error.HTTPError as http_exc:
+        if http_exc.code in (200, 301, 302, 303, 307, 308):
+            return cand
+    except Exception:
+        pass
+    return ""
+
+
 @dataclasses.dataclass
 class UpdateCheckResult:
     ok: bool
@@ -119,7 +180,8 @@ def check_for_app_updates(repo_input: str, github_token: str = "", lang: str = "
         return UpdateCheckResult(False, False, local_ver, local_ver, "", "", "", repo_input, False, str(exc))
 
     clean_repo_url = f"https://github.com/{owner}/{repo}"
-    headers = {"User-Agent": f"AIconomy/{local_ver}"}
+    ua = f"AIconomy/{local_ver}"
+    headers = {"User-Agent": ua}
     if github_token:
         headers["Authorization"] = f"Bearer {github_token}"
 
@@ -129,42 +191,57 @@ def check_for_app_updates(repo_input: str, github_token: str = "", lang: str = "
     exe_url = ""
     github_reachable = False
 
-    try:
-        req = urllib.request.Request(f"https://api.github.com/repos/{owner}/{repo}/releases/latest", headers=headers)
-        with urllib.request.urlopen(req, timeout=7) as resp:
+    if github_token:
+        try:
+            req = urllib.request.Request(f"https://api.github.com/repos/{owner}/{repo}/releases/latest", headers=headers)
+            with urllib.request.urlopen(req, timeout=7) as resp:
+                github_reachable = True
+                rel = json.loads(resp.read().decode("utf-8"))
+                tag = str(rel.get("tag_name", "")).lstrip("vV")
+                if tag:
+                    remote_ver = tag
+                    changelog = str(rel.get("body", "")).strip()
+                if rel.get("html_url"):
+                    notes_url = str(rel["html_url"])
+                for asset in rel.get("assets", []):
+                    name = str(asset.get("name", ""))
+                    if name.lower().endswith(".exe"):
+                        exe_url = str(asset.get("browser_download_url", ""))
+                        break
+        except urllib.error.HTTPError:
             github_reachable = True
-            rel = json.loads(resp.read().decode("utf-8"))
-            tag = str(rel.get("tag_name", "")).lstrip("vV")
-            if tag:
-                remote_ver = tag
-                changelog = str(rel.get("body", "")).strip()
-            if rel.get("html_url"):
-                notes_url = str(rel["html_url"])
-            for asset in rel.get("assets", []):
-                name = str(asset.get("name", ""))
-                if name.lower().endswith(".exe"):
-                    exe_url = str(asset.get("browser_download_url", ""))
-                    break
-    except urllib.error.HTTPError:
-        github_reachable = True
-    except Exception:
-        pass
+        except Exception:
+            pass
+
+    if not remote_ver:
+        raw_tag, tag_url, web_ok = resolve_github_latest_release_web(owner, repo, ua)
+        if web_ok:
+            github_reachable = True
+        if raw_tag:
+            remote_ver = raw_tag.lstrip("vV")
+            if tag_url:
+                notes_url = tag_url
+            exe_url = _probe_github_release_exe_url(owner, repo, raw_tag, ua)
 
     for branch in ("main", "master"):
         try:
             v_req = urllib.request.Request(
                 f"https://raw.githubusercontent.com/{owner}/{repo}/{branch}/version.json",
-                headers=headers,
+                headers={"User-Agent": ua},
             )
             with urllib.request.urlopen(v_req, timeout=6) as resp:
                 github_reachable = True
                 v_data = json.loads(resp.read().decode("utf-8"))
                 v_str = str(v_data.get("version", "")).lstrip("vV").strip()
+                v_chg = str(v_data.get("changelog", "")).strip()
                 if v_str and (not remote_ver or parse_semver(v_str) > parse_semver(remote_ver)):
                     remote_ver = v_str
-                    changelog = str(v_data.get("changelog", changelog)).strip()
+                    if v_chg:
+                        changelog = v_chg
                     if notes_url == f"{clean_repo_url}/releases":
                         notes_url = f"{clean_repo_url}/commits/{branch}"
+                elif v_str and parse_semver(v_str) == parse_semver(remote_ver) and not changelog and v_chg:
+                    changelog = v_chg
                 break
         except urllib.error.HTTPError:
             github_reachable = True

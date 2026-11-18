@@ -612,7 +612,7 @@ class ToolsTabMixin:
         tool.last_latency_ms = ms
         tool.live_location_detail = loc_det
         scope_disp = self._format_scope_display(tool)
-        self.logs.add("INFO", tool.name, f"Scope changed -> {scope_disp}", loc_det)
+        self.logs.add("INFO", tool.name, tr(self.lang, "log_scope_changed", scope=scope_disp), loc_det)
         self.set_status(tr(self.lang, "msg_scope_changed", name=tool.name, scope=scope_disp))
         self._refresh_table()
         self._refresh_logs_tab()

@@ -257,23 +257,32 @@ def build_logs_ai_prompt(
         for t in affected_tools:
             cur_v = t.version.strip().lstrip("vV")
             lat_v = (t.latest_version or "").strip().lstrip("vV")
-            ver_info = f"v{cur_v} (latest: v{lat_v})" if (lat_v and lat_v != cur_v) else f"v{cur_v}"
+            latest_word = "son sürüm" if is_tr else "latest"
+            ver_info = f"v{cur_v} ({latest_word}: v{lat_v})" if (lat_v and lat_v != cur_v) else f"v{cur_v}"
             port_info = f" | Port: :{t.port}" if t.port else ""
             modes = localized_tool_modes(t, lang)
             mode_info = modes[t.mode_index] if (len(modes) > 1 and 0 <= t.mode_index < len(modes)) else ("Standart" if is_tr else "Standard")
             clients_on = ", ".join(k for k, v in t.clients.items() if v) or ("Yok" if is_tr else "None")
+            state_lbl = ("AÇIK" if t.enabled else "KAPALI") if is_tr else ("ON" if t.enabled else "OFF")
             lines.append(
-                f"- {t.name} | {tool_kind_label(t.kind, lang)} | {ver_info} | {'ON' if t.enabled else 'OFF'}{port_info}"
+                f"- {t.name} | {tool_kind_label(t.kind, lang)} | {ver_info} | {state_lbl}{port_info}"
             )
-            lines.append(f"  - Status: {t.last_ping} | Mode: {mode_info} | Clients: {clients_on} | Scope: {t.project_scope}")
-            if t.install_cmd:
-                lines.append(f"  - Command: {t.install_cmd}")
-            if t.live_location_detail:
-                lines.append(f"  - Location: {t.live_location_detail}")
+            if is_tr:
+                lines.append(f"  - Durum: {t.last_ping} | Mod: {mode_info} | İstemciler: {clients_on} | Kapsam: {t.project_scope}")
+                if t.install_cmd:
+                    lines.append(f"  - Komut: {t.install_cmd}")
+                if t.live_location_detail:
+                    lines.append(f"  - Konum: {t.live_location_detail}")
+            else:
+                lines.append(f"  - Status: {t.last_ping} | Mode: {mode_info} | Clients: {clients_on} | Scope: {t.project_scope}")
+                if t.install_cmd:
+                    lines.append(f"  - Command: {t.install_cmd}")
+                if t.live_location_detail:
+                    lines.append(f"  - Location: {t.live_location_detail}")
 
     lines.extend(["", "=== 2. TÜM ARAÇLAR ===" if is_tr else "=== 2. ALL TOOLS ==="])
     compact_tools = [
-        f"{t.name} (v{t.version.lstrip('vV')}, {'ON' if t.enabled else 'OFF'}{f', :{t.port}' if t.port else ''})"
+        f"{t.name} (v{t.version.lstrip('vV')}, {('AÇIK' if t.enabled else 'KAPALI') if is_tr else ('ON' if t.enabled else 'OFF')}{f', :{t.port}' if t.port else ''})"
         for t in all_tools
     ]
     lines.append(", ".join(compact_tools))
@@ -286,10 +295,11 @@ def build_logs_ai_prompt(
             else f"=== 3. SELECTED LOGS ({len(selected_logs)}) ===",
         ]
     )
+    sum_lbl = "Özet" if is_tr else "Summary"
     for idx, entry in enumerate(selected_logs, start=1):
         port_tag = f" | Port: :{entry['port']}" if entry.get("port") else ""
         lines.append(f"\n--- #{idx} [{entry.get('ts', '')}] [{entry.get('level', '')}] {entry.get('tool', '')}{port_tag} ---")
-        lines.append(f"Summary: {entry.get('summary', '')}")
+        lines.append(f"{sum_lbl}: {entry.get('summary', '')}")
         raw_det = str(entry.get("raw_detail", "")).strip()
         if raw_det and raw_det != str(entry.get("summary", "")).strip():
             lines.append("```text")

@@ -17,7 +17,7 @@ from typing import Any
 from .catalog import ToolSpec
 from .host_apps import NO_WINDOW
 from .mcp_config import _dedupe_yaml_frontmatter_keys, _force_rmtree
-from .updater import get_current_app_version, parse_semver
+from .updater import get_current_app_version, parse_semver, resolve_github_latest_release_web
 
 NPM_PACKAGE_MAP: dict[str, str] = {
     "bla": "bla-agents",
@@ -32,6 +32,7 @@ UV_TOOL_MAP: dict[str, str] = {
 }
 
 PYPI_PACKAGE_MAP: dict[str, str] = {
+    "serena": "serena-agent",
     "unity_mcp": "mcpforunityserver",
     "blender_mcp": "blender-mcp",
     "elevenlabs_mcp": "elevenlabs-mcp",
@@ -294,17 +295,35 @@ def check_single_tool_update(tool: ToolSpec, github_token: str = "") -> PluginCh
             notes_url = tool.repo_url if tool.repo_url.startswith("http") else ""
 
         elif gh_owner and gh_repo:
-            req = urllib.request.Request(
-                f"https://api.github.com/repos/{gh_owner}/{gh_repo}/releases/latest",
-                headers=headers,
-            )
-            with urllib.request.urlopen(req, timeout=5) as resp:
-                rel = json.loads(resp.read().decode("utf-8"))
-                tag = str(rel.get("tag_name", "")).strip().lstrip("vV")
-                if tag:
-                    remote_ver = tag
-                if rel.get("html_url"):
-                    notes_url = str(rel["html_url"])
+            used_api = False
+            if github_token:
+                try:
+                    req = urllib.request.Request(
+                        f"https://api.github.com/repos/{gh_owner}/{gh_repo}/releases/latest",
+                        headers=headers,
+                    )
+                    with urllib.request.urlopen(req, timeout=5) as resp:
+                        rel = json.loads(resp.read().decode("utf-8"))
+                        tag = str(rel.get("tag_name", "")).strip().lstrip("vV")
+                        if tag:
+                            remote_ver = tag
+                        if rel.get("html_url"):
+                            notes_url = str(rel["html_url"])
+                        used_api = True
+                except urllib.error.HTTPError as api_exc:
+                    if api_exc.code == 404:
+                        used_api = True
+                    elif api_exc.code not in (403, 429):
+                        raise
+
+            if not used_api:
+                raw_tag, tag_url, web_ok = resolve_github_latest_release_web(gh_owner, gh_repo, ua, timeout=5.0)
+                if raw_tag:
+                    remote_ver = raw_tag.lstrip("vV")
+                if tag_url:
+                    notes_url = tag_url
+                if not web_ok:
+                    err_detail = f"Connection failed — https://github.com/{gh_owner}/{gh_repo}/releases/latest"
     except urllib.error.HTTPError as http_exc:
         if http_exc.code != 404:
             err_detail = f"HTTP {http_exc.code} ({http_exc.reason}) — URL: {http_exc.url}"
@@ -343,6 +362,12 @@ def check_all_tools_updates_parallel(
     return results, errors
 
 
+def _fmt_cmd_raw(cmd: list[str], proc: subprocess.CompletedProcess[str], is_tr: bool) -> str:
+    if is_tr:
+        return f"Komut: {' '.join(cmd)}\nÇıkış kodu: {proc.returncode}\nSTDOUT:\n{proc.stdout}\nSTDERR:\n{proc.stderr}"
+    return f"Command: {' '.join(cmd)}\nExit code: {proc.returncode}\nSTDOUT:\n{proc.stdout}\nSTDERR:\n{proc.stderr}"
+
+
 def update_single_tool(
     tool: ToolSpec,
     active_skills: set[str],
@@ -374,12 +399,12 @@ def update_single_tool(
             if (cav_dir / ".git").is_dir():
                 cmd = ["git", "-C", str(cav_dir), "pull", "--ff-only"]
                 proc = subprocess.run(cmd, capture_output=True, text=True, timeout=30, creationflags=NO_WINDOW)
-                raw = f"Command: {' '.join(cmd)}\nExit: {proc.returncode}\nSTDOUT:\n{proc.stdout}\nSTDERR:\n{proc.stderr}"
+                raw = _fmt_cmd_raw(cmd, proc, is_tr)
                 if proc.returncode == 0:
                     out = proc.stdout.strip() or ("Güncel." if is_tr else "Up to date.")
                     return True, tool.version, f"git pull: {out}", raw
                 err_first = (proc.stderr.strip() or proc.stdout.strip() or "git error").splitlines()[0]
-                return False, "", f"git pull failed: {err_first}", raw
+                return False, "", f"git pull: {err_first}", raw
             if (cav_dir / "SKILL.md").is_file():
                 msg = "Yerel SKILL.md doğrulandı." if is_tr else "Local SKILL.md verified."
                 return True, tool.version, msg, str(cav_dir / "SKILL.md")
@@ -397,7 +422,7 @@ def update_single_tool(
 
             proc = subprocess.run(cmd, capture_output=True, text=True, timeout=90, creationflags=NO_WINDOW)
             combined = (proc.stdout + "\n" + proc.stderr).strip()
-            raw = f"Command: {' '.join(cmd)}\nExit: {proc.returncode}\nSTDOUT:\n{proc.stdout}\nSTDERR:\n{proc.stderr}"
+            raw = _fmt_cmd_raw(cmd, proc, is_tr)
             if proc.returncode == 0 or "Nothing to upgrade" in combined or "already installed" in combined.lower():
                 return True, tool.version, (f"uv tool ({pkg}): Güncel." if is_tr else f"uv tool ({pkg}): Up to date."), raw
             if "is not installed" in combined.lower() and not install_if_missing:
@@ -420,14 +445,15 @@ def update_single_tool(
                     meta = json.loads(resp.read().decode("utf-8"))
                     latest_ver = meta.get("version", "")
             except Exception as exc:
-                return False, "", f"npm lookup error ({pkg}): {exc}", traceback.format_exc()
+                err_lbl = f"npm sorgu hatası ({pkg}): {exc}" if is_tr else f"npm lookup error ({pkg}): {exc}"
+                return False, "", err_lbl, traceback.format_exc()
 
             new_v_tag = f"v{latest_ver}" if latest_ver else tool.version
             if install_if_missing and pkg in ("bla-agents", "@gltf-transform/cli"):
                 npm_exe = "npm.cmd" if shutil.which("npm.cmd") else "npm"
                 cmd = [npm_exe, "install", "-g", f"{pkg}@latest"]
                 proc = subprocess.run(cmd, capture_output=True, text=True, timeout=90, creationflags=NO_WINDOW)
-                raw = f"Command: {' '.join(cmd)}\nExit: {proc.returncode}\nSTDOUT:\n{proc.stdout}\nSTDERR:\n{proc.stderr}"
+                raw = _fmt_cmd_raw(cmd, proc, is_tr)
                 if proc.returncode != 0:
                     first_err = (proc.stderr.strip() or proc.stdout.strip() or "npm install error").splitlines()[0]
                     return False, new_v_tag, f"npm install ({pkg}): {first_err}", raw
@@ -454,7 +480,8 @@ def update_single_tool(
                     meta = json.loads(resp.read().decode("utf-8"))
                     latest_ver = meta.get("info", {}).get("version", "")
             except Exception as exc:
-                return False, "", f"PyPI lookup error ({pkg}): {exc}", traceback.format_exc()
+                err_lbl = f"PyPI sorgu hatası ({pkg}): {exc}" if is_tr else f"PyPI lookup error ({pkg}): {exc}"
+                return False, "", err_lbl, traceback.format_exc()
             new_v_tag = f"v{latest_ver}" if latest_ver else tool.version
             msg = f"PyPI doğrulandı ({new_v_tag})." if is_tr else f"Verified latest PyPI release ({new_v_tag})."
             return True, new_v_tag, msg, msg
@@ -471,27 +498,18 @@ def update_single_tool(
             m = re.search(r"github\.com/([^/\s]+)/([^/\s#?]+)", tool.repo_url)
             if m:
                 owner, repo = m.group(1), m.group(2).removesuffix(".git")
-                try:
-                    req = urllib.request.Request(
-                        f"https://api.github.com/repos/{owner}/{repo}/releases/latest",
-                        headers={"User-Agent": ua},
+                raw_tag, tag_url, web_ok = resolve_github_latest_release_web(owner, repo, ua, timeout=6.0)
+                if raw_tag:
+                    v_t = f"v{raw_tag.lstrip('vV')}"
+                    msg = (
+                        f"GitHub son sürümü doğrulandı: {v_t}"
+                        if is_tr
+                        else f"Verified latest GitHub release: {v_t}"
                     )
-                    with urllib.request.urlopen(req, timeout=5) as resp:
-                        rel = json.loads(resp.read().decode("utf-8"))
-                        tag = rel.get("tag_name", "")
-                        if tag:
-                            v_t = tag if tag.startswith("v") else f"v{tag}"
-                            msg = (
-                                f"GitHub son sürümü doğrulandı: {v_t}"
-                                if is_tr
-                                else f"Verified latest GitHub release: {v_t}"
-                            )
-                            return True, v_t, msg, str(rel.get("html_url", ""))
-                except urllib.error.HTTPError as http_exc:
-                    if http_exc.code != 404:
-                        return False, "", f"GitHub API error (HTTP {http_exc.code})", traceback.format_exc()
-                except Exception as exc:
-                    return False, "", f"GitHub connection error: {exc}", traceback.format_exc()
+                    return True, v_t, msg, tag_url
+                if not web_ok:
+                    err_lbl = "GitHub bağlantı hatası." if is_tr else "GitHub connection error."
+                    return False, "", err_lbl, tool.repo_url
             return True, tool.version, ("GitHub kaynağı güncel." if is_tr else "GitHub source verified."), tool.repo_url
 
         return True, tool.version, ("Sürüm kontrolü tamamlandı." if is_tr else "Version check complete."), tool.name

@@ -145,7 +145,12 @@ class AppUpdateDialog(QDialog):
 
     def _on_checked(self, res: UpdateCheckResult) -> None:
         if not res.ok and res.repo_url:
-            self.main_win.logs.add("WARN", "Updater", res.message, f"Repo: {res.repo_url}\n{res.message}")
+            self.main_win.logs.add(
+                "WARN",
+                tr(self.lang, "log_src_updater"),
+                res.message,
+                f"Repo: {res.repo_url}\n{res.message}",
+            )
             self.main_win._refresh_logs_tab()
         if not self.isVisible():
             return
@@ -241,12 +246,13 @@ class AppUpdateDialog(QDialog):
             )
 
     def _on_applied(self, ok: bool, mode: str, msg: str) -> None:
+        src_lbl = tr(self.lang, "log_src_updater")
         if not ok:
             first_line = msg.splitlines()[0] if msg else "Update error"
-            self.main_win.logs.add("ERR", "Updater", first_line, msg)
+            self.main_win.logs.add("ERR", src_lbl, first_line, msg)
             self.main_win._refresh_logs_tab()
         else:
-            self.main_win.logs.add("INFO", "Updater", "Application update applied.", msg)
+            self.main_win.logs.add("INFO", src_lbl, tr(self.lang, "log_app_updated"), msg)
             self.main_win._refresh_logs_tab()
         if not self.isVisible():
             return

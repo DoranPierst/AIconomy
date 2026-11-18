@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import copy
 import threading
+import time
 
 from PySide6.QtCore import QTimer, Qt
 from PySide6.QtWidgets import (
@@ -23,6 +24,7 @@ from PySide6.QtWidgets import (
 from ...catalog import ToolSpec, localized_tool_text, tool_kind_label
 from ...i18n import tr
 from ...plugins import PluginCheckResult, check_all_tools_updates_parallel, update_single_tool
+from ...updater import parse_semver
 from ..dialogs.add_repo import AddRepoDialog
 from ..dialogs.tool_info import ToolInfoDialog
 from ..workers import safe_emit
@@ -217,6 +219,33 @@ class PluginsTabMixin:
     def run_plugin_update_check(self, manual: bool = False) -> None:
         if self.checking_plugins_busy or self.updating_busy:
             return
+
+        if not manual:
+            last_ts = float(self.meta.get("last_plugin_check_ts", 0.0) or 0.0)
+            cached = self.meta.get("plugin_update_cache")
+            if isinstance(cached, dict) and cached and (time.time() - last_ts) < 1800:
+                for t in self.tools:
+                    entry = cached.get(t.id)
+                    if isinstance(entry, dict):
+                        lat = str(entry.get("latest_version", "") or "").strip()
+                        if lat:
+                            t.latest_version = lat
+                            t.has_update = parse_semver(lat) > parse_semver(t.version)
+                        notes = str(entry.get("release_notes_url", "") or "").strip()
+                        if notes:
+                            t.release_notes_url = notes
+                upd_cnt = sum(1 for t in self.tools if t.has_update)
+                if upd_cnt == 0:
+                    self.plugins_banner_lbl.setText(tr(self.lang, "plug_banner_all_ok"))
+                    self.plugins_banner_lbl.setStyleSheet("color: #22c55e; font-weight: 600;")
+                else:
+                    self.plugins_banner_lbl.setText(tr(self.lang, "plug_banner_updates", n=upd_cnt))
+                    self.plugins_banner_lbl.setStyleSheet("color: #f59e0b; font-weight: 600;")
+                self._update_tab_titles()
+                self._refresh_table()
+                self._refresh_plugins_tab()
+                return
+
         self.checking_plugins_busy = True
         self.btn_plugins_check.setEnabled(False)
         self.plugins_banner_lbl.setText(tr(self.lang, "plug_banner_checking"))
@@ -226,11 +255,17 @@ class PluginsTabMixin:
 
         snap = copy.deepcopy(self.tools)
         tok = self.vault.get_secret("GITHUB_TOKEN")
+        lang_snap = self.lang
 
         def worker() -> None:
             results, chk_errs = check_all_tools_updates_parallel(snap, tok)
             for t_name, err_det in chk_errs:
-                self.logs.add("WARN", t_name, f"Update check network/API error: {err_det.splitlines()[0]}", err_det)
+                self.logs.add(
+                    "WARN",
+                    t_name,
+                    tr(lang_snap, "log_upd_chk_err", err=err_det.splitlines()[0]),
+                    err_det,
+                )
             safe_emit(self.bridge.plugin_check_done, results, manual)
 
         threading.Thread(target=worker, daemon=True).start()
@@ -251,6 +286,15 @@ class PluginsTabMixin:
                 t.latest_version = item.latest_version
                 t.has_update = item.has_update
                 t.release_notes_url = item.release_notes_url
+            self.meta["last_plugin_check_ts"] = time.time()
+            self.meta["plugin_update_cache"] = {
+                t.id: {
+                    "latest_version": t.latest_version,
+                    "release_notes_url": t.release_notes_url,
+                }
+                for t in self.tools
+            }
+            self._save_state()
 
         upd_count = sum(1 for t in self.tools if t.has_update)
         self._refresh_logs_tab()
@@ -342,9 +386,9 @@ class PluginsTabMixin:
                 tool_obj.latest_version = f"v{target_v}"
                 tool_obj.has_update = False
             ver_note = f"v{prev_v} -> v{target_v}" if prev_v != target_v else f"v{target_v}"
-            self.logs.add("INFO", t_name, f"Updated ({ver_note})", raw_log)
+            self.logs.add("INFO", t_name, tr(self.lang, "log_plug_updated", ver=ver_note), raw_log)
         else:
-            self.logs.add("ERR", t_name, f"Update failed: {msg}", raw_log)
+            self.logs.add("ERR", t_name, tr(self.lang, "log_plug_upd_fail", msg=msg), raw_log)
 
     def _on_update_progress(self, idx: int, total: int, tool_name: str) -> None:
         self.update_prog.setValue(idx - 1)

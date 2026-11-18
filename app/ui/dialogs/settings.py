@@ -219,7 +219,7 @@ class SettingsDialog(QDialog):
             msg = tr(self.lang, "msg_key_saved", key=key_name)
         else:
             msg = tr(self.lang, "msg_key_cleared", key=key_name)
-        self.main_win.logs.add("INFO", "API Keys", msg)
+        self.main_win.logs.add("INFO", tr(self.lang, "settings_tab_keys"), msg)
         self.main_win.set_status(msg)
         self.main_win._refresh_logs_tab()
         self.main_win._sync_live_environment_async(target_tools=[])

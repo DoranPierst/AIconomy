@@ -174,11 +174,13 @@ def _rewrite_mcp_json(
     managed_keys: set[str],
     wanted_entries: dict[str, dict[str, Any]],
     create_if_missing: bool,
+    lang: str = "en",
 ) -> tuple[bool, str]:
     """Update only AIconomy-managed keys in an mcpServers JSON file.
 
     Returns (written, error_message). Skips writes and .bak backups when unchanged.
     """
+    is_tr = lang == "tr"
     if not cfg_path.is_file() and not (create_if_missing and wanted_entries):
         return False, ""
     data: dict[str, Any] = {}
@@ -187,9 +189,9 @@ def _rewrite_mcp_json(
             raw_txt = cfg_path.read_text(encoding="utf-8")
             data = json.loads(raw_txt) if raw_txt.strip() else {}
         except Exception as exc:
-            return False, f"read error ({exc})"
+            return False, (f"okuma hatası ({exc})" if is_tr else f"read error ({exc})")
         if not isinstance(data, dict):
-            return False, "unexpected JSON format"
+            return False, ("beklenmeyen JSON biçimi" if is_tr else "unexpected JSON format")
     original = copy.deepcopy(data)
 
     servers = data.get("mcpServers")
@@ -214,10 +216,11 @@ def sync_mcp_json_clients(
     tools: list[ToolSpec],
     vault: WindowsDpapiVault,
     projects_map: dict[str, str] | None = None,
+    lang: str = "en",
 ) -> list[str]:
     """Synchronize all AI client config files under a single lock to avoid concurrent writes."""
     with _CONFIG_LOCK:
-        return _sync_mcp_json_clients_impl(tools, vault, projects_map)
+        return _sync_mcp_json_clients_impl(tools, vault, projects_map, lang=lang)
 
 
 def _strip_marked_codex_blocks(toml_text: str) -> str:
@@ -239,8 +242,11 @@ def _sync_mcp_json_clients_impl(
     tools: list[ToolSpec],
     vault: WindowsDpapiVault,
     projects_map: dict[str, str] | None = None,
+    lang: str = "en",
 ) -> list[str]:
     """Write global and project-scoped MCP client configs with .bak backups."""
+    is_tr = lang == "tr"
+    unchanged_word = "değişmedi" if is_tr else "unchanged"
     projects_map = projects_map or {}
     client_paths = {
         "AGY": pathlib.Path.home() / ".gemini" / "config" / "mcp_config.json",
@@ -261,13 +267,13 @@ def _sync_mcp_json_clients_impl(
             if entry:
                 wanted[t.mcp_server_key] = entry
         try:
-            written, err = _rewrite_mcp_json(cfg_path, managed_keys, wanted, create_if_missing=(code == "AGY"))
+            written, err = _rewrite_mcp_json(cfg_path, managed_keys, wanted, create_if_missing=(code == "AGY"), lang=lang)
         except Exception as exc:
-            written, err = False, f"write error ({exc})"
+            written, err = False, (f"yazma hatası ({exc})" if is_tr else f"write error ({exc})")
         if err:
             messages.append(f"{code}: {err}")
         elif cfg_path.is_file():
-            messages.append(f"{code} Global ({len(wanted)} MCP{'' if written else ', unchanged'})")
+            messages.append(f"{code} Global ({len(wanted)} MCP{'' if written else f', {unchanged_word}'})")
 
     for proj_name, proj_dir_str in projects_map.items():
         proj_dir = pathlib.Path(proj_dir_str)
@@ -287,9 +293,9 @@ def _sync_mcp_json_clients_impl(
                         p_wanted[t.mcp_server_key] = entry
             p_cfg = proj_dir / rel_cfg
             try:
-                written, err = _rewrite_mcp_json(p_cfg, managed_keys, p_wanted, create_if_missing=True)
+                written, err = _rewrite_mcp_json(p_cfg, managed_keys, p_wanted, create_if_missing=True, lang=lang)
             except Exception as exc:
-                written, err = False, f"write error ({exc})"
+                written, err = False, (f"yazma hatası ({exc})" if is_tr else f"write error ({exc})")
             if err:
                 messages.append(f"{proj_name}/{rel_cfg}: {err}")
             elif written:
@@ -366,8 +372,8 @@ def _sync_mcp_json_clients_impl(
                 _atomic_write_text(codex_cfg, new_toml)
                 messages.append(f"CDX ({cdx_added} MCP)")
             else:
-                messages.append(f"CDX ({cdx_added} MCP, unchanged)")
+                messages.append(f"CDX ({cdx_added} MCP, {unchanged_word})")
         except Exception as exc:
-            messages.append(f"CDX error ({exc})")
+            messages.append(f"CDX hatası ({exc})" if is_tr else f"CDX error ({exc})")
 
     return messages
