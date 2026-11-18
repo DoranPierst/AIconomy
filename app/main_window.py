@@ -2747,6 +2747,7 @@ class MainWindow(QMainWindow):
                 sync_blender_skills_on_disk(skills_snap, bs_tool.enabled, bs_tool.project_scope, proj_snap)
             sync_mcp_json_clients(tools_snap, self.vault, proj_snap)
             live_map = scan_live_process_locations()
+            self._latest_live_map = live_map
             out = []
             for x in tools_snap:
                 ok, ping_str, ms, detail, loc_detail = probe_tool_health(x, len(skills_snap), proj_snap, live_map)
@@ -3240,9 +3241,10 @@ class MainWindow(QMainWindow):
                         self.logs.add("WARN", t.name, f"Açık işaretli servis yanıt vermedi ({ping_str})", detail, t.port)
 
         if silent:
-            if state_changed and QApplication.activePopupWidget() is None:
-                self._refresh_table()
+            if QApplication.activePopupWidget() is None:
                 self._refresh_host_dep_banner()
+                if state_changed:
+                    self._refresh_table()
             return
 
         self._refresh_table()

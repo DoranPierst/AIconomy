@@ -1,5 +1,5 @@
 {
-  "version": "1.2.12",
+  "version": "1.2.13",
   "update_repo": "https://github.com/DoranPierst/ai-arac-merkezi",
-  "changelog": "🔌 Bağlantıları Test Et (Bağlantı Test Merkezi) penceresi eklendi: Antigravity açık olmasa bile tüm aktif araçlara gerçek MCP/soket/stdio el sıkışma testi uygular. Debug & Log içindeki Port Temizle butonları hata gibi görünmeyecek şekilde sadeleştirildi."
+  "changelog": "Blender ve Unity açıkken (simge durumundayken) bağımlı program uyarı çubuğunun takılı kalmasına yol açan _latest_live_map senkronizasyon hatası düzeltildi."
 }
