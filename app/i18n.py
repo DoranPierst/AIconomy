@@ -483,14 +483,41 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
 }
 
 
-def detect_default_language() -> str:
-    """Kullanıcının Windows sistem diline göre varsayılan dili seçer (varsayılan 'en', Türkçe ise 'tr')."""
+def _system_language_tags() -> list[str]:
+    """Sistem dilini ISO biçiminde ('tr_TR', 'de-DE' ...) döndürür.
+
+    Windows'ta ``locale.getlocale()`` 'Turkish_Türkiye' gibi isimler döndürdüğü için doğrudan
+    kullanılamaz; önce Windows arayüz dili (LCID), sonra Qt'nin sistem yereli denenir.
+    """
+    tags: list[str] = []
     try:
-        loc = (locale.getlocale()[0] or "").lower()
+        import ctypes
+
+        lcid = int(ctypes.windll.kernel32.GetUserDefaultUILanguage())
+        tag = locale.windows_locale.get(lcid, "")
+        if tag:
+            tags.append(tag)
     except Exception:
-        loc = ""
-    for code, _ in SUPPORTED_LANGUAGES:
-        if loc.startswith(code):
+        pass
+    try:
+        from PySide6.QtCore import QLocale
+
+        tags.append(QLocale.system().name())
+    except Exception:
+        pass
+    try:
+        tags.append(locale.getlocale()[0] or "")
+    except Exception:
+        pass
+    return [t for t in tags if t]
+
+
+def detect_default_language() -> str:
+    """Kullanıcının sistem diline göre desteklenen bir arayüz dili seçer (bulunamazsa 'en')."""
+    supported = {code for code, _ in SUPPORTED_LANGUAGES}
+    for tag in _system_language_tags():
+        code = tag.replace("-", "_").split("_")[0].lower()
+        if code in supported:
             return code
     return "en"
 

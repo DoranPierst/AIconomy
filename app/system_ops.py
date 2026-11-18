@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import concurrent.futures
+import copy
 import csv
 import ctypes
 from ctypes import wintypes
@@ -15,6 +16,7 @@ import socket
 import stat
 import subprocess
 import tempfile
+import threading
 import time
 import traceback
 import urllib.error
@@ -328,47 +330,103 @@ def kill_zombie_port_process(port: int) -> tuple[bool, str]:
         return False, f"PID {pid} ({name}) sonlandırılamadı: {exc}"
 
 
-def enforce_tool_runtime_state(tool: ToolSpec, projects_map: dict[str, str]) -> str:
-    """Bir araç AÇIK veya KAPALI yapıldığında arka plandaki gerçek süreçleri de bu duruma uydurur."""
+_PY_HOST_EXES = {"python.exe", "pythonw.exe", "uv.exe", "uvx.exe"}
+
+
+def _find_managed_processes(
+    exe_names: set[str],
+    host_keywords: tuple[str, ...] = (),
+    require_all: tuple[str, ...] = (),
+) -> list[psutil.Process]:
+    """Yalnızca AIconomy'nin yönettiği köprü süreçlerini bulur.
+
+    Bir süreç şu durumlarda eşleşir: adı ``exe_names`` içinde olduğunda VEYA bir Python/uv
+    host süreci olup komut satırında ``host_keywords``'den biri ve ``require_all``'daki
+    tüm parçalar geçtiğinde. Port sahipliğine asla bakılmaz; böylece kullanıcının ilgisiz
+    sunucuları (ör. :8080'deki Vite/Tomcat) hiçbir zaman hedef alınmaz.
+    """
+    out: list[psutil.Process] = []
+    self_pid = os.getpid()
+    for p in psutil.process_iter(["pid", "name", "cmdline"]):
+        try:
+            if p.info.get("pid") == self_pid:
+                continue
+            nm = (p.info.get("name") or "").lower()
+            if nm in exe_names:
+                out.append(p)
+                continue
+            if nm in _PY_HOST_EXES and host_keywords:
+                cmd_s = " ".join(str(x).lower() for x in (p.info.get("cmdline") or []))
+                if any(k in cmd_s for k in host_keywords) and all(k in cmd_s for k in require_all):
+                    out.append(p)
+        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+            continue
+    return out
+
+
+def _terminate_all(procs: list[psutil.Process], label: str) -> list[str]:
+    stopped: list[str] = []
+    for p in procs:
+        try:
+            p.terminate()
+            stopped.append(f"{label} (PID {p.pid})")
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+    return stopped
+
+
+def enforce_tool_runtime_state(tool: ToolSpec, projects_map: dict[str, str], allow_stop: bool = True) -> str:
+    """Bir araç AÇIK veya KAPALI yapıldığında arka plandaki gerçek süreçleri de bu duruma uydurur.
+
+    ``allow_stop=False`` olduğunda (ör. program açılışı) hiçbir süreç sonlandırılmaz; yalnızca
+    AÇIK araçların köprüleri gerekiyorsa başlatılır. Durdurma işlemi sadece AIconomy'nin
+    yönettiği köprü süreçlerini (ada/komut satırına göre) hedefler, port sahibini değil.
+    """
     if tool.id == "blender_mcp" and not tool.enabled:
-        killed: list[str] = []
-        blender_pids = [
-            int(p.info["pid"])
-            for p in psutil.process_iter(["pid", "name"])
-            if (p.info.get("name") or "").lower() == "blender.exe" and p.info.get("pid")
-        ]
-        win_titles = get_gui_window_titles({"blender.exe": blender_pids}) if blender_pids else {}
-        for p in psutil.process_iter(["pid", "name", "cmdline"]):
+        if not allow_stop:
+            return ""
+        killed = _terminate_all(
+            _find_managed_processes({"blender-mcp.exe"}, host_keywords=("blender-mcp",)),
+            "blender-mcp",
+        )
+        # Penceresi kapanmış ama :9876 soketini tutmaya devam eden asılı blender.exe:
+        # yalnızca portun gerçek sahibiyse, görünür penceresi yoksa ve bir arka plan
+        # (-b / --background) render işi DEĞİLSE temizlenir.
+        owner_pid, owner_name = find_port_owner(int(tool.port or 9876))
+        if owner_pid and owner_name.lower() == "blender.exe":
             try:
-                nm = (p.info.get("name") or "").lower()
-                pid = int(p.info.get("pid") or 0)
-                cmd = [str(x).lower() for x in (p.info.get("cmdline") or [])]
-                cmd_s = " ".join(cmd)
-                if nm == "blender-mcp.exe" or (nm in ("uv.exe", "uvx.exe") and "blender-mcp" in cmd_s):
-                    p.terminate()
-                    killed.append(f"{nm} (PID {pid})")
-                elif nm == "blender.exe" and blender_pids and pid not in win_titles and not any(a.endswith(".blend") for a in cmd):
-                    # Penceresi kapanmış ama port 9876 soketi yüzünden görev yöneticisinde asılı kalmış zombi blender.exe
-                    p.terminate()
-                    killed.append(f"asılı blender.exe (PID {pid})")
-            except Exception:
+                bproc = psutil.Process(owner_pid)
+                cmd = [str(x).lower() for x in (bproc.cmdline() or [])]
+                is_batch_job = "-b" in cmd or "--background" in cmd
+                has_window = owner_pid in get_gui_window_titles({"blender.exe": [owner_pid]})
+                if not is_batch_job and not has_window:
+                    bproc.terminate()
+                    killed.append(f"asılı blender.exe (PID {owner_pid})")
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
                 pass
         return f" ({', '.join(killed)} durduruldu)" if killed else ""
 
     if tool.id == "trellis" and not tool.enabled:
+        if not allow_stop:
+            return ""
         ok, msg = free_trellis_vram()
         return f" ({msg})" if ok and "PID" in msg else ""
 
     if tool.id == "unity_mcp":
         port = int(tool.port or 8080)
-        owner_pid, owner_name = find_port_owner(port)
-        if not tool.enabled and owner_pid and owner_name.lower() != "unity.exe":
-            try:
-                psutil.Process(owner_pid).terminate()
-                return f" (Unity MCP PID {owner_pid} durduruldu)"
-            except Exception:
+        if not tool.enabled:
+            if not allow_stop:
                 return ""
-        if tool.enabled and not owner_pid:
+            killed = _terminate_all(
+                _find_managed_processes(
+                    {"mcp-for-unity.exe", "unity-mcp.exe"},
+                    host_keywords=("mcp-for-unity", "mcpforunityserver", "unity-mcp"),
+                ),
+                "Unity MCP",
+            )
+            return f" ({', '.join(killed)} durduruldu)" if killed else ""
+        owner_pid, _owner_name = find_port_owner(port)
+        if not owner_pid:
             local_bin = pathlib.Path.home() / ".local" / "bin"
             cmd: list[str] | None = None
             for exe_name in ("mcp-for-unity.exe", "unity-mcp.exe"):
@@ -391,14 +449,20 @@ def enforce_tool_runtime_state(tool: ToolSpec, projects_map: dict[str, str]) -> 
 
     if tool.id == "serena":
         port = int(tool.port or 9121)
-        owner_pid, _ = find_port_owner(port)
-        if not tool.enabled and owner_pid:
-            try:
-                psutil.Process(owner_pid).terminate()
-                return f" (Serena PID {owner_pid} durduruldu)"
-            except Exception:
+        if not tool.enabled:
+            if not allow_stop:
                 return ""
-        if tool.enabled and not owner_pid:
+            killed = _terminate_all(
+                _find_managed_processes(
+                    {"serena.exe", "serena-agent.exe"},
+                    host_keywords=("serena",),
+                    require_all=("start-mcp-server",),
+                ),
+                "Serena",
+            )
+            return f" ({', '.join(killed)} durduruldu)" if killed else ""
+        owner_pid, _ = find_port_owner(port)
+        if not owner_pid:
             serena_exe = pathlib.Path.home() / ".local" / "bin" / "serena.exe"
             if serena_exe.is_file():
                 cmd = [
@@ -511,9 +575,9 @@ def get_missing_host_dependencies(
             {
                 "host": "unity",
                 "title": "Unity Editor kapalı",
-                "detail": "Unity MCP / Pipeline AÇIK; sahne/editor komutları için Unity çalıştırılmalıdır.",
-                "btn_label": "🚀 Unity Başlat (UI'sız Arka Plan)",
-                "headless": True,
+                "detail": "Unity MCP / Pipeline AÇIK; sahne/editor komutları için Unity Editor çalıştırılmalıdır (projeyi kilitlememesi için normal Editor odak çalmadan simge durumunda açılır).",
+                "btn_label": "🚀 Unity Editor'ü Başlat (Simge)",
+                "headless": False,
                 "scope": target_scope,
             }
         )
@@ -960,7 +1024,78 @@ def _build_mcp_entry(t: ToolSpec, vault: WindowsDpapiVault) -> dict[str, Any] | 
     return None
 
 
+_CONFIG_LOCK = threading.Lock()
+
+
+def _atomic_write_text(path: pathlib.Path, text: str) -> None:
+    """Dosyayı önce aynı klasörde geçici dosyaya yazıp sonra atomik olarak yerine koyar (yarım yazılmış JSON oluşmaz)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="") as fh:
+            fh.write(text)
+        os.replace(tmp_name, path)
+    except Exception:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
+
+
+def _rewrite_mcp_json(
+    cfg_path: pathlib.Path,
+    managed_keys: set[str],
+    wanted_entries: dict[str, dict[str, Any]],
+    create_if_missing: bool,
+) -> tuple[bool, str]:
+    """Bir mcpServers JSON dosyasında yalnızca AIconomy'nin yönettiği anahtarları günceller.
+
+    Dosya içeriği gerçekten değişmiyorsa hiçbir şey yazılmaz ve .bak oluşturulmaz.
+    Dönüş: (yazıldı_mı, hata_mesajı)
+    """
+    if not cfg_path.is_file() and not (create_if_missing and wanted_entries):
+        return False, ""
+    data: dict[str, Any] = {}
+    if cfg_path.is_file():
+        try:
+            raw_txt = cfg_path.read_text(encoding="utf-8")
+            data = json.loads(raw_txt) if raw_txt.strip() else {}
+        except Exception as exc:
+            return False, f"okuma hatası ({exc})"
+        if not isinstance(data, dict):
+            return False, "beklenmeyen JSON biçimi"
+    original = copy.deepcopy(data)
+
+    servers = data.get("mcpServers")
+    if not isinstance(servers, dict):
+        servers = {}
+    for key in list(servers.keys()):
+        if key in managed_keys:
+            servers.pop(key, None)
+    servers.update(wanted_entries)
+    if servers or "mcpServers" in data:
+        data["mcpServers"] = servers
+
+    if data == original:
+        return False, ""
+    if cfg_path.is_file():
+        shutil.copyfile(cfg_path, cfg_path.with_suffix(cfg_path.suffix + ".bak"))
+    _atomic_write_text(cfg_path, json.dumps(data, ensure_ascii=False, indent=2))
+    return True, ""
+
+
 def sync_mcp_json_clients(
+    tools: list[ToolSpec],
+    vault: WindowsDpapiVault,
+    projects_map: dict[str, str] | None = None,
+) -> list[str]:
+    """AI istemci config dosyalarını tek seferde ve kilit altında senkronlar (eşzamanlı yazmaları önler)."""
+    with _CONFIG_LOCK:
+        return _sync_mcp_json_clients_impl(tools, vault, projects_map)
+
+
+def _sync_mcp_json_clients_impl(
     tools: list[ToolSpec],
     vault: WindowsDpapiVault,
     projects_map: dict[str, str] | None = None,
@@ -977,25 +1112,7 @@ def sync_mcp_json_clients(
 
     # 1) Global Config Yazımı (AGY global çalışır; CLD ve CUR için sadece GLOBAL kapsamlılar globale yazılır)
     for code, cfg_path in client_paths.items():
-        if not cfg_path.is_file() and code != "AGY":
-            continue
-        cfg_path.parent.mkdir(parents=True, exist_ok=True)
-        data: dict[str, Any] = {}
-        if cfg_path.is_file():
-            try:
-                raw_txt = cfg_path.read_text(encoding="utf-8")
-                shutil.copyfile(cfg_path, cfg_path.with_suffix(cfg_path.suffix + ".bak"))
-                data = json.loads(raw_txt) if raw_txt.strip() else {}
-            except Exception as exc:
-                messages.append(f"{code}: okuma hatası ({exc})")
-                continue
-
-        servers = data.setdefault("mcpServers", {})
-        for key in list(servers.keys()):
-            if key in managed_keys:
-                servers.pop(key, None)
-
-        added = 0
+        wanted: dict[str, dict[str, Any]] = {}
         for t in tools:
             if not t.mcp_server_key or not (t.enabled and t.clients.get(code, False)):
                 continue
@@ -1004,13 +1121,18 @@ def sync_mcp_json_clients(
                 continue
             entry = _build_mcp_entry(t, vault)
             if entry:
-                servers[t.mcp_server_key] = entry
-                added += 1
-
-        cfg_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-        messages.append(f"{code} Global ({added} MCP)")
+                wanted[t.mcp_server_key] = entry
+        try:
+            written, err = _rewrite_mcp_json(cfg_path, managed_keys, wanted, create_if_missing=(code == "AGY"))
+        except Exception as exc:
+            written, err = False, f"yazma hatası ({exc})"
+        if err:
+            messages.append(f"{code}: {err}")
+        elif cfg_path.is_file():
+            messages.append(f"{code} Global ({len(wanted)} MCP{'' if written else ', değişiklik yok'})")
 
     # 2) Proje Bazlı Config Yazımı (<proje>/.mcp.json ve <proje>/.cursor/mcp.json)
+    #    Mevcut dosyalar da işlenir; böylece kapatılan/başka projeye taşınan araçlar eski projeden temizlenir.
     for proj_name, proj_dir_str in projects_map.items():
         proj_dir = pathlib.Path(proj_dir_str)
         if not proj_dir.is_dir():
@@ -1020,41 +1142,28 @@ def sync_mcp_json_clients(
             for t in tools
             if t.mcp_server_key and t.enabled and t.scope_selectable and t.project_scope == proj_name
         ]
-        if not scoped_tools:
-            continue
-
         for target_code, rel_cfg in [("CLD", ".mcp.json"), ("CUR", ".cursor/mcp.json")]:
-            wanted = [t for t in scoped_tools if t.clients.get(target_code, False)]
-            if not wanted:
-                continue
+            p_wanted: dict[str, dict[str, Any]] = {}
+            for t in scoped_tools:
+                if t.clients.get(target_code, False):
+                    entry = _build_mcp_entry(t, vault)
+                    if entry:
+                        p_wanted[t.mcp_server_key] = entry
             p_cfg = proj_dir / rel_cfg
-            p_cfg.parent.mkdir(parents=True, exist_ok=True)
-            pdata: dict[str, Any] = {}
-            if p_cfg.is_file():
-                try:
-                    shutil.copyfile(p_cfg, p_cfg.with_suffix(p_cfg.suffix + ".bak"))
-                    pdata = json.loads(p_cfg.read_text(encoding="utf-8") or "{}")
-                except Exception:
-                    pdata = {}
-            pservers = pdata.setdefault("mcpServers", {})
-            for key in list(pservers.keys()):
-                if key in managed_keys:
-                    pservers.pop(key, None)
-            cnt = 0
-            for t in wanted:
-                entry = _build_mcp_entry(t, vault)
-                if entry:
-                    pservers[t.mcp_server_key] = entry
-                    cnt += 1
-            p_cfg.write_text(json.dumps(pdata, ensure_ascii=False, indent=2), encoding="utf-8")
-            messages.append(f"{proj_name}/{rel_cfg} ({cnt} MCP)")
+            try:
+                written, err = _rewrite_mcp_json(p_cfg, managed_keys, p_wanted, create_if_missing=True)
+            except Exception as exc:
+                written, err = False, f"yazma hatası ({exc})"
+            if err:
+                messages.append(f"{proj_name}/{rel_cfg}: {err}")
+            elif written:
+                messages.append(f"{proj_name}/{rel_cfg} ({len(p_wanted)} MCP)")
 
     # 3) Codex (~/.codex/config.toml) İşaretli Blok Senkronizasyonu
     codex_cfg = pathlib.Path.home() / ".codex" / "config.toml"
     if codex_cfg.is_file():
         try:
             orig_toml = codex_cfg.read_text(encoding="utf-8-sig")
-            shutil.copyfile(codex_cfg, codex_cfg.with_suffix(".toml.bak"))
             begin_tag = "# >>> BEGIN AI-ARAC-MERKEZI >>>"
             end_tag = "# <<< END AI-ARAC-MERKEZI <<<"
             cleaned = re.sub(
@@ -1119,8 +1228,12 @@ def sync_mcp_json_clients(
                     cdx_added += 1
             cdx_lines.append(end_tag)
             new_toml = cleaned + "\n\n" + "\n".join(cdx_lines) + "\n"
-            codex_cfg.write_text(new_toml, encoding="utf-8")
-            messages.append(f"CDX ({cdx_added} MCP)")
+            if new_toml != orig_toml:
+                shutil.copyfile(codex_cfg, codex_cfg.with_suffix(".toml.bak"))
+                _atomic_write_text(codex_cfg, new_toml)
+                messages.append(f"CDX ({cdx_added} MCP)")
+            else:
+                messages.append(f"CDX ({cdx_added} MCP, değişiklik yok)")
         except Exception as exc:
             messages.append(f"CDX hata ({exc})")
 

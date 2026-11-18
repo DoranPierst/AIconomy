@@ -61,6 +61,7 @@ from .system_ops import (
     check_all_tools_updates_parallel,
     detect_running_dcc_apps,
     enforce_tool_runtime_state,
+    find_port_owner,
     free_trellis_vram,
     get_missing_host_dependencies,
     inspect_github_repo,
@@ -166,6 +167,9 @@ class WorkerBridge(QObject):
     app_check_done = Signal(object)
     conn_test_row = Signal(int, bool, int, str, str)
     conn_test_done = Signal()
+    vram_done = Signal(str, int, int)
+    dcc_done = Signal(object)
+    port_kill_done = Signal(int, bool, str)
     app_dl_progress = Signal(int, int)
     app_apply_done = Signal(bool, str, str)
 
@@ -1313,6 +1317,22 @@ class MainWindow(QMainWindow):
         self.bridge.update_progress.connect(self._on_update_progress)
         self.bridge.update_all_done.connect(self._on_update_all_done)
         self.bridge.app_check_done.connect(self._on_bg_app_check_done)
+        self.bridge.vram_done.connect(self._on_vram_done)
+        self.bridge.dcc_done.connect(self._on_dcc_done)
+        self.bridge.port_kill_done.connect(self._on_port_kill_done)
+
+        # Arka plan işlerinin üst üste binmesini önleyen bayraklar
+        self._health_busy = False
+        self._vram_busy = False
+        self._dcc_busy = False
+        # AÇIK/KAPALI ve AI istemci değişikliklerini 400 ms bekletip tek bir senkronizasyonda toplar
+        self._sync_lock = threading.Lock()
+        self._sync_pending_ids: set[str] = set()
+        self._sync_stop_ids: set[str] = set()
+        self._sync_debounce = QTimer(self)
+        self._sync_debounce.setSingleShot(True)
+        self._sync_debounce.setInterval(400)
+        self._sync_debounce.timeout.connect(self._flush_live_sync)
         self.plugin_checks: dict[str, QCheckBox] = {}
         self.panel_row_checks: dict[str, QCheckBox] = {}
         self.checked_log_ids: set[int] = set()
@@ -1356,7 +1376,10 @@ class MainWindow(QMainWindow):
         self.tick_timer.start(1000)
 
         if self.sync_live_environment:
-            QTimer.singleShot(250, lambda: self._sync_live_environment_async(target_tools=list(self.tools)))
+            # Açılışta yalnızca config senkronlanır ve AÇIK köprüler başlatılır; hiçbir süreç sonlandırılmaz.
+            QTimer.singleShot(
+                250, lambda: self._sync_live_environment_async(target_tools=list(self.tools), allow_stop=False)
+            )
         else:
             QTimer.singleShot(250, self.run_health_scan)
         # Açılışta otomatik güncelleme kontrolü (yalnız kontrol eder; başlatmak kullanıcıya aittir)
@@ -2339,12 +2362,15 @@ class MainWindow(QMainWindow):
     def _init_vault_tab(self) -> None:
         tab = QWidget()
         lay = QVBoxLayout(tab)
-        lay.addWidget(
-            QLabel(
-                "<b>🔐 Windows DPAPI Şifreli Anahtar Kasası</b> — Girilen anahtarlar açık metin olarak kaydedilmez; "
-                "doğrudan Windows kullanıcı oturumunuzla (CryptProtectData) şifrelenir."
-            )
+        vault_info = QLabel(
+            "<b>🔐 Windows DPAPI Şifreli Anahtar Kasası</b> — Girilen anahtarlar bu programın veri klasöründe açık metin olarak "
+            "saklanmaz; Windows kullanıcı oturumunuzla (CryptProtectData) şifrelenir.<br>"
+            "<span style='color:#f59e0b;'><b>Not:</b> Anahtar gerektiren bir MCP aracı AÇIK olduğunda, AI istemcilerinin (Antigravity, "
+            "Codex, Claude Code, Cursor) okuyabilmesi için anahtar ilgili config dosyasına (mcp_config.json, config.toml, "
+            ".claude.json, mcp.json) <b>düz metin</b> olarak yazılır. Bu, MCP istemcilerinin çalışma biçiminden kaynaklanır.</span>"
         )
+        vault_info.setWordWrap(True)
+        lay.addWidget(vault_info)
         self.vault_inputs: dict[str, QLineEdit] = {}
         for key_name, desc in WindowsDpapiVault.STANDARD_KEYS:
             card = QFrame()
@@ -2816,28 +2842,50 @@ class MainWindow(QMainWindow):
         self.meta["auto_detect_apps"] = checked
         self._save_state()
 
-    def _sync_live_environment_async(self, target_tools: list[ToolSpec] | None = None) -> None:
-        """Tablodaki AÇIK/KAPALI ve AI istemci seçimlerini anında gerçek süreçlere ve AI config dosyalarına uygular."""
+    def _sync_live_environment_async(
+        self,
+        target_tools: list[ToolSpec] | None = None,
+        allow_stop: bool = True,
+    ) -> None:
+        """Tablodaki AÇIK/KAPALI ve AI istemci seçimlerini gerçek süreçlere ve AI config dosyalarına uygular.
+
+        Hızlı ardışık tıklamalar 400 ms içinde tek bir senkronizasyonda birleştirilir ve senkronizasyonlar
+        sırayla (kilit altında) çalışır; böylece config dosyalarına eşzamanlı yazma olmaz.
+        """
         if not self.sync_live_environment:
             return
+        targets = list(target_tools) if target_tools is not None else list(self.tools)
+        ids = {t.id for t in targets}
+        self._sync_pending_ids.update(ids)
+        if allow_stop:
+            self._sync_stop_ids.update(ids)
+        self._sync_debounce.start()
+
+    def _flush_live_sync(self) -> None:
+        target_ids = set(self._sync_pending_ids)
+        stop_ids = set(self._sync_stop_ids)
+        self._sync_pending_ids.clear()
+        self._sync_stop_ids.clear()
+
         tools_snap = list(self.tools)
-        targets = list(target_tools) if target_tools is not None else tools_snap
         skills_snap = set(self.active_skills)
         proj_snap = dict(self.projects_map)
 
         def worker() -> None:
-            for t_obj in targets:
-                enforce_tool_runtime_state(t_obj, proj_snap)
-            bs_tool = next((x for x in tools_snap if x.id == "blender_skills"), None)
-            if bs_tool:
-                sync_blender_skills_on_disk(skills_snap, bs_tool.enabled, bs_tool.project_scope, proj_snap)
-            sync_mcp_json_clients(tools_snap, self.vault, proj_snap)
-            live_map = scan_live_process_locations()
-            self._latest_live_map = live_map
-            out = []
-            for x in tools_snap:
-                ok, ping_str, ms, detail, loc_detail = probe_tool_health(x, len(skills_snap), proj_snap, live_map)
-                out.append((x.id, ok, ping_str, ms, detail, loc_detail))
+            with self._sync_lock:
+                for t_obj in tools_snap:
+                    if t_obj.id in target_ids:
+                        enforce_tool_runtime_state(t_obj, proj_snap, allow_stop=(t_obj.id in stop_ids))
+                bs_tool = next((x for x in tools_snap if x.id == "blender_skills"), None)
+                if bs_tool:
+                    sync_blender_skills_on_disk(skills_snap, bs_tool.enabled, bs_tool.project_scope, proj_snap)
+                sync_mcp_json_clients(tools_snap, self.vault, proj_snap)
+                live_map = scan_live_process_locations()
+                self._latest_live_map = live_map
+                out = []
+                for x in tools_snap:
+                    ok, ping_str, ms, detail, loc_detail = probe_tool_health(x, len(skills_snap), proj_snap, live_map)
+                    out.append((x.id, ok, ping_str, ms, detail, loc_detail))
             self.bridge.health_done.emit(out, True)
 
         threading.Thread(target=worker, daemon=True).start()
@@ -3256,7 +3304,22 @@ class MainWindow(QMainWindow):
         threading.Thread(target=worker, daemon=True).start()
 
     def _update_vram_bar(self) -> None:
-        name, used_mb, total_mb = query_gpu_vram()
+        """nvidia-smi sorgusu (2.5 sn'ye kadar sürebilir) arayüzü dondurmasın diye arka planda çalışır."""
+        if self._vram_busy:
+            return
+        self._vram_busy = True
+
+        def worker() -> None:
+            name, used_mb, total_mb = "", 0, 0
+            try:
+                name, used_mb, total_mb = query_gpu_vram()
+            finally:
+                self.bridge.vram_done.emit(name, used_mb, total_mb)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_vram_done(self, name: str, used_mb: int, total_mb: int) -> None:
+        self._vram_busy = False
         if total_mb > 0:
             self.vram_bar.setMaximum(total_mb)
             self.vram_bar.setValue(used_mb)
@@ -3268,27 +3331,48 @@ class MainWindow(QMainWindow):
             self.vram_bar.setFormat("VRAM: Yok")
 
     def _check_dcc_auto_switch(self) -> None:
-        cur = detect_running_dcc_apps()
-        if cur["unity"] and not self.last_detected_apps.get("unity"):
+        if self._dcc_busy:
+            return
+        self._dcc_busy = True
+        fallback = dict(self.last_detected_apps)
+
+        def worker() -> None:
+            cur = fallback
+            try:
+                cur = detect_running_dcc_apps()
+            finally:
+                self.bridge.dcc_done.emit(cur)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_dcc_done(self, cur: dict[str, bool]) -> None:
+        self._dcc_busy = False
+        if cur.get("unity") and not self.last_detected_apps.get("unity"):
             self.set_status("👁️ Unity.exe algılandı — İsterseniz üstten '🎮 Unity & Shader' hazır ayarını seçebilirsiniz.")
-        elif cur["blender"] and not self.last_detected_apps.get("blender"):
+        elif cur.get("blender") and not self.last_detected_apps.get("blender"):
             self.set_status("👁️ blender.exe algılandı — İsterseniz üstten '🎨 3D & Korku Asset' hazır ayarını seçebilirsiniz.")
         self.last_detected_apps = cur
 
     def run_health_scan(self) -> None:
         self.seconds_left = 30
+        if self._health_busy:
+            return
+        self._health_busy = True
         self.set_status("Sağlık, port ve canlı süreç konumları taranıyor...")
         snap_tools = list(self.tools)
         sk_cnt = len(self.active_skills)
         proj_snap = dict(self.projects_map)
 
         def worker() -> None:
-            live_map = scan_live_process_locations()
-            self._latest_live_map = live_map
             out = []
-            for t in snap_tools:
-                ok, ping_str, ms, detail, loc_detail = probe_tool_health(t, sk_cnt, proj_snap, live_map)
-                out.append((t.id, ok, ping_str, ms, detail, loc_detail))
+            try:
+                live_map = scan_live_process_locations()
+                self._latest_live_map = live_map
+                for t in snap_tools:
+                    ok, ping_str, ms, detail, loc_detail = probe_tool_health(t, sk_cnt, proj_snap, live_map)
+                    out.append((t.id, ok, ping_str, ms, detail, loc_detail))
+            finally:
+                self._health_busy = False
             self.bridge.health_done.emit(out, False)
 
         threading.Thread(target=worker, daemon=True).start()
@@ -3381,16 +3465,15 @@ class MainWindow(QMainWindow):
     def _auto_heal_tool_async(self, tool: ToolSpec) -> None:
         """AÇIK işaretli arka plan servisleri (Serena :9121, Unity MCP :8080) kapandıysa kullanıcıya sormadan otomatik başlatır."""
         proj_snap = dict(self.projects_map)
+        sk_cnt = len(self.active_skills)
 
         def worker() -> None:
-            note = enforce_tool_runtime_state(tool, proj_snap)
+            note = enforce_tool_runtime_state(tool, proj_snap, allow_stop=False)
             if note:
                 self.logs.add("INFO", tool.name, f"Otomatik Kurtarma:{note}")
                 time.sleep(1.5)
                 live_map = scan_live_process_locations()
-                ok, ping_str, ms, detail, loc_detail = probe_tool_health(
-                    tool, len(self.active_skills), proj_snap, live_map
-                )
+                ok, ping_str, ms, detail, loc_detail = probe_tool_health(tool, sk_cnt, proj_snap, live_map)
                 self.bridge.health_done.emit([(tool.id, ok, ping_str, ms, detail, loc_detail)], True)
 
         threading.Thread(target=worker, daemon=True).start()
@@ -3403,8 +3486,32 @@ class MainWindow(QMainWindow):
         self.set_status(msg)
 
     def _handle_kill_zombie_port(self, port: int) -> None:
-        ok, msg = kill_zombie_port_process(port)
-        # Port zaten boşsa veya açık editör (Blender/Unity) tarafından kullanılıyorsa sarı WARN yerine INFO yaz
+        owner_pid, owner_name = find_port_owner(port)
+        if owner_pid:
+            ans = QMessageBox.question(
+                self,
+                "Asılı Portu Kapat",
+                f"Port {port} şu an '{owner_name}' (PID {owner_pid}) tarafından kullanılıyor.\n\n"
+                "Bu süreci sonlandırmak istediğinize emin misiniz? Bu süreç başka bir programa aitse "
+                "kaydedilmemiş verileri kaybolabilir.",
+            )
+            if ans != QMessageBox.StandardButton.Yes:
+                return
+        self.set_status(f"Port {port} temizleniyor...")
+
+        def worker() -> None:
+            ok, msg = False, ""
+            try:
+                ok, msg = kill_zombie_port_process(port)
+            except Exception as exc:
+                msg = f"Port {port} temizlenemedi: {exc}"
+            finally:
+                self.bridge.port_kill_done.emit(port, ok, msg)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_port_kill_done(self, port: int, _ok: bool, msg: str) -> None:
+        # Port zaten boşsa veya açık editör (Blender/Unity) korunduysa sarı WARN yerine INFO yaz
         self.logs.add("INFO", f"Port {port}", msg, msg, port)
         self._refresh_logs_tab()
         self.set_status(msg)

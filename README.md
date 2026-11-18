@@ -12,8 +12,23 @@ A native Windows desktop control center (`PySide6` / Qt 6) for managing MCP serv
 
 No Python or setup required:
 1. Download **`AIconomy.exe`** from the [**Latest Release**](https://github.com/DoranPierst/AIconomy/releases/latest).
-2. Double-click `AIconomy.exe` to run (all settings are stored locally in `data/` next to the `.exe`).
+2. Double-click `AIconomy.exe` to run. Settings, logs and the encrypted key vault are stored in `%LOCALAPPDATA%\AIconomy\data` (place an empty `portable.txt` next to the `.exe` to keep data in a `data` folder beside it instead).
 3. Use the in-app **App Update** button anytime to pull future releases automatically.
+
+> **Note:** The `.exe` is not code-signed yet, so Windows SmartScreen may show a warning on first launch ("More info" → "Run anyway").
+
+### Files AIconomy modifies
+
+When you toggle tools, AIconomy updates only its own entries in these AI client configs (a `.bak` copy is written before any change, and nothing is written if the content did not change):
+
+| Client | File |
+|---|---|
+| Google Antigravity | `%USERPROFILE%\.gemini\config\mcp_config.json` |
+| OpenAI Codex | `%USERPROFILE%\.codex\config.toml` (marked block) |
+| Claude Code | `%USERPROFILE%\.claude.json`, `<project>\.mcp.json` |
+| Cursor | `%USERPROFILE%\.cursor\mcp.json`, `<project>\.cursor\mcp.json` |
+
+API keys are encrypted at rest with Windows DPAPI. However, when a tool that needs a key is enabled, the key is written **in plain text** into the client config above, because MCP clients read keys from those files.
 
 ---
 
