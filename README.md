@@ -1,54 +1,89 @@
 <p align="center">
-  <img src="assets/aiconomy.png" alt="AIconomy Logo" width="128" />
+  <img src="assets/aiconomy.png" alt="AIconomy Logo" width="112" />
 </p>
 
-# AIconomy
+<h1 align="center">AIconomy</h1>
 
-A native Windows desktop control center (`PySide6` / Qt 6) for managing MCP servers, AI coding assistants (**Google Antigravity**, **OpenAI Codex**, **Claude Code**, **Cursor**), local GPU/3D tools (**Blender**, **Unity**, **RenderDoc**, **Trellis**), and token schema budgets from one unified interface.
+<p align="center">
+  A minimalist native Windows desktop control center (PySide6 / Qt 6) for managing MCP servers, AI coding client configs, skill packs, local GPU/3D bridges, and context token budgets from one place.
+</p>
+
+<p align="center">
+  <a href="https://github.com/DoranPierst/AIconomy/releases/latest"><img src="https://img.shields.io/github/v/release/DoranPierst/AIconomy?style=flat-square" alt="Latest Release" /></a>
+  <img src="https://img.shields.io/badge/platform-Windows%2010%20%2F%2011-0078D4?style=flat-square" alt="Windows 10/11" />
+  <img src="https://img.shields.io/badge/python-3.11%2B-3776AB?style=flat-square" alt="Python 3.11+" />
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-22C55E?style=flat-square" alt="MIT License" /></a>
+</p>
+
+<p align="center">
+  <img src="assets/screenshot_dark.png" alt="AIconomy Dark Mode Interface" width="960" />
+</p>
 
 ---
 
-## ⬇️ Download (Windows)
+## Download (Windows 10 / 11)
 
-No Python or setup required:
+No Python installation required:
+
 1. Download **`AIconomy.exe`** from the [**Latest Release**](https://github.com/DoranPierst/AIconomy/releases/latest).
-2. Double-click `AIconomy.exe` to run. Settings, logs and the encrypted key vault are stored in `%LOCALAPPDATA%\AIconomy\data` (place an empty `portable.txt` next to the `.exe` to keep data in a `data` folder beside it instead).
-3. Use the in-app **App Update** button anytime to pull future releases automatically.
+2. Double-click `AIconomy.exe` to launch.
+3. Click the version badge in the footer (or **More menu -> Check for App Updates**) anytime to pull future GitHub releases automatically.
 
-> **Note:** The `.exe` is not code-signed yet, so Windows SmartScreen may show a warning on first launch ("More info" → "Run anyway").
+> **Windows SmartScreen note:** `AIconomy.exe` is currently unsigned, so Windows Defender SmartScreen may show a warning on first run (**More info** -> **Run anyway**). You can also inspect the source and build the executable locally with `build_exe.bat`.
 
-### Files AIconomy modifies
+---
 
-When you toggle tools, AIconomy updates only its own entries in these AI client configs (a `.bak` copy is written before any change, and nothing is written if the content did not change):
+## Key Features
 
-| Client | File |
+- **Unified Per-Client MCP Matrix (`AGY / CDX / CLD / CUR`):** Enable or disable MCP servers, CLI tools, rules, and skill packs per AI client (**Google Antigravity**, **OpenAI Codex**, **Claude Code**, **Cursor**), or bulk-toggle entire columns from the table header.
+- **Built-In & Custom Profiles:** Switch tool sets with a single top-bar **Profile** dropdown (`Unity & Shader`, `3D Assets`, `Web`, `Minimal`, or your own saved profiles) with JSON export/import support.
+- **Token Schema Budget Tracker:** Tracks active MCP tool schema footprint (`Active` vs `Saved` tokens) in real time as you enable or disable tools.
+- **Live Health, Process & Port Monitor:** Verifies real visible host windows (`IsWindowVisible`) and local TCP ports (`:9121`, `:8080`, `:9876`, `:8790`), safely starts/stops only managed bridges, and offers one-click minimized host launch for Unity, Blender, RenderDoc, or TRELLIS.
+- **Diagnostics Center:** Run end-to-end MCP handshakes (`initialize`, Blender `get_scene_info`, and `stdio` JSON-RPC probes) even when AI IDEs are closed, inspect stuck ports, and copy structured diagnostic reports.
+- **Plugin Updates & GitHub Installer:** Check PyPI / npm / GitHub updates in parallel, update tools individually or in batch, and inspect/add custom MCP servers from any GitHub repository URL.
+- **Persistent SQLite Logs & AI Troubleshooting Export:** Search and filter logs (`ERR`, `WARN`, `INFO`, `DBG`) and copy selected entries with affected tool metadata into a structured prompt for any AI assistant.
+- **100% English & Turkish UI:** Full live language switching with Windows OS locale auto-detection, plus Dark and Light themes and optional minimize-to-tray behavior.
+
+---
+
+## Files AIconomy Modifies
+
+When you toggle tools or change scopes, AIconomy updates **only its own managed entries** inside the AI client configs below using atomic writes. A `.bak` backup is written before any modification, and untouched files are never rewritten:
+
+| Client | Configuration File(s) |
 |---|---|
 | Google Antigravity | `%USERPROFILE%\.gemini\config\mcp_config.json` |
-| OpenAI Codex | `%USERPROFILE%\.codex\config.toml` (marked block) |
+| OpenAI Codex | `%USERPROFILE%\.codex\config.toml` (marked `# >>> BEGIN AICONOMY >>>` block) |
 | Claude Code | `%USERPROFILE%\.claude.json`, `<project>\.mcp.json` |
 | Cursor | `%USERPROFILE%\.cursor\mcp.json`, `<project>\.cursor\mcp.json` |
 
-API keys are encrypted at rest with Windows DPAPI. However, when a tool that needs a key is enabled, the key is written **in plain text** into the client config above, because MCP clients read keys from those files.
+### Data Storage & Portable Mode
+
+- Application state (`aiconomy-state.json`), SQLite logs (`aiconomy.db`), and encrypted API keys (`aiconomy-vault.dpapi.json`) are stored in `%LOCALAPPDATA%\AIconomy\data`.
+- Existing files from earlier versions (`hub_state.json`, `ai_hub_logs.db`, `vault.dpapi.json`) are migrated non-destructively on first launch.
+- To run in **portable mode**, create an empty `portable.txt` file next to `AIconomy.exe` to store data in a local `data\` folder beside the executable.
+
+### Security & API Keys
+
+- API keys entered in **Settings -> API Keys** are encrypted at rest on disk using Windows DPAPI (`CryptProtectData`, scoped to the current Windows user account).
+- **Plaintext-on-sync notice:** When a tool that requires an API key is enabled and synced to an AI client, that key is written **in plain text** into the enabled client's MCP config file listed above, because MCP clients read environment variables directly from those config files.
 
 ---
 
-## ✨ Key Features
+## Running from Source / Building Standalone EXE
 
-- **8 Built-in Languages:** 🇹🇷 Türkçe · 🇺🇸 English · 🇩🇪 Deutsch · 🇫🇷 Français · 🇪🇸 Español · 🇷🇺 Русский · 🇯🇵 日本語 · 🇨🇳 中文 (instant live switching + OS locale auto-detection).
-- **Per-Client & Per-Project MCP Matrix (`AGY / CDX / CLD / CUR`):** Toggle any tool per AI client or bulk-toggle entire columns from the table header. Supports global & project-scoped `.mcp.json` / `.cursor/mcp.json` / `config.toml` / `mcp_config.json` with automatic `.bak` backups.
-- **Real-Time Process, Window & Port Watcher (3s):** Verifies real visible GUI windows (`IsWindowVisible`) + TCP sockets (`:9121`, `:8080`, `:9876`, `:8790`), auto-heals dropped HTTP MCP bridges, and detects headless/zombie processes.
-- **🔌 End-to-End Connection Tester:** Tests HTTP MCP (`initialize`), Blender (`get_scene_info`), and `stdio` MCP handshakes directly — even when Antigravity or other AI IDEs are closed.
-- **Host-App Dependency Launcher:** Detects when an enabled tool's host program (`Unity`, `Blender`, `RenderDoc`, `Trellis`) is closed and offers 1-click headless/minimized startup.
-- **Custom Named Presets (`💾 My Presets`) & Multi-Select Profiles:** Save named configurations for different projects and switch back anytime.
-- **Windows DPAPI Encrypted Vault:** Stores API keys securely using Windows `CryptProtectData` (never plaintext).
-
----
-
-## 🛠️ For Developers (Running from Source / Building EXE)
+Requires **Windows 10/11**, **Python 3.11+**, and [**uv**](https://docs.astral.sh/uv/).
 
 ```powershell
 uv sync
 uv run python main.py
 ```
 
-Or double-click `start.bat` to launch without a console window, and `build_exe.bat` to build a standalone `dist/AIconomy.exe`.
+- Double-click `start.bat` to launch from source without a console window.
+- Double-click `build_exe.bat` to build a standalone `dist\AIconomy.exe` via PyInstaller.
+
+---
+
+## License
+
+Released under the [MIT License](LICENSE). See [CHANGELOG.md](CHANGELOG.md) for release history.

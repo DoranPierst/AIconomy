@@ -1,7 +1,7 @@
 [project]
 name = "aiconomy"
-version = "1.3.3"
-description = "AIconomy — AI Tools, MCP Servers, Skills & Token Economy Desktop Control Center (PySide6)"
+version = "1.4.0"
+description = "AIconomy — Minimalist Windows desktop control center for MCP servers, AI coding clients, skills, and token budgets (PySide6)"
 requires-python = ">=3.11"
 dependencies = [
     "pyside6>=6.7.0",

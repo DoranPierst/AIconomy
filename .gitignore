@@ -1,14 +1,15 @@
-# Kişisel veriler, şifreli kasa ve SQLite logları (Asla GitHub'a yüklenmez)
+# Local user state, encrypted DPAPI vault, and SQLite logs (never commit)
 data/
 dist/data/
 *.dpapi.json
 *.db
 *.db-journal
 *.aihub
+aiconomy-state*.json
 ai_arac_ayarlar*.json
 *.bak
 
-# Derleme ve sanal ortam çıktıları
+# Build artifacts, virtualenvs, and updater staging files
 .venv/
 __pycache__/
 *.py[cod]

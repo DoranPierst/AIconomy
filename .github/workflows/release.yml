@@ -2,10 +2,6 @@ name: Build & Release Windows EXE
 
 on:
   push:
-    branches:
-      - main
-    paths:
-      - "version.json"
     tags:
       - "v*"
   workflow_dispatch:

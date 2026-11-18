@@ -1,5 +1,5 @@
 {
-  "version": "1.3.3",
+  "version": "1.4.0",
   "update_repo": "https://github.com/DoranPierst/AIconomy",
-  "changelog": "Windows görev çubuğu ve küçük simgeler için arka planı tamamen şeffaf, tam boyutlu AI + gösterge yayı ikonu (.ico/.png) eklendi."
+  "changelog": "Major v1.4.0 overhaul: minimalist emoji-free 3-tab UI (Tools, Plugins, Logs), unified Profile combobox, Settings & Diagnostics dialogs, custom ToggleSwitch & status badges, modular architecture, critical safety & thread-safety fixes (managed-only process control, serialized atomic MCP config sync, QLocalServer single-instance, LOCALAPPDATA storage), and 100% English + Turkish localization."
 }
