@@ -11,7 +11,7 @@ import time
 import psutil
 from PySide6.QtWidgets import QApplication
 
-from app.main_window import MainWindow
+from app.main_window import MainWindow, create_app_icon
 from app.updater import get_current_app_version
 
 
@@ -90,8 +90,15 @@ def main() -> int:
         root_dir = pathlib.Path(__file__).resolve().parent
     data_dir = root_dir / "data"
 
+    if os.name == "nt":
+        try:
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("DoranPierst.AIconomy.App")
+        except Exception:
+            pass
+
     app = QApplication(sys.argv)
     app.setApplicationName("AIconomy")
+    app.setWindowIcon(create_app_icon())
     win = MainWindow(data_dir=data_dir)
     win.show()
     code = app.exec()
