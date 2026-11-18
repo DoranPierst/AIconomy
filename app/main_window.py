@@ -54,6 +54,7 @@ from .catalog import (
     build_default_catalog,
     describe_blender_skill,
 )
+from .i18n import SUPPORTED_LANGUAGES, detect_default_language, tr
 from .storage import LogDatabase, StateStore, WindowsDpapiVault
 from .system_ops import (
     check_all_tools_updates_parallel,
@@ -1306,6 +1307,10 @@ class MainWindow(QMainWindow):
         self._auto_heal_cooldown: dict[str, float] = {}
         self._last_warn_time: dict[str, float] = {}
         self._latest_live_map: dict[str, str] = {}
+        saved_lang = str(self.meta.get("lang") or "").strip().lower()
+        valid_langs = {c for c, _ in SUPPORTED_LANGUAGES}
+        self.lang = saved_lang if saved_lang in valid_langs else detect_default_language()
+        self.meta["lang"] = self.lang
         self.updating_busy = False
         self.checking_plugins_busy = False
         self.latest_app_check: UpdateCheckResult | None = None
@@ -1313,7 +1318,7 @@ class MainWindow(QMainWindow):
         self._startup_app_check = False
 
         app_ver = get_current_app_version()
-        self.setWindowTitle(f"AI Araç & Token Ekonomisi Kontrol Merkezi — Program Sürümü: {app_ver}v")
+        self.setWindowTitle(tr(self.lang, "app_title", ver=app_ver))
         self.setWindowIcon(create_app_icon())
         self.resize(1340, 760)
 
@@ -1321,6 +1326,7 @@ class MainWindow(QMainWindow):
         self._build_tray()
         self._apply_theme(self.meta.get("theme", "dark"))
         self._update_profile_buttons_ui()
+        self._retranslate_ui()
         for t in self.tools:
             t.live_location_detail = resolve_disk_location(t, self.projects_map, {})
         self._rebuild_project_filter_combo()
@@ -1364,7 +1370,8 @@ class MainWindow(QMainWindow):
 
         # 1. ÜST BAR: Hazır İş Modu Profilleri (Çoklu Seçilebilir) + Oto-Algılama + VRAM + Sayaç
         prof_bar = QHBoxLayout()
-        prof_bar.addWidget(QLabel("<b>🎯 Hazır Ayar:</b>"))
+        self.lbl_preset = QLabel(tr(self.lang, "preset_lbl"))
+        prof_bar.addWidget(self.lbl_preset)
         for p_key, p_info in PROFILES.items():
             btn = QPushButton(p_info["title"].replace("&", "&&"))
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -1390,29 +1397,29 @@ class MainWindow(QMainWindow):
         self.vram_bar.setFormat("VRAM: Ölçülüyor...")
         prof_bar.addWidget(self.vram_bar)
 
-        btn_vram_free = QPushButton("🧹 VRAM Boşalt")
-        btn_vram_free.setToolTip("Arka planda açık kalan Trellis GPU sunucusunu uyutup VRAM'i boşaltır")
-        btn_vram_free.clicked.connect(self._handle_free_vram)
-        prof_bar.addWidget(btn_vram_free)
+        self.btn_vram_free = QPushButton(tr(self.lang, "vram_free"))
+        self.btn_vram_free.setToolTip("Arka planda açık kalan Trellis GPU sunucusunu uyutup VRAM'i boşaltır")
+        self.btn_vram_free.clicked.connect(self._handle_free_vram)
+        prof_bar.addWidget(self.btn_vram_free)
 
         self.timer_lbl = QLabel("00:30")
         self.timer_lbl.setStyleSheet("font-family: Consolas, monospace; font-weight: 700; padding: 4px 8px;")
         prof_bar.addWidget(self.timer_lbl)
 
-        btn_refresh = QPushButton("↻ Durum Tara")
-        btn_refresh.setToolTip("Tüm araçların port, sağlık, VRAM ve canlı süreç durumlarını anında yeniler")
-        btn_refresh.clicked.connect(self.run_health_scan)
-        prof_bar.addWidget(btn_refresh)
+        self.btn_refresh = QPushButton(tr(self.lang, "scan_now"))
+        self.btn_refresh.setToolTip("Tüm araçların port, sağlık, VRAM ve canlı süreç durumlarını anında yeniler")
+        self.btn_refresh.clicked.connect(self.run_health_scan)
+        prof_bar.addWidget(self.btn_refresh)
 
-        btn_test_conns = QPushButton("🔌 Bağlantıları Test Et")
-        btn_test_conns.setToolTip(
+        self.btn_test_conns = QPushButton(tr(self.lang, "test_conns"))
+        self.btn_test_conns.setToolTip(
             "Antigravity açık olmasa bile tüm AÇIK araçlara gerçek MCP/soket/stdio testi atıp\n"
             "bağlantıların gerçekten çalışıp çalışmadığını doğrular."
         )
-        btn_test_conns.clicked.connect(self._open_connection_test_dialog)
-        prof_bar.addWidget(btn_test_conns)
+        self.btn_test_conns.clicked.connect(self._open_connection_test_dialog)
+        prof_bar.addWidget(self.btn_test_conns)
 
-        self.btn_app_update_top = QPushButton("🔄 Program Güncelleme")
+        self.btn_app_update_top = QPushButton(tr(self.lang, "app_update"))
         self.btn_app_update_top.setObjectName("primaryBtn")
         self.btn_app_update_top.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.btn_app_update_top.setToolTip(
@@ -1424,9 +1431,9 @@ class MainWindow(QMainWindow):
         self.btn_app_update_top.customContextMenuRequested.connect(lambda _pos: self._open_app_update_dialog(self.latest_app_check))
         prof_bar.addWidget(self.btn_app_update_top)
 
-        btn_sync = QPushButton("🔄 AI Config'lere Yaz")
-        btn_sync.setObjectName("successBtn")
-        btn_sync.setToolTip(
+        self.btn_sync = QPushButton(tr(self.lang, "sync_configs"))
+        self.btn_sync.setObjectName("successBtn")
+        self.btn_sync.setToolTip(
             "Global ve Proje Bazlı yapılandırmaları yedek (.bak) alarak yazar:\n"
             "• Antigravity (AGY): ~/.gemini/config/mcp_config.json\n"
             "• Codex (CDX): ~/.codex/config.toml\n"
@@ -1434,12 +1441,22 @@ class MainWindow(QMainWindow):
             "• Cursor (CUR): ~/.cursor/mcp.json ve <proje>/.cursor/mcp.json\n"
             "• Program Ayar Yedeği: data/hub_state.json"
         )
-        btn_sync.clicked.connect(self._handle_sync_configs)
-        prof_bar.addWidget(btn_sync)
+        self.btn_sync.clicked.connect(self._handle_sync_configs)
+        prof_bar.addWidget(self.btn_sync)
 
-        btn_theme = QPushButton("🌗 Tema")
-        btn_theme.clicked.connect(self._toggle_theme)
-        prof_bar.addWidget(btn_theme)
+        self.lang_cmb = QComboBox()
+        self.lang_cmb.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.lang_cmb.setToolTip("Arayüz Dili / Interface Language")
+        for l_code, l_lbl in SUPPORTED_LANGUAGES:
+            self.lang_cmb.addItem(l_lbl, l_code)
+        l_idx = self.lang_cmb.findData(self.lang)
+        self.lang_cmb.setCurrentIndex(max(0, l_idx))
+        self.lang_cmb.currentIndexChanged.connect(self._on_language_changed)
+        prof_bar.addWidget(self.lang_cmb)
+
+        self.btn_theme = QPushButton(tr(self.lang, "theme"))
+        self.btn_theme.clicked.connect(self._toggle_theme)
+        prof_bar.addWidget(self.btn_theme)
 
         main_lay.addLayout(prof_bar)
 
@@ -1526,19 +1543,28 @@ class MainWindow(QMainWindow):
         flt.addWidget(self.search_inp)
 
         self.kind_cmb = QComboBox()
-        self.kind_cmb.addItems(["Tüm Türler", "Skill Paketi", "Skill / Kural", "stdio MCP", "HTTP Servis", "CLI / GPU"])
-        self.kind_cmb.currentTextChanged.connect(self._refresh_table)
+        for k_data, k_lbl in [
+            ("ALL", tr(self.lang, "all_types")),
+            ("Skill Paketi", "Skill Paketi"),
+            ("Skill / Kural", "Skill / Kural"),
+            ("stdio MCP", "stdio MCP"),
+            ("HTTP Servis", "HTTP Servis"),
+            ("CLI / GPU", "CLI / GPU"),
+        ]:
+            self.kind_cmb.addItem(k_lbl, k_data)
+        self.kind_cmb.currentIndexChanged.connect(self._refresh_table)
         flt.addWidget(self.kind_cmb)
 
-        flt.addWidget(QLabel("Proje:"))
+        self.lbl_proj_flt = QLabel(tr(self.lang, "project_lbl"))
+        flt.addWidget(self.lbl_proj_flt)
         self.proj_filter_cmb = QComboBox()
         self.proj_filter_cmb.currentIndexChanged.connect(self._refresh_table)
         flt.addWidget(self.proj_filter_cmb)
 
-        btn_add_proj = QPushButton("➕ Proje Klasörü Tanımla")
-        btn_add_proj.setToolTip("Yeni bir oyun veya web sitesi klasörünü proje listesine ekler")
-        btn_add_proj.clicked.connect(lambda: self._prompt_add_project_folder(assign_tool=None))
-        flt.addWidget(btn_add_proj)
+        self.btn_add_proj = QPushButton(tr(self.lang, "add_project"))
+        self.btn_add_proj.setToolTip("Yeni bir oyun veya web sitesi klasörünü proje listesine ekler")
+        self.btn_add_proj.clicked.connect(lambda: self._prompt_add_project_folder(assign_tool=None))
+        flt.addWidget(self.btn_add_proj)
 
         flt.addStretch()
 
@@ -1549,7 +1575,8 @@ class MainWindow(QMainWindow):
         pb_lay.setContentsMargins(8, 3, 8, 3)
         pb_lay.setSpacing(6)
 
-        pb_lay.addWidget(QLabel("<b>💾 Kayıtlarım:</b>"))
+        self.lbl_saved_presets = QLabel(tr(self.lang, "saved_presets_lbl"))
+        pb_lay.addWidget(self.lbl_saved_presets)
 
         self.saved_presets_cmb = QComboBox()
         self.saved_presets_cmb.setMinimumWidth(220)
@@ -1561,12 +1588,12 @@ class MainWindow(QMainWindow):
         self.saved_presets_cmb.currentIndexChanged.connect(self._on_custom_preset_selected)
         pb_lay.addWidget(self.saved_presets_cmb)
 
-        btn_save_preset = QPushButton("💾 Kaydet")
-        btn_save_preset.setObjectName("primaryBtn")
-        btn_save_preset.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn_save_preset.setToolTip("Şu anki araç, AI ve proje ayarlarınızı istediğiniz bir isimle kaydeder")
-        btn_save_preset.clicked.connect(self._save_custom_preset)
-        pb_lay.addWidget(btn_save_preset)
+        self.btn_save_preset = QPushButton(tr(self.lang, "save_btn"))
+        self.btn_save_preset.setObjectName("primaryBtn")
+        self.btn_save_preset.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_save_preset.setToolTip("Şu anki araç, AI ve proje ayarlarınızı istediğiniz bir isimle kaydeder")
+        self.btn_save_preset.clicked.connect(self._save_custom_preset)
+        pb_lay.addWidget(self.btn_save_preset)
 
         self.btn_del_preset = QPushButton("🗑️")
         self.btn_del_preset.setFixedSize(28, 26)
@@ -1671,8 +1698,8 @@ class MainWindow(QMainWindow):
         cur_data = self.proj_filter_cmb.currentData() if self.proj_filter_cmb.count() else "ALL"
         self.proj_filter_cmb.blockSignals(True)
         self.proj_filter_cmb.clear()
-        self.proj_filter_cmb.addItem("Tüm Kapsamlar", "ALL")
-        self.proj_filter_cmb.addItem("🌐 Sadece Global (Tüm Projeler)", "GLOBAL")
+        self.proj_filter_cmb.addItem(tr(self.lang, "all_scopes"), "ALL")
+        self.proj_filter_cmb.addItem(tr(self.lang, "global_only"), "GLOBAL")
         for p_name in sorted(self.projects_map.keys()):
             self.proj_filter_cmb.addItem(f"📁 {p_name}", p_name)
         idx = self.proj_filter_cmb.findData(cur_data)
@@ -1710,14 +1737,14 @@ class MainWindow(QMainWindow):
 
     def _update_panel_header_indicators(self) -> None:
         base_labels = [
-            "Araç",
-            "Tür",
-            "Proje / Konum",
-            "Son Yanıt",
-            "Kullanım",
+            tr(self.lang, "col_tool"),
+            tr(self.lang, "col_kind"),
+            tr(self.lang, "col_project"),
+            tr(self.lang, "col_ping"),
+            tr(self.lang, "col_usage"),
             "",
-            "Çalışma Modu",
-            "Detay / Durum",
+            tr(self.lang, "col_mode"),
+            tr(self.lang, "col_status"),
         ]
         key_to_col = {
             "name": 0,
@@ -1782,7 +1809,7 @@ class MainWindow(QMainWindow):
 
     def _refresh_table(self) -> None:
         q = self.search_inp.text().strip().lower()
-        kf = self.kind_cmb.currentText()
+        kf = str(self.kind_cmb.currentData() or "ALL")
         pf = self.proj_filter_cmb.currentData() or "ALL"
 
         rows: list[ToolSpec] = []
@@ -1795,7 +1822,7 @@ class MainWindow(QMainWindow):
                 and q not in t.live_location_detail.lower()
             ):
                 continue
-            if kf != "Tüm Türler" and t.kind != kf:
+            if kf != "ALL" and t.kind != kf:
                 continue
             if pf == "GLOBAL" and (not t.scope_selectable or t.project_scope != "GLOBAL"):
                 continue
@@ -1977,7 +2004,7 @@ class MainWindow(QMainWindow):
                 g_btn.clicked.connect(lambda _=False, tool_obj=t: self.open_gear(tool_obj))
                 act_l.addWidget(g_btn)
 
-            t_btn = QPushButton("AÇIK" if t.enabled else "KAPALI")
+            t_btn = QPushButton(tr(self.lang, "state_on") if t.enabled else tr(self.lang, "state_off"))
             t_btn.setFixedWidth(66)
             if t.enabled:
                 t_btn.setObjectName("primaryBtn")
@@ -1986,9 +2013,7 @@ class MainWindow(QMainWindow):
             self.table.setCellWidget(r_idx, 7, act_w)
 
         active_k, saved_k = self._calculate_token_economy()
-        self.token_summary_lbl.setText(
-            f"Aktif Şema Yükü: ~{active_k}K tok  |  Korunan (Tasarruf): +{saved_k}K tok"
-        )
+        self.token_summary_lbl.setText(tr(self.lang, "token_summary", act=active_k, sav=saved_k))
         self.table.resizeColumnToContents(6)
         self._update_bulk_client_buttons()
         self._update_panel_selection_ui()
@@ -2720,6 +2745,50 @@ class MainWindow(QMainWindow):
         self._refresh_table()
         self._refresh_plugins_tab()
         self._save_state()
+
+    def _on_language_changed(self) -> None:
+        code = str(self.lang_cmb.currentData() or "en")
+        if code == self.lang:
+            return
+        self.lang = code
+        self.meta["lang"] = code
+        self._save_state()
+        self._retranslate_ui()
+        self._rebuild_project_filter_combo()
+        self._rebuild_custom_presets_combo()
+        self._refresh_table()
+        self._refresh_logs_tab()
+        lang_lbl = dict(SUPPORTED_LANGUAGES).get(code, code)
+        self.set_status(tr(self.lang, "lang_changed", lang=lang_lbl))
+
+    def _retranslate_ui(self) -> None:
+        app_ver = get_current_app_version()
+        self.setWindowTitle(tr(self.lang, "app_title", ver=app_ver))
+        self.lbl_preset.setText(tr(self.lang, "preset_lbl"))
+        self.auto_detect_cb.setText(tr(self.lang, "auto_detect"))
+        self.btn_vram_free.setText(tr(self.lang, "vram_free"))
+        self.btn_refresh.setText(tr(self.lang, "scan_now"))
+        self.btn_test_conns.setText(tr(self.lang, "test_conns"))
+        if not (self.latest_app_check and self.latest_app_check.has_update):
+            self.btn_app_update_top.setText(tr(self.lang, "app_update"))
+        self.btn_sync.setText(tr(self.lang, "sync_configs"))
+        self.btn_theme.setText(tr(self.lang, "theme"))
+
+        self.search_inp.setPlaceholderText(tr(self.lang, "search_ph"))
+        if self.kind_cmb.count() > 0:
+            self.kind_cmb.setItemText(0, tr(self.lang, "all_types"))
+        self.lbl_proj_flt.setText(tr(self.lang, "project_lbl"))
+        self.btn_add_proj.setText(tr(self.lang, "add_project"))
+        self.lbl_saved_presets.setText(tr(self.lang, "saved_presets_lbl"))
+        self.btn_save_preset.setText(tr(self.lang, "save_btn"))
+        self.btn_do_app_upd.setText(tr(self.lang, "ver_btn", ver=app_ver))
+
+        self.tabs.setTabText(0, tr(self.lang, "tab_panel", n=len(self.tools)))
+        if not any(t.has_update for t in self.tools):
+            self.tabs.setTabText(1, tr(self.lang, "tab_plugins"))
+        self.tabs.setTabText(2, tr(self.lang, "tab_vault"))
+        self.tabs.setTabText(3, tr(self.lang, "tab_repo"))
+        self._update_panel_header_indicators()
 
     def _apply_theme(self, mode: str) -> None:
         self.meta["theme"] = mode

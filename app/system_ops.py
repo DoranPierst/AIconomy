@@ -442,14 +442,12 @@ def free_trellis_vram() -> tuple[bool, str]:
 
 
 def _find_blender_exe() -> pathlib.Path | None:
-    for cand in (
-        pathlib.Path(r"C:\Program Files\Blender Foundation\Blender 5.2\blender.exe"),
-        pathlib.Path(r"C:\Program Files\Blender Foundation\Blender 5.1\blender.exe"),
-        pathlib.Path(r"C:\Program Files\Blender Foundation\Blender 5.0\blender.exe"),
-        pathlib.Path(r"C:\Program Files\Blender Foundation\Blender 4.3\blender.exe"),
-    ):
-        if cand.is_file():
-            return cand
+    base = pathlib.Path(r"C:\Program Files\Blender Foundation")
+    if base.is_dir():
+        cands = sorted(base.glob("Blender */blender.exe"), reverse=True)
+        for cand in cands:
+            if cand.is_file():
+                return cand
     found = shutil.which("blender")
     return pathlib.Path(found) if found else None
 
@@ -497,7 +495,7 @@ def get_missing_host_dependencies(
         missing.append(
             {
                 "host": "blender",
-                "title": "Blender 5.2 kapalı",
+                "title": "Blender kapalı",
                 "detail": "Blender MCP AÇIK; bağlanabilmesi için Blender'ın başlatılması gerekir (eklenti -b arkaplan modunu desteklemediği için simge durumunda açılır).",
                 "btn_label": "🚀 Blender'ı Başlat (Simge + :9876)",
                 "headless": False,
@@ -603,7 +601,7 @@ def launch_host_app_for_tool(
         return True, "RenderDoc simge durumunda başlatıldı."
 
     if host_kind == "trellis":
-        srv_exe = pathlib.Path(trellis_root or r"D:\Programs\TrainAI\Trellis") / "runtime" / "trellis-server.exe"
+        srv_exe = pathlib.Path(trellis_root or str(pathlib.Path.home() / "Trellis")) / "runtime" / "trellis-server.exe"
         if not srv_exe.is_file():
             return False, f"Trellis sunucusu bulunamadı: {srv_exe}"
         subprocess.Popen([str(srv_exe)], creationflags=NO_WINDOW)
@@ -630,8 +628,8 @@ def resolve_disk_location(tool: ToolSpec, projects_map: dict[str, str], live_map
     if tool.id == "blender_mcp":
         if "blender" in live_map:
             return live_map["blender"]
-        b_exe = pathlib.Path(r"C:\Program Files\Blender Foundation\Blender 5.2\blender.exe")
-        return f"Kurulu: {b_exe}" if b_exe.is_file() else "Blender köprüsü (:9876)"
+        b_exe = _find_blender_exe()
+        return f"Kurulu: {b_exe}" if b_exe else "Blender köprüsü (:9876)"
 
     if tool.id == "trellis":
         if "trellis" in live_map:

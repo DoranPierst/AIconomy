@@ -39,12 +39,16 @@ AI_CLIENTS: list[tuple[str, str]] = [
 
 
 def _detect_local_unity_project() -> pathlib.Path | None:
-    for desktop_dir in [
+    for base_dir in [
         pathlib.Path.home() / "Desktop",
-        pathlib.Path("D:/Windows Klasörleri/Desktop"),
+        pathlib.Path.home() / "Documents",
+        pathlib.Path.home() / "Projects",
+        pathlib.Path.home() / "Unity",
     ]:
-        if desktop_dir.is_dir():
-            for child in desktop_dir.iterdir():
+        if base_dir.is_dir():
+            for child in base_dir.iterdir():
+                if not child.is_dir():
+                    continue
                 nested = child / child.name
                 if (nested / "Packages" / "manifest.json").is_file():
                     return nested
@@ -55,8 +59,9 @@ def _detect_local_unity_project() -> pathlib.Path | None:
 
 def _detect_local_trellis_dir() -> str:
     candidates = [
-        pathlib.Path("D:/Programs/TrainAI/Trellis"),
         pathlib.Path.home() / "Trellis",
+        pathlib.Path("C:/Trellis"),
+        pathlib.Path("D:/Trellis"),
     ]
     for c in candidates:
         if c.is_dir():
@@ -411,7 +416,7 @@ def build_default_catalog() -> list[ToolSpec]:
             enabled=False,
             clients={"AGY": True, "CDX": True, "CLD": False, "CUR": False},
             scope_selectable=False,
-            fixed_location_label="🖥️ Blender 5.2 (:9876)",
+            fixed_location_label="🖥️ Blender (:9876)",
             modes=[],
             has_gear=True,
             port=9876,

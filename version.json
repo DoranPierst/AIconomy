@@ -1,5 +1,5 @@
 {
-  "version": "1.2.14",
+  "version": "1.3.0",
   "update_repo": "https://github.com/DoranPierst/ai-arac-merkezi",
-  "changelog": "Port Kurtarıcı butonları log temizlemeyle karışmaması için '🔌 Asılı Portu Kapat' olarak ayrıldı ve açık editör/boş port durumlarında gereksiz sarı WARN yerine INFO kaydı yazılacak şekilde güncellendi."
+  "changelog": "Public sürüm (v1.3.0): 8 dil desteği (TR, EN, DE, FR, ES, RU, JA, ZH), kişisel bilgisayar yollarının genel otomatik algılamayla değiştirilmesi ve tür filtreleme mantığı düzeltmesi."
 }
