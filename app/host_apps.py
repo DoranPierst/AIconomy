@@ -1,4 +1,4 @@
-"""Host desktop application discovery and launching (Blender, Unity Editor, RenderDoc, TRELLIS)."""
+"""Host desktop application discovery and launching (emoji-free, EN & TR)."""
 from __future__ import annotations
 
 import os
@@ -60,8 +60,10 @@ def get_missing_host_dependencies(
     tools: list[ToolSpec],
     live_map: dict[str, str],
     projects_map: dict[str, str],
+    lang: str = "en",
 ) -> list[dict[str, Any]]:
     """Return enabled tools whose host desktop application or local server is not running yet."""
+    is_tr = lang == "tr"
     by_id = {t.id: t for t in tools}
     missing: list[dict[str, Any]] = []
 
@@ -70,9 +72,13 @@ def get_missing_host_dependencies(
         missing.append(
             {
                 "host": "blender",
-                "title": "Blender kapalı",
-                "detail": "Blender MCP AÇIK; bağlanabilmesi için Blender'ın başlatılması gerekir (eklenti -b arkaplan modunu desteklemediği için simge durumunda açılır).",
-                "btn_label": "🚀 Blender'ı Başlat (Simge + :9876)",
+                "title": "Blender kapalı" if is_tr else "Blender closed",
+                "detail": (
+                    "Blender MCP açık; bağlanabilmek için Blender simge durumunda başlatılıp :9876 köprüsü açılır."
+                    if is_tr
+                    else "Blender MCP is enabled; launches Blender minimized and starts the :9876 socket bridge."
+                ),
+                "btn_label": "Blender'ı Başlat" if is_tr else "Launch Blender",
                 "headless": False,
                 "scope": bm.project_scope,
             }
@@ -85,9 +91,13 @@ def get_missing_host_dependencies(
         missing.append(
             {
                 "host": "unity",
-                "title": "Unity Editor kapalı",
-                "detail": "Unity MCP / Pipeline AÇIK; sahne/editor komutları için Unity Editor çalıştırılmalıdır (projeyi kilitlememesi için normal Editor odak çalmadan simge durumunda açılır).",
-                "btn_label": "🚀 Unity Editor'ü Başlat (Simge)",
+                "title": "Unity Editor kapalı" if is_tr else "Unity Editor closed",
+                "detail": (
+                    "Unity MCP / Pipeline açık; projeyi kilitlememesi için normal Unity Editor simge durumunda açılır."
+                    if is_tr
+                    else "Unity MCP / Pipeline is enabled; launches Unity Editor minimized without stealing focus."
+                ),
+                "btn_label": "Unity'yi Başlat" if is_tr else "Launch Unity",
                 "headless": False,
                 "scope": target_scope,
             }
@@ -98,26 +108,34 @@ def get_missing_host_dependencies(
         missing.append(
             {
                 "host": "renderdoc",
-                "title": "RenderDoc kapalı",
-                "detail": "RenderDoc MCP AÇIK; GPU kare analizi için RenderDoc başlatılabilir.",
-                "btn_label": "🚀 RenderDoc Başlat (Simge)",
+                "title": "RenderDoc kapalı" if is_tr else "RenderDoc closed",
+                "detail": (
+                    "RenderDoc MCP açık; GPU kare analizi için RenderDoc simge durumunda başlatılabilir."
+                    if is_tr
+                    else "RenderDoc MCP is enabled; launches RenderDoc minimized."
+                ),
+                "btn_label": "RenderDoc Başlat" if is_tr else "Launch RenderDoc",
                 "headless": False,
                 "scope": rd.project_scope,
             }
         )
 
-    tr = by_id.get("trellis")
-    if tr and tr.enabled and "trellis" not in live_map:
-        srv_exe = pathlib.Path(tr.param_value) / "runtime" / "trellis-server.exe"
+    tr_tool = by_id.get("trellis")
+    if tr_tool and tr_tool.enabled and "trellis" not in live_map:
+        srv_exe = pathlib.Path(tr_tool.param_value) / "runtime" / "trellis-server.exe"
         if srv_exe.is_file():
             missing.append(
                 {
                     "host": "trellis",
-                    "title": "Trellis GPU sunucusu uykuda",
-                    "detail": "Trellis AÇIK; yerel 3D sunucu UI'sız olarak başlatılabilir.",
-                    "btn_label": "🚀 Trellis Başlat (UI'sız)",
+                    "title": "TRELLIS uykuda" if is_tr else "TRELLIS standby",
+                    "detail": (
+                        "TRELLIS açık; yerel GPU sunucusu arka planda başlatılabilir."
+                        if is_tr
+                        else "TRELLIS is enabled; starts the local GPU server in the background."
+                    ),
+                    "btn_label": "TRELLIS Başlat" if is_tr else "Start TRELLIS",
                     "headless": True,
-                    "scope": tr.project_scope,
+                    "scope": tr_tool.project_scope,
                 }
             )
 
@@ -128,10 +146,12 @@ def launch_host_app_for_tool(
     host_kind: str,
     projects_map: dict[str, str],
     target_scope: str = "GLOBAL",
-    headless: bool = True,
+    headless: bool = False,
     trellis_root: str = "",
+    lang: str = "en",
 ) -> tuple[bool, str]:
     """Launch a required host app minimized (without stealing focus) or headless when supported."""
+    is_tr = lang == "tr"
     si_minimized = None
     if os.name == "nt":
         si_minimized = subprocess.STARTUPINFO()
@@ -141,13 +161,17 @@ def launch_host_app_for_tool(
     if host_kind == "blender":
         b_exe = _find_blender_exe()
         if not b_exe:
-            return False, "Blender.exe sistemde bulunamadı."
+            return False, ("blender.exe sistemde bulunamadı." if is_tr else "blender.exe was not found on this machine.")
         py_expr = (
             "import bpy; "
             "bpy.app.timers.register(lambda: (bpy.ops.blendermcp.start_server() if hasattr(bpy.ops, 'blendermcp') else None), first_interval=1.2)"
         )
         subprocess.Popen([str(b_exe), "--python-expr", py_expr], startupinfo=si_minimized)
-        return True, "Blender odak çalmadan simge durumunda başlatıldı ve :9876 MCP köprüsü tetiklendi."
+        return True, (
+            "Blender simge durumunda başlatıldı ve :9876 MCP köprüsü tetiklendi."
+            if is_tr
+            else "Launched Blender minimized and triggered the :9876 MCP bridge."
+        )
 
     if host_kind == "unity":
         proj_path: pathlib.Path | None = None
@@ -157,29 +181,45 @@ def launch_host_app_for_tool(
             proj_path = pathlib.Path(next(iter(projects_map.values())))
         u_exe = _find_unity_exe(proj_path)
         if not u_exe:
-            return False, "Unity.exe kurulumu bulunamadı."
+            return False, ("Unity.exe kurulumu bulunamadı." if is_tr else "Unity.exe installation was not found.")
         cmd = [str(u_exe)]
         if proj_path and proj_path.is_dir():
             cmd.extend(["-projectPath", str(proj_path)])
         if headless:
             cmd.extend(["-batchmode", "-nographics"])
             subprocess.Popen(cmd, creationflags=NO_WINDOW)
-            return True, f"Unity arka planda UI'sız (-batchmode -nographics) başlatıldı: {proj_path or u_exe.name}"
+            return True, (
+                f"Unity arka planda başlatıldı: {proj_path or u_exe.name}"
+                if is_tr
+                else f"Started Unity in batchmode: {proj_path or u_exe.name}"
+            )
         subprocess.Popen(cmd, startupinfo=si_minimized)
-        return True, f"Unity Editor simge durumunda başlatıldı: {proj_path or u_exe.name}"
+        return True, (
+            f"Unity Editor simge durumunda başlatıldı: {proj_path or u_exe.name}"
+            if is_tr
+            else f"Launched Unity Editor minimized: {proj_path or u_exe.name}"
+        )
 
     if host_kind == "renderdoc":
         r_exe = _find_renderdoc_exe()
         if not r_exe:
-            return False, "qrenderdoc.exe bulunamadı."
+            return False, ("qrenderdoc.exe bulunamadı." if is_tr else "qrenderdoc.exe was not found.")
         subprocess.Popen([str(r_exe)], startupinfo=si_minimized)
-        return True, "RenderDoc simge durumunda başlatıldı."
+        return True, ("RenderDoc simge durumunda başlatıldı." if is_tr else "Launched RenderDoc minimized.")
 
     if host_kind == "trellis":
         srv_exe = pathlib.Path(trellis_root or str(pathlib.Path.home() / "Trellis")) / "runtime" / "trellis-server.exe"
         if not srv_exe.is_file():
-            return False, f"Trellis sunucusu bulunamadı: {srv_exe}"
+            return False, (
+                f"TRELLIS sunucusu bulunamadı: {srv_exe}"
+                if is_tr
+                else f"TRELLIS server not found: {srv_exe}"
+            )
         subprocess.Popen([str(srv_exe)], creationflags=NO_WINDOW)
-        return True, "Trellis GPU sunucusu UI'sız olarak arka planda başlatıldı."
+        return True, (
+            "TRELLIS GPU sunucusu arka planda başlatıldı."
+            if is_tr
+            else "Started TRELLIS GPU server in the background."
+        )
 
-    return False, f"Bilinmeyen hedef program: {host_kind}"
+    return False, (f"Bilinmeyen hedef program: {host_kind}" if is_tr else f"Unknown host application: {host_kind}")

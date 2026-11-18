@@ -1,4 +1,4 @@
-"""Self-updater dialog."""
+"""Self-updater dialog (emoji-free, standard vX.Y.Z format, EN & TR)."""
 from __future__ import annotations
 
 import threading
@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
+from ...i18n import tr
 from ...updater import (
     UpdateCheckResult,
     apply_self_update,
@@ -25,7 +26,6 @@ from ...updater import (
     get_current_app_version,
     resolve_effective_app_repo,
     restart_running_python_app,
-    stamp_repo_into_version_json,
 )
 
 if TYPE_CHECKING:
@@ -38,26 +38,29 @@ class AppUpdateDialog(QDialog):
     def __init__(self, parent: "MainWindow", initial_result: UpdateCheckResult | None = None) -> None:
         super().__init__(parent)
         self.main_win = parent
+        self.lang = parent.lang
         self.last_check: UpdateCheckResult | None = initial_result
         cur_ver = get_current_app_version()
-        self.setWindowTitle(f"🔄 Program Güncelleme Merkezi (Kullandığınız Sürüm: v{cur_ver})")
-        self.resize(620, 380)
+        self.setWindowTitle(tr(self.lang, "upd_title", ver=cur_ver))
+        self.resize(600, 380)
 
         lay = QVBoxLayout(self)
+        lay.setSpacing(10)
 
         cur_repo = resolve_effective_app_repo(str(parent.meta.get("app_update_repo", "")))
 
         top_bar = QHBoxLayout()
-        self.status_badge = QLabel("🔍 Güncel sürüm kontrol ediliyor..." if cur_repo else "⚠️ Güncelleme kanalı henüz bağlanmadı")
-        self.status_badge.setStyleSheet("font-weight: 700; font-size: 14px;")
+        self.status_badge = QLabel(
+            tr(self.lang, "upd_checking") if cur_repo else tr(self.lang, "upd_no_channel")
+        )
+        self.status_badge.setStyleSheet("font-weight: 700; font-size: 13px;")
         top_bar.addWidget(self.status_badge, stretch=1)
 
         self.notes_link_lbl = QLabel("")
         self.notes_link_lbl.setOpenExternalLinks(True)
         top_bar.addWidget(self.notes_link_lbl)
 
-        self.btn_toggle_channel = QPushButton("⚙️ Kanal Ayarı")
-        self.btn_toggle_channel.setToolTip("Güncellemelerin çekildiği GitHub depo adresini görüntüler veya değiştirir")
+        self.btn_toggle_channel = QPushButton(tr(self.lang, "upd_channel_btn"))
         self.btn_toggle_channel.clicked.connect(self._toggle_repo_card)
         top_bar.addWidget(self.btn_toggle_channel)
         lay.addLayout(top_bar)
@@ -65,18 +68,13 @@ class AppUpdateDialog(QDialog):
         self.repo_card = QFrame()
         self.repo_card.setObjectName("card")
         r_lay = QVBoxLayout(self.repo_card)
-        r_lay.addWidget(
-            QLabel(
-                "<b>GitHub Güncelleme Kanalı</b> "
-                "<span style='color:#94a3b8;'>(Kaydettiğinizde ürettiğiniz .exe içine gömülür; paylaştığınız kişiler adres girmeden günceller)</span>"
-            )
-        )
+        r_lay.addWidget(QLabel(f"<b>{tr(self.lang, 'upd_channel_hdr')}</b>"))
         row = QHBoxLayout()
         self.repo_inp = QLineEdit(cur_repo)
         self.repo_inp.setPlaceholderText("https://github.com/DoranPierst/AIconomy")
         row.addWidget(self.repo_inp, stretch=1)
 
-        btn_save_repo = QPushButton("💾 Kanalı Kaydet && Kontrol Et")
+        btn_save_repo = QPushButton(tr(self.lang, "upd_channel_save"))
         btn_save_repo.setObjectName("primaryBtn")
         btn_save_repo.clicked.connect(self.run_check)
         row.addWidget(btn_save_repo)
@@ -87,7 +85,7 @@ class AppUpdateDialog(QDialog):
 
         self.info_box = QPlainTextEdit()
         self.info_box.setReadOnly(True)
-        self.info_box.setPlaceholderText("Sürüm karşılaştırması ve güncelleme notları burada görünür...")
+        self.info_box.setPlaceholderText(tr(self.lang, "upd_info_ph"))
         lay.addWidget(self.info_box, stretch=1)
 
         self.dl_bar = QProgressBar()
@@ -95,14 +93,14 @@ class AppUpdateDialog(QDialog):
         lay.addWidget(self.dl_bar)
 
         bot = QHBoxLayout()
-        self.btn_check = QPushButton("🔍 Şimdi Tekrar Kontrol Et")
+        self.btn_check = QPushButton(tr(self.lang, "upd_btn_recheck"))
         self.btn_check.clicked.connect(self.run_check)
         bot.addWidget(self.btn_check)
 
         bot.addStretch()
-        btn_close = QPushButton("Kapat")
+        btn_close = QPushButton(tr(self.lang, "btn_close"))
         btn_close.clicked.connect(self.reject)
-        self.btn_apply = QPushButton("✓ Sürüm Güncel")
+        self.btn_apply = QPushButton(tr(self.lang, "upd_btn_up_to_date"))
         self.btn_apply.setObjectName("successBtn")
         self.btn_apply.setEnabled(False)
         self.btn_apply.clicked.connect(self.run_apply)
@@ -118,12 +116,6 @@ class AppUpdateDialog(QDialog):
             self._render_result(initial_result)
         elif cur_repo:
             QTimer.singleShot(120, self.run_check)
-        else:
-            self.info_box.setPlainText(
-                "Bu programı arkadaşlarınıza veya topluluğa gönderdiğinizde tek tıkla güncelleme alabilmeleri için:\n\n"
-                "1) GitHub'da oluşturduğunuz açık kaynak (Public) repo linkini yukarıdaki kutuya yapıştırıp kaydedin.\n"
-                "2) Siz yeni bir sürüm yayınladığınızda, programı paylaştığınız herkes üst bardaki '🔄 Program Güncelle' butonuna basarak (veya programı açtığında gelen bildirimle) tekrar indirme yapmadan otomatik güncellenir."
-            )
 
     def _toggle_repo_card(self) -> None:
         self.repo_card.setVisible(not self.repo_card.isVisible())
@@ -132,15 +124,14 @@ class AppUpdateDialog(QDialog):
         repo = self.repo_inp.text().strip()
         if repo:
             self.main_win.meta["app_update_repo"] = repo
-            stamp_repo_into_version_json(repo)
             self.main_win._save_state()
         else:
             repo = resolve_effective_app_repo(str(self.main_win.meta.get("app_update_repo", "")))
         self.btn_check.setEnabled(False)
         self.btn_apply.setEnabled(False)
-        self.status_badge.setText("🔍 GitHub üzerinden son sürüm kontrol ediliyor...")
-        self.status_badge.setStyleSheet("color: #94a3b8; font-weight: 700; font-size: 14px;")
-        self.info_box.setPlainText("GitHub üzerinden son sürüm ve değişiklik notları kontrol ediliyor...")
+        self.status_badge.setText(tr(self.lang, "upd_checking"))
+        self.status_badge.setStyleSheet("color: #94a3b8; font-weight: 700; font-size: 13px;")
+        self.info_box.setPlainText(tr(self.lang, "upd_checking"))
         tok = self.main_win.vault.get_secret("GITHUB_TOKEN")
 
         def worker() -> None:
@@ -151,12 +142,7 @@ class AppUpdateDialog(QDialog):
 
     def _on_checked(self, res: UpdateCheckResult) -> None:
         if not res.ok and res.repo_url:
-            self.main_win.logs.add(
-                "WARN",
-                "Program Güncelleyici",
-                f"Sürüm kontrol uyarısı: {res.message}",
-                f"Repo: {res.repo_url}\nDetay: {res.message}",
-            )
+            self.main_win.logs.add("WARN", "Updater", res.message, f"Repo: {res.repo_url}\n{res.message}")
             self.main_win._refresh_logs_tab()
         if not self.isVisible():
             return
@@ -169,44 +155,52 @@ class AppUpdateDialog(QDialog):
             self.repo_inp.setText(res.repo_url)
 
         if not res.ok:
-            self.status_badge.setText(f"⚠️ {res.message}")
+            self.status_badge.setText(res.message)
             self.status_badge.setStyleSheet("color: #f59e0b; font-weight: 700; font-size: 13px;")
             self.notes_link_lbl.setText("")
             if not res.repo_url:
                 self.repo_card.show()
         elif res.has_update:
-            self.status_badge.setText(f"🔔 Güncelleme Mevcut:  {res.local_version}v > {res.remote_version}v")
-            self.status_badge.setStyleSheet("color: #f59e0b; font-weight: 700; font-size: 14px;")
+            self.status_badge.setText(
+                tr(self.lang, "upd_status_avail", local=res.local_version, remote=res.remote_version)
+            )
+            self.status_badge.setStyleSheet("color: #f59e0b; font-weight: 700; font-size: 13px;")
             if res.release_notes_url:
-                self.notes_link_lbl.setText(f"<a style='color:#60a5fa;' href='{res.release_notes_url}'>📄 Güncelleme Notları ↗</a>")
+                self.notes_link_lbl.setText(
+                    f"<a style='color:#60a5fa;' href='{res.release_notes_url}'>{tr(self.lang, 'upd_notes_link')}</a>"
+                )
         else:
-            self.status_badge.setText(f"✓ Programınız güncel ({res.local_version}v)")
-            self.status_badge.setStyleSheet("color: #22c55e; font-weight: 700; font-size: 14px;")
+            self.status_badge.setText(tr(self.lang, "upd_status_ok", local=res.local_version))
+            self.status_badge.setStyleSheet("color: #22c55e; font-weight: 700; font-size: 13px;")
             if res.release_notes_url:
-                self.notes_link_lbl.setText(f"<a style='color:#60a5fa;' href='{res.release_notes_url}'>📄 Sürüm Geçmişi ↗</a>")
+                self.notes_link_lbl.setText(
+                    f"<a style='color:#60a5fa;' href='{res.release_notes_url}'>{tr(self.lang, 'upd_history_link')}</a>"
+                )
 
         lines = [
-            f"Sürüm Karşılaştırması: {res.local_version}v > {res.remote_version}v"
+            tr(self.lang, "upd_cmp_avail", local=res.local_version, remote=res.remote_version)
             if res.has_update
-            else f"Mevcut Sürüm: {res.local_version}v (En güncel sürümdesiniz)",
+            else tr(self.lang, "upd_cmp_ok", local=res.local_version)
         ]
         if res.repo_url:
-            lines.append(f"Güncelleme Kanalı: {res.repo_url}")
+            lines.append(tr(self.lang, "upd_lbl_channel", url=res.repo_url))
         if res.release_notes_url:
-            lines.append(f"Güncelleme Notları: {res.release_notes_url}")
+            lines.append(tr(self.lang, "upd_lbl_notes", url=res.release_notes_url))
         if res.exe_download_url:
-            lines.append("Güncelleme Yöntemi: Doğrudan AIconomy.exe otomatik yenileme (ayarlarınız korunur)")
+            lines.append(tr(self.lang, "upd_method_exe"))
         elif res.can_git_pull:
-            lines.append("Güncelleme Yöntemi: Git Kaynak Deposu (git pull)")
+            lines.append(tr(self.lang, "upd_method_git"))
         if res.changelog:
-            lines.extend(["", "--- Bu Sürümdeki Yenilikler ---", res.changelog])
+            lines.extend(["", tr(self.lang, "upd_changelog_hdr"), res.changelog])
         self.info_box.setPlainText("\n".join(lines))
 
         self.btn_apply.setEnabled(res.ok and res.has_update)
         if res.has_update:
-            self.btn_apply.setText(f"⚡ Şimdi Güncelle ve Yeniden Başlat ({res.local_version}v > {res.remote_version}v)")
+            self.btn_apply.setText(
+                tr(self.lang, "upd_btn_install", local=res.local_version, remote=res.remote_version)
+            )
         else:
-            self.btn_apply.setText("✓ Sürüm Güncel")
+            self.btn_apply.setText(tr(self.lang, "upd_btn_up_to_date"))
 
     def run_apply(self) -> None:
         if not self.last_check:
@@ -215,7 +209,7 @@ class AppUpdateDialog(QDialog):
         self.btn_check.setEnabled(False)
         self.dl_bar.setMaximum(100)
         self.dl_bar.setValue(0)
-        self.dl_bar.setFormat("Yeni sürüm GitHub'dan indiriliyor...")
+        self.dl_bar.setFormat(tr(self.lang, "upd_downloading"))
         self.dl_bar.show()
         tok = self.main_win.vault.get_secret("GITHUB_TOKEN")
         chk = self.last_check
@@ -236,15 +230,17 @@ class AppUpdateDialog(QDialog):
         if tot > 0:
             pct = int((cur * 100) / tot)
             self.dl_bar.setValue(pct)
-            self.dl_bar.setFormat(f"İndiriliyor: {cur / (1024 * 1024):.1f} / {tot / (1024 * 1024):.1f} MB (%{pct})")
+            self.dl_bar.setFormat(
+                tr(self.lang, "upd_dl_prog", cur=cur / (1024 * 1024), tot=tot / (1024 * 1024), pct=pct)
+            )
 
     def _on_applied(self, ok: bool, mode: str, msg: str) -> None:
         if not ok:
-            first_line = msg.splitlines()[0] if msg else "Güncelleme hatası"
-            self.main_win.logs.add("ERR", "Program Güncelleyici", first_line, msg)
+            first_line = msg.splitlines()[0] if msg else "Update error"
+            self.main_win.logs.add("ERR", "Updater", first_line, msg)
             self.main_win._refresh_logs_tab()
         else:
-            self.main_win.logs.add("INFO", "Program Güncelleyici", "Program güncellemesi başarıyla uygulandı.", msg)
+            self.main_win.logs.add("INFO", "Updater", "Application update applied.", msg)
             self.main_win._refresh_logs_tab()
         if not self.isVisible():
             return
@@ -254,8 +250,8 @@ class AppUpdateDialog(QDialog):
             self.btn_apply.setEnabled(True)
             QMessageBox.warning(
                 self,
-                "Güncelleme Hatası",
-                f"{msg.splitlines()[0]}\n\n(Tam teknik çıktı Debug & Log sekmesine kaydedildi.)",
+                tr(self.lang, "upd_err_title"),
+                tr(self.lang, "upd_err_msg", msg=msg.splitlines()[0]),
             )
             return
         if mode == "swap_exe":
@@ -267,4 +263,4 @@ class AppUpdateDialog(QDialog):
             self.main_win._save_state()
             restart_running_python_app()
             return
-        QMessageBox.information(self, "Güncelleme Tamamlandı", msg)
+        QMessageBox.information(self, tr(self.lang, "upd_done_title"), msg)

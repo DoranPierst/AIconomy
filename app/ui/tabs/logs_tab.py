@@ -1,4 +1,4 @@
-"""Persistent SQLite debug & log viewer tab mixin."""
+"""Persistent SQLite log viewer tab mixin (emoji-free, port cleanup moved to Diagnostics)."""
 from __future__ import annotations
 
 import time
@@ -23,47 +23,48 @@ from PySide6.QtWidgets import (
 )
 
 from ...ai_advisor import build_logs_ai_prompt
+from ...i18n import tr
 from ...updater import get_current_app_version
 from ..widgets import HoverTableWidget
 
 
 class LogsTabMixin:
-    """Mixin implementing Tab 5 (Debug & Logs)."""
+    """Mixin implementing Tab 2 (Logs)."""
 
     def _init_logs_tab(self) -> None:
+        self._current_logs: list[dict] = []
         tab = QWidget()
         lay = QVBoxLayout(tab)
+        lay.setContentsMargins(10, 10, 10, 10)
+        lay.setSpacing(8)
 
         top = QHBoxLayout()
+        top.setSpacing(8)
+        self.lbl_log_level = QLabel(tr(self.lang, "log_level_lbl"))
+        top.addWidget(self.lbl_log_level)
+
         self.log_lvl_cmb = QComboBox()
         self.log_lvl_cmb.addItems(["ALL", "ERR", "WARN", "INFO", "DBG"])
         self.log_lvl_cmb.currentTextChanged.connect(self._refresh_logs_tab)
-        top.addWidget(QLabel("Seviye:"))
         top.addWidget(self.log_lvl_cmb)
 
         self.log_search_inp = QLineEdit()
-        self.log_search_inp.setPlaceholderText("Log geçmişinde ara...")
+        self.log_search_inp.setPlaceholderText(tr(self.lang, "log_search_ph"))
         self.log_search_inp.textChanged.connect(self._refresh_logs_tab)
         top.addWidget(self.log_search_inp, stretch=1)
 
-        top.addWidget(QLabel("🔌 Asılı Portu Kapat:"))
-        for port_num, lbl in [(8080, "8080 Unity"), (9876, "9876 Blender"), (9121, "9121 Serena"), (8790, "8790 Trellis")]:
-            zb = QPushButton(f"🔌 {lbl}")
-            zb.setToolTip(
-                f"Logları silmez! Yalnızca {port_num} portu arkada asılı kalırsa o porttaki arka plan sürecini kapatır.\n"
-                "(Logları temizlemek için aşağıdaki '🧹 Logları Temizle' butonunu kullanın.)"
-            )
-            zb.clicked.connect(lambda _=False, p=port_num: self._handle_kill_zombie_port(p))
-            top.addWidget(zb)
+        self.btn_log_wipe = QPushButton(tr(self.lang, "log_clear_all"))
+        self.btn_log_wipe.clicked.connect(self._clear_all_logs)
+        top.addWidget(self.btn_log_wipe)
         lay.addLayout(top)
 
         self.log_table = HoverTableWidget(0, 5, self)
         self.log_table.setAlternatingRowColors(True)
         self.log_table.verticalHeader().setVisible(False)
+        self.log_table.setShowGrid(False)
         self.log_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
-        self.log_table.setHorizontalHeaderLabels(
-            ["", "Zaman", "Seviye", "Araç", "Özet Teşhis (Ham çıktı için satıra tıklayın)"]
-        )
+        self._update_log_headers()
+
         lh = self.log_table.horizontalHeader()
         lh.setMinimumHeight(32)
         lh.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
@@ -77,59 +78,58 @@ class LogsTabMixin:
         self.log_master_cb = QCheckBox(lh.viewport())
         self.log_master_cb.setCursor(Qt.CursorShape.PointingHandCursor)
         self.log_master_cb.setGeometry(10, 7, 20, 18)
-        self.log_master_cb.setToolTip("Listelenen tüm log satırlarını seç / seçimi kaldır")
         self.log_master_cb.clicked.connect(lambda checked: self._set_log_checks("all" if checked else "none"))
 
         self.log_table.itemSelectionChanged.connect(self._on_log_row_selected)
         lay.addWidget(self.log_table, stretch=1)
 
         log_act_bar = QHBoxLayout()
-        log_act_bar.setContentsMargins(2, 2, 2, 2)
+        log_act_bar.setContentsMargins(0, 2, 0, 2)
+        log_act_bar.setSpacing(6)
 
-        self.lbl_log_sel = QLabel("☑️ Seçili Log: 0")
+        self.lbl_log_sel = QLabel(tr(self.lang, "log_sel_count", n=0))
         self.lbl_log_sel.setStyleSheet("color: #94a3b8; font-weight: 600;")
         log_act_bar.addWidget(self.lbl_log_sel)
 
-        btn_l_all = QPushButton("Tümünü Seç")
-        btn_l_all.clicked.connect(lambda: self._set_log_checks("all"))
-        log_act_bar.addWidget(btn_l_all)
+        self.btn_log_all = QPushButton(tr(self.lang, "log_sel_all"))
+        self.btn_log_all.clicked.connect(lambda: self._set_log_checks("all"))
+        log_act_bar.addWidget(self.btn_log_all)
 
-        btn_l_err = QPushButton("🔴 Sadece Hata && Uyarıları Seç (ERR/WARN)")
-        btn_l_err.setToolTip("Listedeki tüm kırmızı (ERR) ve sarı (WARN) kayıtları tek tıkla işaretler")
-        btn_l_err.clicked.connect(lambda: self._set_log_checks("issues_only"))
-        log_act_bar.addWidget(btn_l_err)
+        self.btn_log_err = QPushButton(tr(self.lang, "log_sel_issues"))
+        self.btn_log_err.clicked.connect(lambda: self._set_log_checks("issues_only"))
+        log_act_bar.addWidget(self.btn_log_err)
 
-        btn_l_clr = QPushButton("Seçimi Temizle")
-        btn_l_clr.clicked.connect(lambda: self._set_log_checks("none"))
-        log_act_bar.addWidget(btn_l_clr)
-
-        btn_l_wipe = QPushButton("🧹 Logları Temizle")
-        btn_l_wipe.setToolTip("Eski / çözülmüş tüm log kayıtlarını veritabanından temizler")
-        btn_l_wipe.clicked.connect(self._clear_all_logs)
-        log_act_bar.addWidget(btn_l_wipe)
+        self.btn_log_clr = QPushButton(tr(self.lang, "log_sel_clear"))
+        self.btn_log_clr.clicked.connect(lambda: self._set_log_checks("none"))
+        log_act_bar.addWidget(self.btn_log_clr)
 
         log_act_bar.addStretch()
 
-        self.btn_copy_logs_ai = QPushButton("🤖 Seçili Loglar İçin Hazır AI Çözüm Promptu Kopyala (0)")
+        self.btn_copy_logs_ai = QPushButton(tr(self.lang, "log_copy_ai", n=0))
         self.btn_copy_logs_ai.setObjectName("primaryBtn")
         self.btn_copy_logs_ai.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn_copy_logs_ai.setToolTip(
-            "Seçtiğiniz hata/debug kayıtlarını, tam ham çıktıları (stderr/komut) ve araçların kurulu sürümlerini\n"
-            "birleştirerek doğrudan AI'a yapıştırabileceğiniz hazır çözüm promptu üretir."
-        )
         self.btn_copy_logs_ai.clicked.connect(self._copy_selected_logs_ai_prompt)
         log_act_bar.addWidget(self.btn_copy_logs_ai)
         lay.addLayout(log_act_bar)
 
         self.log_raw_view = QPlainTextEdit()
         self.log_raw_view.setReadOnly(True)
-        self.log_raw_view.setFixedHeight(125)
-        self.log_raw_view.setPlaceholderText(
-            "Bir log satırına tıkladığınızda ham teknik çıktı (stderr / port / detay) veya üretilen hazır AI çözüm promptu burada görüntülenir."
-        )
+        self.log_raw_view.setFixedHeight(120)
+        self.log_raw_view.setPlaceholderText(tr(self.lang, "log_raw_ph"))
         lay.addWidget(self.log_raw_view)
 
-        self.tabs.addTab(tab, "🐛 Debug && Log")
+        self.tabs.addTab(tab, tr(self.lang, "tab_logs"))
+
+    def _update_log_headers(self) -> None:
+        self.log_table.setHorizontalHeaderLabels(
+            [
+                "",
+                tr(self.lang, "log_col_time"),
+                tr(self.lang, "log_col_level"),
+                tr(self.lang, "log_col_tool"),
+                tr(self.lang, "log_col_summary"),
+            ]
+        )
 
     def _refresh_logs_tab(self) -> None:
         lvl = self.log_lvl_cmb.currentText()
@@ -163,15 +163,14 @@ class LogsTabMixin:
                     elif row["level"] == "WARN":
                         item.setForeground(QColor("#f59e0b"))
                 self.log_table.setItem(i, col_i, item)
-        counts = self.logs.counts_by_level()
-        self.tabs.setTabText(4, f"🐛 Debug && Log (🔴{counts['ERR']} 🟡{counts['WARN']})")
+        self._update_tab_titles()
         self._update_log_selection_ui()
 
     def _jump_to_error_logs(self) -> None:
         self.log_lvl_cmb.setCurrentText("ERR")
         self._refresh_logs_tab()
         self._set_log_checks("issues_only")
-        self.tabs.setCurrentIndex(4)
+        self.tabs.setCurrentIndex(2)
         if self.log_table.rowCount() > 0:
             self.log_table.selectRow(0)
 
@@ -199,8 +198,8 @@ class LogsTabMixin:
 
     def _update_log_selection_ui(self) -> None:
         sel_cnt = len(self.checked_log_ids)
-        self.lbl_log_sel.setText(f"☑️ Seçili Log: {sel_cnt}")
-        self.btn_copy_logs_ai.setText(f"🤖 Seçili Loglar İçin Hazır AI Çözüm Promptu Kopyala ({sel_cnt})")
+        self.lbl_log_sel.setText(tr(self.lang, "log_sel_count", n=sel_cnt))
+        self.btn_copy_logs_ai.setText(tr(self.lang, "log_copy_ai", n=sel_cnt))
         vis_ids = {int(r["id"]) for r in self._current_logs}
         all_vis_checked = bool(vis_ids) and vis_ids.issubset(self.checked_log_ids)
         self.log_master_cb.blockSignals(True)
@@ -221,9 +220,8 @@ class LogsTabMixin:
         if not self.checked_log_ids:
             QMessageBox.information(
                 self,
-                "Log Seçilmedi",
-                "AI çözüm promptu oluşturmak için lütfen en az bir log satırını solundaki kutucuktan işaretleyin\n"
-                "(veya '🔴 Sadece Hata & Uyarıları Seç' butonuna tıklayın).",
+                tr(self.lang, "log_none_sel_title"),
+                tr(self.lang, "log_none_sel_msg"),
             )
             return
 
@@ -231,19 +229,19 @@ class LogsTabMixin:
         selected_entries = [e for e in all_recent if int(e["id"]) in self.checked_log_ids]
         selected_entries.sort(key=lambda x: int(x["id"]))
 
+        gpu_txt = self.vram_lbl.text() if hasattr(self, "vram_lbl") and self.vram_lbl.isVisible() else ""
         prompt = build_logs_ai_prompt(
             selected_entries,
             self.tools,
             get_current_app_version(),
-            self.vram_bar.text(),
+            gpu_txt,
+            lang=self.lang,
         )
         QApplication.clipboard().setText(prompt)
         self.log_raw_view.setPlainText(prompt)
-        self.set_status(
-            f"🤖 {len(selected_entries)} log kaydı ve araç sürümleri hazır AI çözüm promptu olarak panoya kopyalandı!"
-        )
+        self.set_status(tr(self.lang, "msg_logs_prompt_copied", n=len(selected_entries)))
 
-        self.btn_copy_logs_ai.setText(f"✓ AI Çözüm Promptu Kopyalandı! ({len(selected_entries)} Log)")
+        self.btn_copy_logs_ai.setText(tr(self.lang, "log_copied_ai", n=len(selected_entries)))
         self.btn_copy_logs_ai.setObjectName("successBtn")
         self.style().unpolish(self.btn_copy_logs_ai)
         self.style().polish(self.btn_copy_logs_ai)
@@ -264,7 +262,7 @@ class LogsTabMixin:
             self._last_warn_time[t.id] = now_m
         self._refresh_logs_tab()
         self.log_raw_view.clear()
-        self.set_status("🧹 Tüm log kayıtları kalıcı olarak temizlendi.")
+        self.set_status(tr(self.lang, "msg_logs_cleared"))
 
     def _on_log_row_selected(self) -> None:
         idxs = self.log_table.selectionModel().selectedRows()

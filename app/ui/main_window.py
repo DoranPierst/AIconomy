@@ -1,4 +1,4 @@
-"""Main application window orchestrator for AIconomy."""
+"""Main application window orchestrator for AIconomy (minimalist 3-tab UI, emoji-free, EN & TR)."""
 from __future__ import annotations
 
 import copy
@@ -10,7 +10,7 @@ import time
 from typing import Any
 
 from PySide6.QtCore import QTimer, Qt
-from PySide6.QtGui import QAction
+from PySide6.QtGui import QAction, QStandardItem, QStandardItemModel
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -32,9 +32,17 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ..catalog import AI_CLIENTS, PROFILES, ToolSpec, build_default_catalog
+from ..catalog import (
+    AI_CLIENTS,
+    PROFILES,
+    ToolSpec,
+    build_default_catalog,
+    localized_tool_modes,
+    profile_desc,
+    profile_title,
+)
 from ..host_apps import get_missing_host_dependencies, launch_host_app_for_tool
-from ..i18n import SUPPORTED_LANGUAGES, detect_default_language, tr
+from ..i18n import SUPPORTED_LANGUAGES, normalize_language, tr
 from ..mcp_config import sync_blender_skills_on_disk, sync_mcp_json_clients
 from ..processes import (
     detect_running_dcc_apps,
@@ -47,48 +55,63 @@ from ..processes import (
     resolve_disk_location,
     scan_live_process_locations,
 )
-from ..storage import LogDatabase, StateStore, WindowsDpapiVault
+from ..storage import (
+    LOG_DB_FILENAME,
+    STATE_FILENAME,
+    VAULT_FILENAME,
+    LogDatabase,
+    StateStore,
+    WindowsDpapiVault,
+    migrate_legacy_data_files,
+)
 from ..updater import (
     UpdateCheckResult,
     check_for_app_updates,
     get_current_app_version,
     resolve_effective_app_repo,
 )
-from .dialogs import AppUpdateDialog, BlenderSkillsDialog, ConnectionTestDialog, ToolGearDialog
-from .tabs import LogsTabMixin, PluginsTabMixin, RepoTabMixin, ToolsTabMixin, VaultTabMixin
-from .theme import DARK_QSS, LIGHT_QSS, create_app_icon
-from .workers import WorkerBridge
+from .dialogs import (
+    AppUpdateDialog,
+    BlenderSkillsDialog,
+    DiagnosticsDialog,
+    ManageProfilesDialog,
+    SettingsDialog,
+    ToolGearDialog,
+)
+from .icons import icon_color, make_icon
+from .tabs import LogsTabMixin, PluginsTabMixin, ToolsTabMixin
+from .theme import DARK_QSS, LIGHT_QSS, MinimalStyle, create_app_icon, get_stylesheet
+from .workers import WorkerBridge, safe_emit
 
 
-class MainWindow(ToolsTabMixin, PluginsTabMixin, VaultTabMixin, RepoTabMixin, LogsTabMixin, QMainWindow):
-    """Main desktop control center window."""
+class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, QMainWindow):
+    """Streamlined desktop control center for MCP servers, skills, and token budgets."""
 
     def __init__(self, data_dir: pathlib.Path, sync_live_environment: bool = True) -> None:
         super().__init__()
         self.data_dir = data_dir
         self.sync_live_environment = sync_live_environment
-        self.data_dir.mkdir(parents=True, exist_ok=True)
+        migrate_legacy_data_files(self.data_dir)
 
-        self.vault = WindowsDpapiVault(self.data_dir / "vault.dpapi.json")
-        self.logs = LogDatabase(self.data_dir / "ai_hub_logs.db")
-        self.store = StateStore(self.data_dir / "hub_state.json")
+        self.vault = WindowsDpapiVault(self.data_dir / VAULT_FILENAME)
+        self.logs = LogDatabase(self.data_dir / LOG_DB_FILENAME)
+        self.store = StateStore(self.data_dir / STATE_FILENAME)
 
         self.tools: list[ToolSpec] = build_default_catalog()
         self.default_ids: set[str] = {t.id for t in self.tools}
         self.active_skills, self.meta = self.store.load_into(self.tools)
 
-        self.sort_key = str(self.meta.get("sort_key", "usage"))
+        self.sort_key = str(self.meta.get("sort_key", "enabled"))
         self.sort_desc = bool(self.meta.get("sort_desc", True))
         self.seconds_left = 30
         self._live_watch_busy = False
-        self.last_detected_apps = {"unity": False, "blender": False}
-        self.detected_repo_candidate: dict[str, Any] | None = None
+        self.last_detected_apps = {"unity": False, "blender": False, "trellis_server": False}
         self.tray_notified = False
         self.force_quit = False
+        self._has_nvidia_gpu = False
 
         self.bridge = WorkerBridge()
         self.bridge.health_done.connect(self._on_health_results)
-        self.bridge.repo_done.connect(self._on_repo_inspected)
         self.bridge.plugin_check_done.connect(self._on_plugin_check_done)
         self.bridge.update_progress.connect(self._on_update_progress)
         self.bridge.update_item_done.connect(self._on_update_item_done)
@@ -110,17 +133,13 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, VaultTabMixin, RepoTabMixin, Lo
         self._sync_debounce.timeout.connect(self._flush_live_sync)
 
         self.plugin_checks: dict[str, QCheckBox] = {}
-        self.panel_row_checks: dict[str, QCheckBox] = {}
         self.checked_log_ids: set[int] = set()
         self.log_row_checks: dict[int, QCheckBox] = {}
-        self.profile_btns: dict[str, QPushButton] = {}
         self._auto_heal_cooldown: dict[str, float] = {}
         self._last_warn_time: dict[str, float] = {}
         self._latest_live_map: dict[str, str] = {}
 
-        saved_lang = str(self.meta.get("lang") or "").strip().lower()
-        valid_langs = {c for c, _ in SUPPORTED_LANGUAGES}
-        self.lang = saved_lang if saved_lang in valid_langs else detect_default_language()
+        self.lang = normalize_language(str(self.meta.get("lang") or ""))
         self.meta["lang"] = self.lang
         self.updating_busy = False
         self.checking_plugins_busy = False
@@ -131,20 +150,21 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, VaultTabMixin, RepoTabMixin, Lo
         app_ver = get_current_app_version()
         self.setWindowTitle(tr(self.lang, "app_title", ver=app_ver))
         self.setWindowIcon(create_app_icon())
-        self.resize(1340, 760)
+        self.resize(1280, 740)
 
         self._build_ui()
         self._build_tray()
         self._apply_theme(self.meta.get("theme", "dark"))
-        self._update_profile_buttons_ui()
         self._retranslate_ui()
         for t in self.tools:
-            t.live_location_detail = resolve_disk_location(t, self.projects_map, {})
+            t.live_location_detail = resolve_disk_location(t, self.projects_map, {}, lang=self.lang)
+            if not t.enabled:
+                t.last_ping = tr(self.lang, "st_disabled")
+                t.health_state = "off"
         self._rebuild_project_filter_combo()
-        self._rebuild_custom_presets_combo()
+        self._rebuild_profile_combo()
         self._refresh_table()
         self._refresh_plugins_tab()
-        self._refresh_vault_tab()
         self._refresh_logs_tab()
         self._update_vram_bar()
 
@@ -167,534 +187,153 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, VaultTabMixin, RepoTabMixin, Lo
 
     def _format_scope_display(self, t: ToolSpec) -> str:
         if not t.scope_selectable:
-            return t.fixed_location_label or "🖥️ Sistem Geneli"
+            return self._format_scope_short(t)
         if t.project_scope == "GLOBAL":
-            return "🌐 Tüm Projeler (Global)"
+            return tr(self.lang, "scope_global")
         p_dir = self.projects_map.get(t.project_scope, "")
-        return f"📁 {t.project_scope} ({p_dir})" if p_dir else f"📁 {t.project_scope}"
+        return f"{t.project_scope} ({p_dir})" if p_dir else t.project_scope
 
     def _build_ui(self) -> None:
         central = QWidget()
         self.setCentralWidget(central)
         main_lay = QVBoxLayout(central)
-        main_lay.setContentsMargins(12, 10, 12, 8)
-        main_lay.setSpacing(8)
+        main_lay.setContentsMargins(14, 12, 14, 10)
+        main_lay.setSpacing(10)
 
-        prof_bar = QHBoxLayout()
-        self.lbl_preset = QLabel(tr(self.lang, "preset_lbl"))
-        prof_bar.addWidget(self.lbl_preset)
-        for p_key, p_info in PROFILES.items():
-            btn = QPushButton(p_info["title"].replace("&", "&&"))
-            btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            btn.setToolTip(
-                f"{p_info['desc']}\n"
-                "• Tıkladığınızda seçili kalır; birden fazla hazır ayarı birlikte seçebilirsiniz.\n"
-                "• Seçili olana tekrar tıkladığınızda seçimi kaldırır."
-            )
-            btn.clicked.connect(lambda _=False, k=p_key: self.apply_profile(k))
-            self.profile_btns[p_key] = btn
-            prof_bar.addWidget(btn)
+        # 1. MINIMALIST TOP BAR: Profile combobox + Diagnostics + Settings + More (...)
+        top_bar = QHBoxLayout()
+        top_bar.setSpacing(8)
 
-        self.auto_detect_cb = QCheckBox("👁️ Oto-Algıla")
-        self.auto_detect_cb.setToolTip("Unity.exe veya blender.exe açıldığında otomatik algılar")
-        self.auto_detect_cb.setChecked(bool(self.meta.get("auto_detect_apps", True)))
-        self.auto_detect_cb.toggled.connect(self._on_auto_detect_toggled)
-        prof_bar.addWidget(self.auto_detect_cb)
+        self.lbl_profile = QLabel(tr(self.lang, "profile_lbl"))
+        self.lbl_profile.setStyleSheet("font-weight: 600; color: #94a3b8;")
+        top_bar.addWidget(self.lbl_profile)
 
-        prof_bar.addStretch()
+        self.profile_cmb = QComboBox()
+        self.profile_cmb.setMinimumWidth(240)
+        self.profile_cmb.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
+        self.profile_cmb.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.profile_cmb.activated.connect(self._on_profile_combo_activated)
+        top_bar.addWidget(self.profile_cmb)
 
-        self.vram_bar = QProgressBar()
-        self.vram_bar.setFixedWidth(185)
-        self.vram_bar.setFormat("VRAM: Ölçülüyor...")
-        prof_bar.addWidget(self.vram_bar)
+        top_bar.addStretch()
 
-        self.btn_vram_free = QPushButton(tr(self.lang, "vram_free"))
-        self.btn_vram_free.setToolTip("Arka planda açık kalan Trellis GPU sunucusunu uyutup VRAM'i boşaltır")
-        self.btn_vram_free.clicked.connect(self._handle_free_vram)
-        prof_bar.addWidget(self.btn_vram_free)
+        self.btn_diagnostics = QPushButton(tr(self.lang, "btn_diagnostics"))
+        self.btn_diagnostics.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_diagnostics.clicked.connect(self.open_diagnostics)
+        top_bar.addWidget(self.btn_diagnostics)
 
-        self.timer_lbl = QLabel("00:30")
-        self.timer_lbl.setStyleSheet("font-family: Consolas, monospace; font-weight: 700; padding: 4px 8px;")
-        prof_bar.addWidget(self.timer_lbl)
+        self.btn_settings = QPushButton(tr(self.lang, "btn_settings"))
+        self.btn_settings.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_settings.clicked.connect(lambda: self.open_settings(0))
+        top_bar.addWidget(self.btn_settings)
 
-        self.btn_refresh = QPushButton(tr(self.lang, "scan_now"))
-        self.btn_refresh.setToolTip("Tüm araçların port, sağlık, VRAM ve canlı süreç durumlarını anında yeniler")
-        self.btn_refresh.clicked.connect(self.run_health_scan)
-        prof_bar.addWidget(self.btn_refresh)
+        self.btn_more = QPushButton()
+        self.btn_more.setFixedSize(32, 28)
+        self.btn_more.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_more.setToolTip(tr(self.lang, "btn_more_tip"))
+        self.btn_more.clicked.connect(self._show_more_menu)
+        top_bar.addWidget(self.btn_more)
 
-        self.btn_test_conns = QPushButton(tr(self.lang, "test_conns"))
-        self.btn_test_conns.setToolTip(
-            "Antigravity açık olmasa bile tüm AÇIK araçlara gerçek MCP/soket/stdio testi atıp\n"
-            "bağlantıların gerçekten çalışıp çalışmadığını doğrular."
-        )
-        self.btn_test_conns.clicked.connect(self._open_connection_test_dialog)
-        prof_bar.addWidget(self.btn_test_conns)
+        main_lay.addLayout(top_bar)
 
-        self.btn_app_update_top = QPushButton(tr(self.lang, "app_update"))
-        self.btn_app_update_top.setObjectName("primaryBtn")
-        self.btn_app_update_top.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-        self.btn_app_update_top.setToolTip(
-            "Bu programın (DoranPierst/AIconomy) yeni bir sürümü var mı doğrudan kontrol eder.\n"
-            "• Yeni sürüm çıktığında tek tıkla indirip programı otomatik yeniler.\n"
-            "• Sağ tık: Program sürüm detaylarını açar."
-        )
-        self.btn_app_update_top.clicked.connect(self._handle_quick_check_app_update)
-        self.btn_app_update_top.customContextMenuRequested.connect(
-            lambda _pos: self._open_app_update_dialog(self.latest_app_check)
-        )
-        prof_bar.addWidget(self.btn_app_update_top)
-
-        self.btn_sync = QPushButton(tr(self.lang, "sync_configs"))
-        self.btn_sync.setObjectName("successBtn")
-        self.btn_sync.setToolTip(
-            "Global ve Proje Bazlı yapılandırmaları yedek (.bak) alarak yazar:\n"
-            "• Antigravity (AGY): ~/.gemini/config/mcp_config.json\n"
-            "• Codex (CDX): ~/.codex/config.toml\n"
-            "• Claude Code (CLD): ~/.claude.json ve <proje>/.mcp.json\n"
-            "• Cursor (CUR): ~/.cursor/mcp.json ve <proje>/.cursor/mcp.json\n"
-            "• Program Ayar Yedeği: data/hub_state.json"
-        )
-        self.btn_sync.clicked.connect(self._handle_sync_configs)
-        prof_bar.addWidget(self.btn_sync)
-
-        self.lang_cmb = QComboBox()
-        self.lang_cmb.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.lang_cmb.setToolTip("Arayüz Dili / Interface Language")
-        for l_code, l_lbl in SUPPORTED_LANGUAGES:
-            self.lang_cmb.addItem(l_lbl, l_code)
-        l_idx = self.lang_cmb.findData(self.lang)
-        self.lang_cmb.setCurrentIndex(max(0, l_idx))
-        self.lang_cmb.currentIndexChanged.connect(self._on_language_changed)
-        prof_bar.addWidget(self.lang_cmb)
-
-        self.btn_theme = QPushButton(tr(self.lang, "theme"))
-        self.btn_theme.clicked.connect(self._toggle_theme)
-        prof_bar.addWidget(self.btn_theme)
-
-        main_lay.addLayout(prof_bar)
-
+        # 2. APP UPDATE BANNER (hidden unless a newer release exists)
         self.app_update_banner = QFrame()
-        self.app_update_banner.setObjectName("card")
-        self.app_update_banner.setStyleSheet("QFrame#card { border: 1px solid #f59e0b; background-color: #271a0c; }")
+        self.app_update_banner.setObjectName("bannerWarn")
         ub_lay = QHBoxLayout(self.app_update_banner)
         ub_lay.setContentsMargins(12, 6, 12, 6)
         self.app_update_banner_lbl = QLabel("")
-        self.app_update_banner_lbl.setStyleSheet("color: #fde68a; font-weight: 700;")
+        self.app_update_banner_lbl.setStyleSheet("font-weight: 600;")
         ub_lay.addWidget(self.app_update_banner_lbl, stretch=1)
 
         self.app_update_notes_lbl = QLabel("")
         self.app_update_notes_lbl.setOpenExternalLinks(True)
         ub_lay.addWidget(self.app_update_notes_lbl)
 
-        btn_banner_upd = QPushButton("⚡ Tek Tıkla Programı Güncelle")
-        btn_banner_upd.setObjectName("warnBtn")
-        btn_banner_upd.clicked.connect(lambda: self._open_app_update_dialog(self.latest_app_check))
-        ub_lay.addWidget(btn_banner_upd)
+        self.btn_banner_upd = QPushButton(tr(self.lang, "banner_update_now"))
+        self.btn_banner_upd.setObjectName("warnBtn")
+        self.btn_banner_upd.clicked.connect(lambda: self._open_app_update_dialog(self.latest_app_check))
+        ub_lay.addWidget(self.btn_banner_upd)
         self.app_update_banner.hide()
         main_lay.addWidget(self.app_update_banner)
 
+        # 3. THREE STREAMLINED TABS: Tools / Plugins / Logs
         self.tabs = QTabWidget()
         main_lay.addWidget(self.tabs, stretch=1)
 
         self._init_panel_tab()
         self._init_plugins_tab()
-        self._init_vault_tab()
-        self._init_repo_tab()
         self._init_logs_tab()
 
+        # 4. CLEAN FOOTER BAR
         foot = QHBoxLayout()
-        self.status_lbl = QLabel("Hazır — Sağ alt sistem tepsisinde (Tray) kesintisiz çalışır.")
+        foot.setSpacing(10)
+        self.status_lbl = QLabel(tr(self.lang, "status_ready"))
+        self.status_lbl.setStyleSheet("color: #94a3b8;")
         foot.addWidget(self.status_lbl, stretch=1)
 
-        self.btn_do_app_upd = QPushButton(f"📦 Program Sürümü: {get_current_app_version()}v")
-        self.btn_do_app_upd.setToolTip("Kullandığınız programın sürüm notlarını ve güncelleme detaylarını açar")
+        # Conditional GPU VRAM indicator + Free VRAM button (shown only when NVIDIA GPU present)
+        self.vram_bar = QProgressBar()
+        self.vram_bar.setFixedWidth(180)
+        self.vram_bar.setFixedHeight(19)
+        self.vram_bar.setFormat("")
+        self.vram_bar.hide()
+        foot.addWidget(self.vram_bar)
+
+        self.vram_lbl = QLabel("")
+        self.vram_lbl.hide()
+
+        self.btn_vram_free = QPushButton(tr(self.lang, "vram_free"))
+        self.btn_vram_free.setToolTip(tr(self.lang, "vram_free_tip"))
+        self.btn_vram_free.clicked.connect(self._handle_free_vram)
+        self.btn_vram_free.hide()
+        foot.addWidget(self.btn_vram_free)
+
+        self.btn_do_app_upd = QPushButton(tr(self.lang, "ver_btn", ver=get_current_app_version()))
+        self.btn_do_app_upd.setObjectName("ghostBtn")
+        self.btn_do_app_upd.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_do_app_upd.setToolTip(tr(self.lang, "ver_btn_tip"))
         self.btn_do_app_upd.clicked.connect(lambda: self._open_app_update_dialog(self.latest_app_check))
         foot.addWidget(self.btn_do_app_upd)
 
         self.token_summary_lbl = QLabel()
-        self.token_summary_lbl.setStyleSheet("font-family: Consolas, monospace; font-weight: 600; color: #22c55e;")
+        self.token_summary_lbl.setStyleSheet("font-family: Consolas, monospace; font-weight: 600; color: #10b981;")
         foot.addWidget(self.token_summary_lbl)
         main_lay.addLayout(foot)
 
-    def _build_tray(self) -> None:
-        if not QSystemTrayIcon.isSystemTrayAvailable():
-            self.tray = None
-            return
-        self.tray = QSystemTrayIcon(create_app_icon(), self)
-        self.tray.setToolTip("AI Araç & Token Ekonomisi Kontrol Merkezi")
-        menu = QMenu()
-
-        act_open = QAction("🖥️ Kontrol Merkezini Aç", self)
-        act_open.triggered.connect(self._restore_from_tray)
-        menu.addAction(act_open)
-        menu.addSeparator()
-
-        for p_key, p_info in PROFILES.items():
-            act_p = QAction(p_info["title"], self)
-            act_p.triggered.connect(lambda _=False, k=p_key: self.apply_profile(k))
-            menu.addAction(act_p)
-
-        menu.addSeparator()
-        act_app_upd = QAction("🔄 Program Güncellemesini Kontrol Et", self)
-        act_app_upd.triggered.connect(lambda: (self._restore_from_tray(), self._handle_quick_check_app_update()))
-        menu.addAction(act_app_upd)
-
-        act_upd_all = QAction("🔍 Eklenti Güncellemelerini Kontrol Et", self)
-        act_upd_all.triggered.connect(lambda: self.run_plugin_update_check(manual=True))
-        menu.addAction(act_upd_all)
-
-        act_vram = QAction("🧹 Trellis GPU VRAM Boşalt", self)
-        act_vram.triggered.connect(self._handle_free_vram)
-        menu.addAction(act_vram)
-
-        menu.addSeparator()
-        act_quit = QAction("❌ Tamamen Çık", self)
-        act_quit.triggered.connect(self._quit_app)
-        menu.addAction(act_quit)
-
-        self.tray.setContextMenu(menu)
-        self.tray.activated.connect(
-            lambda reason: self._restore_from_tray()
-            if reason == QSystemTrayIcon.ActivationReason.Trigger
-            else None
-        )
-        self.tray.show()
-
-    def _restore_from_tray(self) -> None:
-        self.showNormal()
-        self.activateWindow()
-
-    def _quit_app(self) -> None:
-        self.force_quit = True
-        self._save_state()
-        if self.tray:
-            self.tray.hide()
-        QApplication.quit()
-
-    def closeEvent(self, event: Any) -> None:  # noqa: N802
-        self._save_state()
-        if not self.force_quit and self.tray and self.tray.isVisible():
-            event.ignore()
-            self.hide()
-            if not self.tray_notified:
-                self.tray.showMessage(
-                    "AI Araç Merkezi Arka Planda",
-                    "Sağ alt sistem tepsisinden tek tıkla profil değiştirebilir veya tüm MCP'leri uyutabilirsiniz.",
-                    QSystemTrayIcon.MessageIcon.Information,
-                    3000,
-                )
-                self.tray_notified = True
-            return
-        self.table.detach_filter()
-        self.log_table.detach_filter()
-        super().closeEvent(event)
-
-    def set_status(self, msg: str) -> None:
-        self.status_lbl.setText(msg)
-
-    def _save_state(self) -> None:
-        self.meta["sort_key"] = self.sort_key
-        self.meta["sort_desc"] = self.sort_desc
-        if self.plugin_checks:
-            self.meta["plugin_checked_ids"] = [tid for tid, cb in self.plugin_checks.items() if cb.isChecked()]
-        self.store.save(self.tools, self.active_skills, self.meta, self.default_ids)
-
-    def _toggle_theme(self) -> None:
-        nxt = "light" if self.meta.get("theme", "dark") == "dark" else "dark"
-        self._apply_theme(nxt)
-        self._refresh_table()
-        self._refresh_plugins_tab()
-        self._save_state()
-
-    def _on_language_changed(self) -> None:
-        code = str(self.lang_cmb.currentData() or "en")
-        if code == self.lang:
-            return
-        self.lang = code
-        self.meta["lang"] = code
-        self._save_state()
-        self._retranslate_ui()
-        self._rebuild_project_filter_combo()
-        self._rebuild_custom_presets_combo()
-        self._refresh_table()
-        self._refresh_logs_tab()
-        lang_lbl = dict(SUPPORTED_LANGUAGES).get(code, code)
-        self.set_status(tr(self.lang, "lang_changed", lang=lang_lbl))
-
-    def _retranslate_ui(self) -> None:
-        app_ver = get_current_app_version()
-        self.setWindowTitle(tr(self.lang, "app_title", ver=app_ver))
-        self.lbl_preset.setText(tr(self.lang, "preset_lbl"))
-        self.auto_detect_cb.setText(tr(self.lang, "auto_detect"))
-        self.btn_vram_free.setText(tr(self.lang, "vram_free"))
-        self.btn_refresh.setText(tr(self.lang, "scan_now"))
-        self.btn_test_conns.setText(tr(self.lang, "test_conns"))
-        if not (self.latest_app_check and self.latest_app_check.has_update):
-            self.btn_app_update_top.setText(tr(self.lang, "app_update"))
-        self.btn_sync.setText(tr(self.lang, "sync_configs"))
-        self.btn_theme.setText(tr(self.lang, "theme"))
-
-        self.search_inp.setPlaceholderText(tr(self.lang, "search_ph"))
-        if self.kind_cmb.count() > 0:
-            self.kind_cmb.setItemText(0, tr(self.lang, "all_types"))
-        self.lbl_proj_flt.setText(tr(self.lang, "project_lbl"))
-        self.btn_add_proj.setText(tr(self.lang, "add_project"))
-        self.lbl_saved_presets.setText(tr(self.lang, "saved_presets_lbl"))
-        self.btn_save_preset.setText(tr(self.lang, "save_btn"))
-        self.btn_do_app_upd.setText(tr(self.lang, "ver_btn", ver=app_ver))
-
-        self.tabs.setTabText(0, tr(self.lang, "tab_panel", n=len(self.tools)))
-        if not any(t.has_update for t in self.tools):
-            self.tabs.setTabText(1, tr(self.lang, "tab_plugins"))
-        self.tabs.setTabText(2, tr(self.lang, "tab_vault"))
-        self.tabs.setTabText(3, tr(self.lang, "tab_repo"))
-        self._update_panel_header_indicators()
-
-    def _apply_theme(self, mode: str) -> None:
-        self.meta["theme"] = mode
-        self.setStyleSheet(LIGHT_QSS if mode == "light" else DARK_QSS)
-        if hasattr(self, "bulk_client_btns"):
-            self._update_bulk_client_buttons()
-        if hasattr(self, "profile_btns"):
-            self._update_profile_buttons_ui()
-
-    def _on_auto_detect_toggled(self, checked: bool) -> None:
-        self.meta["auto_detect_apps"] = checked
-        self._save_state()
-
-    def _sync_live_environment_async(
-        self,
-        target_tools: list[ToolSpec] | None = None,
-        allow_stop: bool = True,
-    ) -> None:
-        if not self.sync_live_environment:
-            return
-        targets = list(target_tools) if target_tools is not None else list(self.tools)
-        ids = {t.id for t in targets}
-        self._sync_pending_ids.update(ids)
-        if allow_stop:
-            self._sync_stop_ids.update(ids)
-        self._sync_debounce.start()
-
-    def _flush_live_sync(self) -> None:
-        target_ids = set(self._sync_pending_ids)
-        stop_ids = set(self._sync_stop_ids)
-        self._sync_pending_ids.clear()
-        self._sync_stop_ids.clear()
-
-        # K9: pass deep copies so background worker never shares mutable ToolSpec instances
-        tools_snap = copy.deepcopy(self.tools)
-        skills_snap = set(self.active_skills)
-        proj_snap = dict(self.projects_map)
-
-        def worker() -> None:
-            with self._sync_lock:
-                for t_obj in tools_snap:
-                    if t_obj.id in target_ids:
-                        enforce_tool_runtime_state(t_obj, proj_snap, allow_stop=(t_obj.id in stop_ids))
-                bs_tool = next((x for x in tools_snap if x.id == "blender_skills"), None)
-                if bs_tool:
-                    sync_blender_skills_on_disk(skills_snap, bs_tool.enabled, bs_tool.project_scope, proj_snap)
-                sync_mcp_json_clients(tools_snap, self.vault, proj_snap)
-                live_map = scan_live_process_locations()
-                out = []
-                for x in tools_snap:
-                    ok, ping_str, ms, detail, loc_detail = probe_tool_health(x, len(skills_snap), proj_snap, live_map)
-                    out.append((x.id, ok, ping_str, ms, detail, loc_detail))
-            self.bridge.health_done.emit(out, live_map, True)
-
-        threading.Thread(target=worker, daemon=True).start()
-
-    def _toggle_tool(self, tool: ToolSpec) -> None:
-        tool.enabled = not tool.enabled
-        self._save_state()
-        self.logs.add("DBG", tool.name, f"Durum değiştirildi: {'AÇIK' if tool.enabled else 'KAPALI'}")
-        self.set_status(f"{tool.name} {'açıldı ve AI yapılandırmasına işlendi' if tool.enabled else 'kapatıldı ve AI yapılandırmasından çıkarıldı'}.")
-        self._refresh_table()
-        self._refresh_logs_tab()
-        self._sync_live_environment_async(target_tools=[tool])
-
-    def _toggle_client(self, tool: ToolSpec, client_code: str, checked: bool) -> None:
-        tool.clients[client_code] = checked
-        self._save_state()
-        self.set_status(f"{tool.name} -> {client_code} hedefi {'aktif edildi' if checked else 'kapatıldı'} (config güncellendi).")
-        self._refresh_table()
-        self._sync_live_environment_async(target_tools=[])
-
-    def _update_bulk_client_buttons(self) -> None:
-        total = len(self.tools)
+    def _refresh_toolbar_icons(self) -> None:
         is_light = self.meta.get("theme", "dark") == "light"
-        for code, full_lbl in AI_CLIENTS:
-            btn = self.bulk_client_btns.get(code)
-            if not btn:
-                continue
-            on_cnt = sum(1 for t in self.tools if t.clients.get(code, False))
-            btn.setText(code)
-            if total > 0 and on_cnt == total:
-                btn.setStyleSheet(
-                    "background-color: #2563eb; color: #ffffff; border: 1px solid #93c5fd; "
-                    "border-radius: 4px; font-size: 10px; font-weight: 700; padding: 1px 0px;"
-                )
-            elif on_cnt > 0:
-                btn.setStyleSheet(
-                    "background-color: #dbeafe; color: #1d4ed8; border: 1px dashed #2563eb; "
-                    "border-radius: 4px; font-size: 10px; font-weight: 700; padding: 1px 0px;"
-                    if is_light
-                    else "background-color: #1e3a8a; color: #bfdbfe; border: 1px dashed #60a5fa; "
-                    "border-radius: 4px; font-size: 10px; font-weight: 700; padding: 1px 0px;"
-                )
-            else:
-                btn.setStyleSheet(
-                    "background-color: #e2e8f0; color: #64748b; border: 1px solid #cbd5e1; "
-                    "border-radius: 4px; font-size: 10px; font-weight: 600; padding: 1px 0px;"
-                    if is_light
-                    else "background-color: #111823; color: #64748b; border: 1px solid #2e3d54; "
-                    "border-radius: 4px; font-size: 10px; font-weight: 600; padding: 1px 0px;"
-                )
-            btn.setToolTip(
-                f"🤖 {full_lbl} ({code}): {on_cnt}/{total} araçta açık\n"
-                f"• Sol tık: Tüm sütunu tek tıkla {'KAPAT' if on_cnt > 0 else 'AÇ'}\n"
-                "• Sağ tık: Sadece açık araçlarda aç / Tümünde aç / Tümünde kapat"
-            )
+        col = icon_color(is_light, muted=False)
+        self.btn_diagnostics.setIcon(make_icon("activity", col, 15))
+        self.btn_settings.setIcon(make_icon("sliders", col, 15))
+        self.btn_more.setIcon(make_icon("more", col, 15))
 
-    def _toggle_client_all(self, client_code: str, mode: str = "auto") -> None:
-        if mode == "auto":
-            any_on = any(t.clients.get(client_code, False) for t in self.tools)
-            target_state = not any_on
-            for t in self.tools:
-                t.clients[client_code] = target_state
-            action_desc = "tüm araçlarda AÇILDI" if target_state else "tüm araçlarda komple KAPATILDI"
-        elif mode == "all_on":
-            for t in self.tools:
-                t.clients[client_code] = True
-            action_desc = "tüm araçlarda AÇILDI"
-        elif mode == "active_only":
-            for t in self.tools:
-                t.clients[client_code] = bool(t.enabled)
-            action_desc = "sadece AÇIK araçlarda aktif edildi"
-        else:
-            for t in self.tools:
-                t.clients[client_code] = False
-            action_desc = "tüm araçlarda komple KAPATILDI"
-
-        self._save_state()
-        self.logs.add("INFO", f"Toplu AI ({client_code})", f"{client_code} {action_desc}.")
-        self.set_status(f"🤖 {client_code} {action_desc} (config dosyaları güncellendi).")
-        self._refresh_table()
-        self._refresh_logs_tab()
-        self._sync_live_environment_async(target_tools=[])
-
-    def _show_bulk_client_menu(self, client_code: str, btn: QPushButton, pos: Any) -> None:
+    def _show_more_menu(self) -> None:
         menu = QMenu(self)
-        act_all_on = QAction(f"✓ {client_code} — Tüm Araçlarda Aç", self)
-        act_act_on = QAction(f"⚡ {client_code} — Sadece Açık Araçlarda Aç", self)
-        act_all_off = QAction(f"✕ {client_code} — Tüm Araçlarda Komple Kapat", self)
-        act_all_on.triggered.connect(lambda: self._toggle_client_all(client_code, "all_on"))
-        act_act_on.triggered.connect(lambda: self._toggle_client_all(client_code, "active_only"))
-        act_all_off.triggered.connect(lambda: self._toggle_client_all(client_code, "all_off"))
-        menu.addAction(act_all_on)
-        menu.addAction(act_act_on)
-        menu.addAction(act_all_off)
-        menu.exec(btn.mapToGlobal(pos))
+        act_scan = QAction(tr(self.lang, "menu_scan_now"), self)
+        act_scan.triggered.connect(self.run_health_scan)
+        menu.addAction(act_scan)
 
-    def _change_mode(self, tool: ToolSpec, idx: int) -> None:
-        tool.mode_index = idx
-        self._save_state()
-        self.set_status(f"{tool.name} çalışma modu '{tool.modes[idx]}' olarak seçildi.")
+        act_reapply = QAction(tr(self.lang, "menu_reapply_configs"), self)
+        act_reapply.triggered.connect(self._handle_sync_configs)
+        menu.addAction(act_reapply)
 
-    def _get_active_profiles_set(self) -> set[str]:
-        raw = self.meta.get("active_profiles")
-        if isinstance(raw, list):
-            return {str(k) for k in raw if str(k) in PROFILES}
-        return set()
+        act_upd = QAction(tr(self.lang, "menu_check_app_update"), self)
+        act_upd.triggered.connect(self._handle_quick_check_app_update)
+        menu.addAction(act_upd)
 
-    def _update_profile_buttons_ui(self) -> None:
-        active_set = self._get_active_profiles_set()
-        for p_key, btn in self.profile_btns.items():
-            base_lbl = PROFILES[p_key]["title"].replace("&", "&&")
-            if p_key in active_set:
-                btn.setText(f"✓ {base_lbl}")
-                btn.setStyleSheet(
-                    "QPushButton { background-color: #2563eb; color: #ffffff; border: 1.5px solid #93c5fd; "
-                    "border-radius: 5px; padding: 5px 10px; font-weight: 700; }"
-                    "QPushButton:hover { background-color: #1d4ed8; }"
-                )
-            else:
-                btn.setText(base_lbl)
-                btn.setStyleSheet("")
+        menu.addSeparator()
 
-    def apply_profile(self, profile_key: str, ask_confirm: bool = True) -> None:
-        prof = PROFILES[profile_key]
-        active_set = self._get_active_profiles_set()
-        is_currently_selected = profile_key in active_set
+        act_exp = QAction(tr(self.lang, "menu_export"), self)
+        act_exp.triggered.connect(self._export_settings)
+        menu.addAction(act_exp)
 
-        if is_currently_selected:
-            next_set = active_set - {profile_key}
-            action_phrase = f"'{prof['title']}' hazır ayar seçimini kaldırmak"
-        else:
-            if profile_key == "zero_token":
-                next_set = {"zero_token"}
-            else:
-                next_set = (active_set - {"zero_token"}) | {profile_key}
-            action_phrase = f"'{prof['title']}' hazır ayarını etkinleştirmek"
+        act_imp = QAction(tr(self.lang, "menu_import"), self)
+        act_imp.triggered.connect(self._import_settings)
+        menu.addAction(act_imp)
 
-        if ask_confirm:
-            msg_box = QMessageBox(self)
-            msg_box.setIcon(QMessageBox.Icon.Warning)
-            msg_box.setWindowTitle("⚠️ Mevcut Ayarlarınız Değişecektir")
-            msg_box.setText("<b>Şu anki araç ayarlarınız değişecektir!</b>")
-            msg_box.setInformativeText(
-                f"{action_phrase} üzeresiniz.\n"
-                "Tablodaki açık/kapalı araç düzeniniz seçili hazır ayarlara göre güncellenecektir.\n\n"
-                "Değiştirmeden önce şu anki ayarlarınızı dışa aktarıp kaydetmek ister misiniz?"
-            )
-            btn_save_go = msg_box.addButton("💾 Mevcut Ayarları Kaydet ve Uygula", QMessageBox.ButtonRole.AcceptRole)
-            btn_just_go = msg_box.addButton("⚡ Kaydetmeden Değiştir", QMessageBox.ButtonRole.DestructiveRole)
-            btn_cancel = msg_box.addButton("İptal", QMessageBox.ButtonRole.RejectRole)
-            msg_box.setDefaultButton(btn_save_go)
-            msg_box.exec()
+        menu.exec(self.btn_more.mapToGlobal(self.btn_more.rect().bottomLeft()))
 
-            clicked = msg_box.clickedButton()
-            if clicked == btn_cancel or clicked is None:
-                self._update_profile_buttons_ui()
-                return
-            if clicked == btn_save_go:
-                save_path, _ = QFileDialog.getSaveFileName(
-                    self,
-                    "Mevcut Ayarları Kaydet (Export)",
-                    "ai_arac_yedek_ayarlar.json",
-                    "Ayar Dosyası (*.json *.aihub)",
-                )
-                if not save_path:
-                    self._update_profile_buttons_ui()
-                    return
-                self.export_to_file(pathlib.Path(save_path))
-
-        ordered_active = [k for k in PROFILES if k in next_set]
-        self.meta["active_profiles"] = ordered_active
-
-        combined_enable: set[str] = set()
-        for k in ordered_active:
-            combined_enable |= set(PROFILES[k]["enable"])
-
-        for t in self.tools:
-            t.enabled = t.id in combined_enable
-
-        self._update_profile_buttons_ui()
-        self._save_state()
-
-        if ordered_active:
-            titles = " + ".join(PROFILES[k]["title"] for k in ordered_active)
-            summary_msg = f"🎯 Aktif hazır ayarlar: {titles} ({sum(1 for t in self.tools if t.enabled)} araç açık)"
-        else:
-            summary_msg = f"🎯 '{prof['title']}' seçimi kaldırıldı (aktif hazır ayar kalmadı, araçlar kapatıldı)."
-
-        self.logs.add("INFO", "Hazır Ayar", summary_msg)
-        self.set_status(summary_msg)
-        self._refresh_table()
-        self._refresh_logs_tab()
-        self._sync_live_environment_async(target_tools=list(self.tools))
-
+    # --- UNIFIED PROFILE COMBOBOX ---
     def _get_custom_presets(self) -> dict[str, dict[str, Any]]:
         raw = self.meta.get("custom_presets")
         if not isinstance(raw, dict):
@@ -702,57 +341,140 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, VaultTabMixin, RepoTabMixin, Lo
             self.meta["custom_presets"] = raw
         return raw
 
-    def _rebuild_custom_presets_combo(self, selected_name: str = "") -> None:
-        if not hasattr(self, "saved_presets_cmb"):
+    def _add_combo_header(self, cmb: QComboBox, title: str) -> None:
+        model = cmb.model()
+        if isinstance(model, QStandardItemModel):
+            item = QStandardItem(title)
+            item.setFlags(Qt.ItemFlag.NoItemFlags)
+            item.setData("__HEADER__", Qt.ItemDataRole.UserRole)
+            model.appendRow(item)
+
+    def _rebuild_profile_combo(self) -> None:
+        if not hasattr(self, "profile_cmb"):
             return
+        cur_active = str(self.meta.get("active_profile", "") or "")
         presets = self._get_custom_presets()
-        self.saved_presets_cmb.blockSignals(True)
-        self.saved_presets_cmb.clear()
-        self.saved_presets_cmb.addItem(f"— Kayıtlı Ayar Seç ({len(presets)}) —", "")
-        ordered = sorted(
-            presets.items(),
-            key=lambda kv: str(kv[1].get("saved_at", "")),
-            reverse=True,
-        )
-        for p_name, p_data in ordered:
-            en_cnt = int(p_data.get("enabled_count", 0))
-            saved_at = str(p_data.get("saved_at", ""))
-            short_dt = saved_at[5:16] if len(saved_at) >= 16 else saved_at
-            lbl = f"📁 {p_name} ({en_cnt} açık · {short_dt})" if short_dt else f"📁 {p_name} ({en_cnt} açık)"
-            self.saved_presets_cmb.addItem(lbl, p_name)
 
-        idx = self.saved_presets_cmb.findData(selected_name) if selected_name else 0
-        self.saved_presets_cmb.setCurrentIndex(max(0, idx))
-        self.saved_presets_cmb.blockSignals(False)
-        if hasattr(self, "btn_del_preset"):
-            self.btn_del_preset.setEnabled(self.saved_presets_cmb.currentIndex() > 0)
+        self.profile_cmb.blockSignals(True)
+        self.profile_cmb.clear()
 
-    def _save_custom_preset(self) -> None:
-        cur_sel = str(self.saved_presets_cmb.currentData() or "")
-        default_name = cur_sel or (next(iter(self.projects_map.keys()), "") or "Özel Ayarım")
+        if not cur_active:
+            self.profile_cmb.addItem(tr(self.lang, "profile_custom"), "")
+
+        self._add_combo_header(self.profile_cmb, tr(self.lang, "profile_sec_builtin"))
+        for p_key in PROFILES:
+            self.profile_cmb.addItem(f"  {profile_title(p_key, self.lang)}", f"builtin:{p_key}")
+            idx = self.profile_cmb.count() - 1
+            self.profile_cmb.setItemData(idx, profile_desc(p_key, self.lang), Qt.ItemDataRole.ToolTipRole)
+
+        if presets:
+            self._add_combo_header(self.profile_cmb, tr(self.lang, "profile_sec_custom"))
+            ordered = sorted(presets.items(), key=lambda kv: str(kv[1].get("saved_at", "")), reverse=True)
+            for p_name, p_data in ordered:
+                en_cnt = int(p_data.get("enabled_count", 0))
+                self.profile_cmb.addItem(f"  {p_name} ({en_cnt})", f"custom:{p_name}")
+
+        self.profile_cmb.insertSeparator(self.profile_cmb.count())
+        self.profile_cmb.addItem(tr(self.lang, "profile_save_as"), "__SAVE_AS__")
+        self.profile_cmb.addItem(tr(self.lang, "profile_manage"), "__MANAGE__")
+
+        target_idx = self.profile_cmb.findData(cur_active)
+        if target_idx < 0:
+            target_idx = 0
+        self.profile_cmb.setCurrentIndex(target_idx)
+        self.profile_cmb.blockSignals(False)
+
+    def _on_profile_combo_activated(self, idx: int) -> None:
+        data = str(self.profile_cmb.itemData(idx) or "")
+        if not data or data == "__HEADER__":
+            self._rebuild_profile_combo()
+            return
+        if data == "__SAVE_AS__":
+            self._save_custom_preset()
+            self._rebuild_profile_combo()
+            return
+        if data == "__MANAGE__":
+            ManageProfilesDialog(self).exec()
+            self._rebuild_profile_combo()
+            return
+        if data == self.meta.get("active_profile"):
+            return
+        if data.startswith("builtin:"):
+            self.apply_builtin_profile(data.split(":", 1)[1], ask_confirm=True)
+        elif data.startswith("custom:"):
+            self.apply_custom_preset(data.split(":", 1)[1])
+
+    def apply_builtin_profile(self, profile_key: str, ask_confirm: bool = True) -> None:
+        if profile_key not in PROFILES:
+            return
+        title = profile_title(profile_key, self.lang)
+        # Only ask confirmation if user currently has an unsaved custom setup with enabled tools
+        has_custom_active = (not self.meta.get("active_profile")) and any(t.enabled for t in self.tools)
+        if ask_confirm and has_custom_active:
+            msg_box = QMessageBox(self)
+            msg_box.setIcon(QMessageBox.Icon.Question)
+            msg_box.setWindowTitle(tr(self.lang, "prof_confirm_title"))
+            msg_box.setText(f"<b>{tr(self.lang, 'prof_confirm_hdr', name=title)}</b>")
+            msg_box.setInformativeText(tr(self.lang, "prof_confirm_body"))
+            btn_save_go = msg_box.addButton(tr(self.lang, "prof_btn_save_switch"), QMessageBox.ButtonRole.AcceptRole)
+            btn_just_go = msg_box.addButton(tr(self.lang, "prof_btn_switch"), QMessageBox.ButtonRole.DestructiveRole)
+            btn_cancel = msg_box.addButton(tr(self.lang, "btn_cancel"), QMessageBox.ButtonRole.RejectRole)
+            msg_box.setDefaultButton(btn_save_go)
+            msg_box.exec()
+
+            clicked = msg_box.clickedButton()
+            if clicked == btn_cancel or clicked is None:
+                self._rebuild_profile_combo()
+                return
+            if clicked == btn_save_go:
+                if not self._save_custom_preset():
+                    self._rebuild_profile_combo()
+                    return
+
+        target_enable = set(PROFILES[profile_key]["enable"])
+        for t in self.tools:
+            t.enabled = t.id in target_enable
+
+        self.meta["active_profile"] = f"builtin:{profile_key}"
+        self.meta["first_run_dismissed"] = True
+        self._refresh_first_run_banner()
+        self._save_state()
+        self._rebuild_profile_combo()
+
+        en_cnt = sum(1 for t in self.tools if t.enabled)
+        msg = tr(self.lang, "msg_profile_applied", name=title, n=en_cnt)
+        self.logs.add("INFO", "Profile", msg)
+        self.set_status(msg)
+        self._refresh_table()
+        self._refresh_logs_tab()
+        self._sync_live_environment_async(target_tools=list(self.tools))
+
+    def _save_custom_preset(self) -> bool:
+        cur_active = str(self.meta.get("active_profile", "") or "")
+        cur_name = cur_active.split(":", 1)[1] if cur_active.startswith("custom:") else ""
+        default_name = cur_name or next(iter(self.projects_map.keys()), "") or tr(self.lang, "prof_default_name")
         name, ok = QInputDialog.getText(
             self,
-            "💾 Ayar Düzenini Kaydet",
-            "Bu araç/proje yapılandırmasını hangi isimle kaydetmek istersiniz?\n"
-            "(Açık/kapalı araçlar, AI seçimleri, proje kapsamları ve çalışma modları saklanır)",
+            tr(self.lang, "prof_save_title"),
+            tr(self.lang, "prof_save_prompt"),
             text=default_name,
         )
         if not ok:
-            return
+            return False
         name = name.strip()
         if not name:
-            QMessageBox.warning(self, "Geçersiz İsim", "Lütfen boş olmayan bir kayıt adı girin.")
-            return
+            QMessageBox.warning(self, tr(self.lang, "prof_invalid_name_title"), tr(self.lang, "prof_invalid_name_msg"))
+            return False
 
         presets = self._get_custom_presets()
-        if name in presets and name != cur_sel:
+        if name in presets and name != cur_name:
             ans = QMessageBox.question(
                 self,
-                "Aynı İsimde Kayıt Var",
-                f"'{name}' adında bir kaydınız zaten bulunuyor. Üzerine yazmak ister misiniz?",
+                tr(self.lang, "prof_overwrite_title"),
+                tr(self.lang, "prof_overwrite_msg", name=name),
             )
             if ans != QMessageBox.StandardButton.Yes:
-                return
+                return False
 
         presets[name] = {
             "name": name,
@@ -771,20 +493,15 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, VaultTabMixin, RepoTabMixin, Lo
                 for t in self.tools
             },
         }
+        self.meta["active_profile"] = f"custom:{name}"
         self._save_state()
-        self._rebuild_custom_presets_combo(selected_name=name)
-        self.logs.add("INFO", "Kayıtlı Ayarlar", f"'{name}' adıyla ayar düzeni kaydedildi ({presets[name]['enabled_count']} araç açık).")
-        self.set_status(f"💾 '{name}' kaydı oluşturuldu — artık Kayıtlarım listesinden tek tıkla dönebilirsiniz.")
+        self._rebuild_profile_combo()
+        self._rebuild_tray_menu()
+        msg = tr(self.lang, "msg_profile_saved", name=name)
+        self.logs.add("INFO", "Profile", msg)
+        self.set_status(msg)
         self._refresh_logs_tab()
-
-    def _on_custom_preset_selected(self, idx: int) -> None:
-        if idx <= 0:
-            if hasattr(self, "btn_del_preset"):
-                self.btn_del_preset.setEnabled(False)
-            return
-        name = str(self.saved_presets_cmb.currentData() or "")
-        if name:
-            self.apply_custom_preset(name)
+        return True
 
     def apply_custom_preset(self, name: str) -> None:
         presets = self._get_custom_presets()
@@ -805,7 +522,8 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, VaultTabMixin, RepoTabMixin, Lo
                         if k in t.clients:
                             t.clients[k] = bool(v)
                 if "project_scope" in saved and t.scope_selectable:
-                    t.project_scope = str(saved["project_scope"])
+                    sc = str(saved["project_scope"])
+                    t.project_scope = sc if (sc == "GLOBAL" or sc in self.projects_map) else "GLOBAL"
                 if "mode_index" in saved and t.modes:
                     t.mode_index = max(0, min(int(saved["mode_index"]), len(t.modes) - 1))
                 if "param_value" in saved:
@@ -818,43 +536,379 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, VaultTabMixin, RepoTabMixin, Lo
         if isinstance(pdata.get("active_blender_skills"), list):
             self.active_skills = {str(s) for s in pdata["active_blender_skills"]}
 
-        self.meta["active_profiles"] = []
-        self._update_profile_buttons_ui()
+        self.meta["active_profile"] = f"custom:{name}"
+        self.meta["first_run_dismissed"] = True
+        self._refresh_first_run_banner()
         self._save_state()
-        if hasattr(self, "btn_del_preset"):
-            self.btn_del_preset.setEnabled(True)
+        self._rebuild_profile_combo()
 
         en_cnt = sum(1 for t in self.tools if t.enabled)
-        self.logs.add("INFO", "Kayıtlı Ayarlar", f"'{name}' kaydı yüklendi ({en_cnt} araç açık).")
-        self.set_status(f"💾 '{name}' kaydı uygulandı ({en_cnt} araç açık) — canlı config'ler güncelleniyor.")
+        msg = tr(self.lang, "msg_profile_applied", name=name, n=en_cnt)
+        self.logs.add("INFO", "Profile", msg)
+        self.set_status(msg)
         self._refresh_table()
         self._refresh_plugins_tab()
         self._refresh_logs_tab()
         self._sync_live_environment_async(target_tools=list(self.tools))
 
-    def _delete_custom_preset(self) -> None:
-        name = str(self.saved_presets_cmb.currentData() or "")
-        if not name:
+    # --- SYSTEM TRAY (LOCALIZED & RESPECTS minimize_to_tray) ---
+    def _build_tray(self) -> None:
+        if not QSystemTrayIcon.isSystemTrayAvailable():
+            self.tray = None
             return
-        ans = QMessageBox.question(
-            self,
-            "Kaydı Sil",
-            f"'{name}' adlı kayıtlı ayar düzenini silmek istediğinize emin misiniz?",
+        self.tray = QSystemTrayIcon(create_app_icon(), self)
+        self.tray.activated.connect(
+            lambda reason: self._restore_from_tray()
+            if reason == QSystemTrayIcon.ActivationReason.Trigger
+            else None
         )
-        if ans != QMessageBox.StandardButton.Yes:
-            return
-        presets = self._get_custom_presets()
-        presets.pop(name, None)
-        self._save_state()
-        self._rebuild_custom_presets_combo()
-        self.logs.add("INFO", "Kayıtlı Ayarlar", f"'{name}' kaydı silindi.")
-        self.set_status(f"🗑️ '{name}' kaydı silindi.")
-        self._refresh_logs_tab()
+        self._rebuild_tray_menu()
+        self.tray.show()
 
+    def _rebuild_tray_menu(self) -> None:
+        if not getattr(self, "tray", None):
+            return
+        self.tray.setToolTip(tr(self.lang, "tray_tooltip"))
+        menu = QMenu()
+
+        act_open = QAction(tr(self.lang, "tray_open"), self)
+        act_open.triggered.connect(self._restore_from_tray)
+        menu.addAction(act_open)
+        menu.addSeparator()
+
+        prof_menu = menu.addMenu(tr(self.lang, "tray_profiles"))
+        for p_key in PROFILES:
+            act_p = QAction(profile_title(p_key, self.lang), self)
+            act_p.triggered.connect(lambda _=False, k=p_key: self.apply_builtin_profile(k, ask_confirm=False))
+            prof_menu.addAction(act_p)
+
+        presets = self._get_custom_presets()
+        if presets:
+            prof_menu.addSeparator()
+            for p_name in sorted(presets.keys()):
+                act_c = QAction(p_name, self)
+                act_c.triggered.connect(lambda _=False, nm=p_name: self.apply_custom_preset(nm))
+                prof_menu.addAction(act_c)
+
+        menu.addSeparator()
+        act_app_upd = QAction(tr(self.lang, "tray_check_app"), self)
+        act_app_upd.triggered.connect(lambda: (self._restore_from_tray(), self._handle_quick_check_app_update()))
+        menu.addAction(act_app_upd)
+
+        act_upd_all = QAction(tr(self.lang, "tray_check_plugins"), self)
+        act_upd_all.triggered.connect(lambda: self.run_plugin_update_check(manual=True))
+        menu.addAction(act_upd_all)
+
+        act_vram = QAction(tr(self.lang, "tray_free_vram"), self)
+        act_vram.triggered.connect(self._handle_free_vram)
+        menu.addAction(act_vram)
+
+        menu.addSeparator()
+        act_quit = QAction(tr(self.lang, "tray_quit"), self)
+        act_quit.triggered.connect(self._quit_app)
+        menu.addAction(act_quit)
+
+        self._tray_menu = menu
+        self.tray.setContextMenu(menu)
+
+    def _restore_from_tray(self) -> None:
+        self.showNormal()
+        self.activateWindow()
+
+    def _quit_app(self) -> None:
+        self.force_quit = True
+        self._save_state()
+        if self.tray:
+            self.tray.hide()
+        QApplication.quit()
+
+    def closeEvent(self, event: Any) -> None:  # noqa: N802
+        self._save_state()
+        minimize_to_tray = bool(self.meta.get("minimize_to_tray", True))
+        if not self.force_quit and minimize_to_tray and self.tray and self.tray.isVisible():
+            event.ignore()
+            self.hide()
+            if not self.tray_notified:
+                self.tray.showMessage(
+                    tr(self.lang, "tray_bg_title"),
+                    tr(self.lang, "tray_bg_msg"),
+                    QSystemTrayIcon.MessageIcon.Information,
+                    3000,
+                )
+                self.tray_notified = True
+            return
+        self.table.detach_filter()
+        self.log_table.detach_filter()
+        super().closeEvent(event)
+
+    # --- STATE, THEME, LANGUAGE ---
+    def set_status(self, msg: str) -> None:
+        self.status_lbl.setText(msg)
+
+    def _save_state(self) -> None:
+        self.meta["sort_key"] = self.sort_key
+        self.meta["sort_desc"] = self.sort_desc
+        if self.plugin_checks:
+            self.meta["plugin_checked_ids"] = [tid for tid, cb in self.plugin_checks.items() if cb.isChecked()]
+        self.store.save(self.tools, self.active_skills, self.meta, self.default_ids)
+
+    def set_theme(self, mode: str) -> None:
+        if mode not in ("dark", "light"):
+            return
+        self._apply_theme(mode)
+        self._refresh_table()
+        self._refresh_plugins_tab()
+        self._save_state()
+
+    def set_language(self, code: str) -> None:
+        norm = normalize_language(code)
+        if norm == self.lang:
+            return
+        self.lang = norm
+        self.meta["lang"] = norm
+        self._save_state()
+        self._retranslate_ui()
+        self._rebuild_kind_filter_combo()
+        self._rebuild_project_filter_combo()
+        self._rebuild_profile_combo()
+        self._rebuild_tray_menu()
+        self._refresh_first_run_banner()
+        self._refresh_host_dep_banner()
+        self._refresh_table()
+        self._refresh_plugins_tab()
+        self._refresh_logs_tab()
+        self.run_health_scan()
+        lang_lbl = dict(SUPPORTED_LANGUAGES).get(norm, norm)
+        self.set_status(tr(self.lang, "msg_lang_changed", lang=lang_lbl))
+
+    def _update_tab_titles(self) -> None:
+        if not hasattr(self, "tabs") or self.tabs.count() < 3:
+            return
+        self.tabs.setTabText(0, tr(self.lang, "tab_tools", n=len(self.tools)))
+        upd_cnt = sum(1 for t in self.tools if t.has_update)
+        if upd_cnt > 0:
+            key = "tab_plugins_upd_one" if upd_cnt == 1 else "tab_plugins_upd"
+            self.tabs.setTabText(1, tr(self.lang, key, n=upd_cnt))
+        else:
+            self.tabs.setTabText(1, tr(self.lang, "tab_plugins"))
+        counts = self.logs.counts_by_level()
+        if counts["ERR"] > 0 or counts["WARN"] > 0:
+            self.tabs.setTabText(2, tr(self.lang, "tab_logs_counts", err=counts["ERR"], warn=counts["WARN"]))
+        else:
+            self.tabs.setTabText(2, tr(self.lang, "tab_logs"))
+
+    def _retranslate_ui(self) -> None:
+        app_ver = get_current_app_version()
+        self.setWindowTitle(tr(self.lang, "app_title", ver=app_ver))
+        self.lbl_profile.setText(tr(self.lang, "profile_lbl"))
+        self.btn_diagnostics.setText(tr(self.lang, "btn_diagnostics"))
+        self.btn_settings.setText(tr(self.lang, "btn_settings"))
+        self.btn_more.setToolTip(tr(self.lang, "btn_more_tip"))
+        self.btn_banner_upd.setText(tr(self.lang, "banner_update_now"))
+        self.btn_vram_free.setText(tr(self.lang, "vram_free"))
+        self.btn_vram_free.setToolTip(tr(self.lang, "vram_free_tip"))
+        if not (self.latest_app_check and self.latest_app_check.has_update):
+            self.btn_do_app_upd.setText(tr(self.lang, "ver_btn", ver=app_ver))
+        self.btn_do_app_upd.setToolTip(tr(self.lang, "ver_btn_tip"))
+
+        self.search_inp.setPlaceholderText(tr(self.lang, "search_ph"))
+        self.btn_plug_sel_all.setText(tr(self.lang, "plug_sel_all"))
+        self.btn_plug_clr_all.setText(tr(self.lang, "plug_clr_all"))
+        self.btn_plugins_check.setText(tr(self.lang, "plug_check"))
+        self.btn_plugins_install_sel.setText(tr(self.lang, "plug_upd_sel"))
+        self.btn_add_github.setText(tr(self.lang, "plug_add_github"))
+        self.btn_jump_err_logs.setText(tr(self.lang, "plug_btn_view_errs"))
+        upd_cnt = sum(1 for t in self.tools if t.has_update)
+        if self.checking_plugins_busy:
+            self.plugins_banner_lbl.setText(tr(self.lang, "plug_banner_checking"))
+        elif upd_cnt > 0:
+            self.plugins_banner_lbl.setText(tr(self.lang, "plug_banner_updates", n=upd_cnt))
+        else:
+            self.plugins_banner_lbl.setText(tr(self.lang, "plug_banner_all_ok"))
+
+        self.lbl_log_level.setText(tr(self.lang, "log_level_lbl"))
+        self.log_search_inp.setPlaceholderText(tr(self.lang, "log_search_ph"))
+        self.btn_log_wipe.setText(tr(self.lang, "log_clear_all"))
+        self.btn_log_all.setText(tr(self.lang, "log_sel_all"))
+        self.btn_log_err.setText(tr(self.lang, "log_sel_issues"))
+        self.btn_log_clr.setText(tr(self.lang, "log_sel_clear"))
+        self.log_raw_view.setPlaceholderText(tr(self.lang, "log_raw_ph"))
+        self._update_log_headers()
+        self._update_log_selection_ui()
+        self._update_panel_header_indicators()
+        self._update_tab_titles()
+
+    def _apply_theme(self, mode: str) -> None:
+        self.meta["theme"] = mode
+        app = QApplication.instance()
+        if app is not None:
+            app.setStyle(MinimalStyle(is_light=(mode == "light")))
+        self.setStyleSheet(get_stylesheet(mode))
+        self._refresh_toolbar_icons()
+        if hasattr(self, "bulk_client_btns"):
+            self._update_bulk_client_buttons()
+
+    # --- LIVE SYNC & TOOL CONTROLS ---
+    def _sync_live_environment_async(
+        self,
+        target_tools: list[ToolSpec] | None = None,
+        allow_stop: bool = True,
+    ) -> None:
+        if not self.sync_live_environment:
+            return
+        targets = list(target_tools) if target_tools is not None else list(self.tools)
+        ids = {t.id for t in targets}
+        self._sync_pending_ids.update(ids)
+        if allow_stop:
+            self._sync_stop_ids.update(ids)
+        self._sync_debounce.start()
+
+    def _flush_live_sync(self) -> None:
+        target_ids = set(self._sync_pending_ids)
+        stop_ids = set(self._sync_stop_ids)
+        self._sync_pending_ids.clear()
+        self._sync_stop_ids.clear()
+
+        tools_snap = copy.deepcopy(self.tools)
+        skills_snap = set(self.active_skills)
+        proj_snap = dict(self.projects_map)
+        lang_snap = self.lang
+
+        def worker() -> None:
+            with self._sync_lock:
+                for t_obj in tools_snap:
+                    if t_obj.id in target_ids:
+                        enforce_tool_runtime_state(t_obj, proj_snap, allow_stop=(t_obj.id in stop_ids), lang=lang_snap)
+                bs_tool = next((x for x in tools_snap if x.id == "blender_skills"), None)
+                if bs_tool:
+                    sync_blender_skills_on_disk(
+                        skills_snap, bs_tool.enabled, bs_tool.project_scope, proj_snap, lang=lang_snap
+                    )
+                sync_mcp_json_clients(tools_snap, self.vault, proj_snap)
+                live_map = scan_live_process_locations(lang=lang_snap)
+                out = []
+                for x in tools_snap:
+                    ok, h_state, ping_str, ms, detail, loc_detail = probe_tool_health(
+                        x, len(skills_snap), proj_snap, live_map, lang=lang_snap
+                    )
+                    out.append((x.id, ok, h_state, ping_str, ms, detail, loc_detail))
+            safe_emit(self.bridge.health_done, out, live_map, True)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _toggle_tool(self, tool: ToolSpec) -> None:
+        tool.enabled = not tool.enabled
+        self.meta["active_profile"] = ""
+        self.meta["first_run_dismissed"] = True
+        self._refresh_first_run_banner()
+        self._rebuild_profile_combo()
+        if not tool.enabled:
+            tool.health_state = "off"
+            tool.last_ping = tr(self.lang, "st_disabled")
+        self._save_state()
+        state_word = tr(self.lang, "client_on" if tool.enabled else "client_off").lower()
+        self.logs.add("DBG", tool.name, f"Toggled -> {'ON' if tool.enabled else 'OFF'}")
+        self.set_status(tr(self.lang, "msg_tool_toggled", name=tool.name, state=state_word))
+        self._refresh_table()
+        self._refresh_logs_tab()
+        self._update_vram_visibility()
+        self._sync_live_environment_async(target_tools=[tool])
+
+    def _toggle_client(self, tool: ToolSpec, client_code: str, checked: bool) -> None:
+        tool.clients[client_code] = checked
+        self.meta["active_profile"] = ""
+        self._rebuild_profile_combo()
+        self._save_state()
+        state_word = tr(self.lang, "client_on" if checked else "client_off").lower()
+        self.set_status(tr(self.lang, "msg_client_toggled", name=tool.name, code=client_code, state=state_word))
+        self._refresh_table()
+        self._sync_live_environment_async(target_tools=[])
+
+    def _update_bulk_client_buttons(self) -> None:
+        total = len(self.tools)
+        is_light = self.meta.get("theme", "dark") == "light"
+        for code, full_lbl in AI_CLIENTS:
+            btn = self.bulk_client_btns.get(code)
+            if not btn:
+                continue
+            on_cnt = sum(1 for t in self.tools if t.clients.get(code, False))
+            btn.setText(code)
+            if total > 0 and on_cnt == total:
+                btn.setStyleSheet(
+                    "background-color: #2563eb; color: #ffffff; border: 1px solid #60a5fa; "
+                    "border-radius: 5px; font-size: 10px; font-weight: 700; padding: 0px;"
+                )
+            elif on_cnt > 0:
+                btn.setStyleSheet(
+                    "background-color: #dbeafe; color: #1d4ed8; border: 1px dashed #2563eb; "
+                    "border-radius: 5px; font-size: 10px; font-weight: 700; padding: 0px;"
+                    if is_light
+                    else "background-color: #172554; color: #bfdbfe; border: 1px dashed #3b82f6; "
+                    "border-radius: 5px; font-size: 10px; font-weight: 700; padding: 0px;"
+                )
+            else:
+                btn.setStyleSheet(
+                    "background-color: #f1f5f9; color: #64748b; border: 1px solid #cbd5e1; "
+                    "border-radius: 5px; font-size: 10px; font-weight: 600; padding: 0px;"
+                    if is_light
+                    else "background-color: #0c1117; color: #64748b; border: 1px solid #263549; "
+                    "border-radius: 5px; font-size: 10px; font-weight: 600; padding: 0px;"
+                )
+            btn.setToolTip(
+                tr(self.lang, "bulk_client_tip", full=full_lbl, code=code, on=on_cnt, tot=total)
+            )
+
+    def _toggle_client_all(self, client_code: str, mode: str = "auto") -> None:
+        if mode == "auto":
+            any_on = any(t.clients.get(client_code, False) for t in self.tools)
+            target_state = not any_on
+            for t in self.tools:
+                t.clients[client_code] = target_state
+        elif mode == "all_on":
+            for t in self.tools:
+                t.clients[client_code] = True
+        elif mode == "active_only":
+            for t in self.tools:
+                t.clients[client_code] = bool(t.enabled)
+        else:
+            for t in self.tools:
+                t.clients[client_code] = False
+
+        self.meta["active_profile"] = ""
+        self._rebuild_profile_combo()
+        self._save_state()
+        msg = tr(self.lang, "msg_bulk_client", code=client_code)
+        self.logs.add("INFO", f"Clients ({client_code})", msg)
+        self.set_status(msg)
+        self._refresh_table()
+        self._refresh_logs_tab()
+        self._sync_live_environment_async(target_tools=[])
+
+    def _show_bulk_client_menu(self, client_code: str, btn: QPushButton, pos: Any) -> None:
+        menu = QMenu(self)
+        act_all_on = QAction(tr(self.lang, "bulk_all_on", code=client_code), self)
+        act_act_on = QAction(tr(self.lang, "bulk_active_only", code=client_code), self)
+        act_all_off = QAction(tr(self.lang, "bulk_all_off", code=client_code), self)
+        act_all_on.triggered.connect(lambda: self._toggle_client_all(client_code, "all_on"))
+        act_act_on.triggered.connect(lambda: self._toggle_client_all(client_code, "active_only"))
+        act_all_off.triggered.connect(lambda: self._toggle_client_all(client_code, "all_off"))
+        menu.addAction(act_all_on)
+        menu.addAction(act_act_on)
+        menu.addAction(act_all_off)
+        menu.exec(btn.mapToGlobal(pos))
+
+    def _change_mode(self, tool: ToolSpec, idx: int) -> None:
+        tool.mode_index = idx
+        self._save_state()
+        modes = localized_tool_modes(tool, self.lang)
+        mode_lbl = modes[idx] if 0 <= idx < len(modes) else ""
+        self.set_status(tr(self.lang, "msg_mode_changed", name=tool.name, mode=mode_lbl))
+
+    # --- DIALOG LAUNCHERS ---
     def open_gear(self, tool: ToolSpec) -> None:
         if tool.gear_kind == "skills94":
             saved_chk = set(self.meta.get("checked_blender_skills", []))
-            dlg = BlenderSkillsDialog(self, self.active_skills, saved_chk)
+            dlg = BlenderSkillsDialog(self, self.active_skills, saved_chk, lang=self.lang)
             if dlg.exec() == QDialog.DialogCode.Accepted and dlg.saved_result is not None:
                 self.active_skills = dlg.saved_result
                 self.meta["checked_blender_skills"] = sorted(dlg.saved_checked)
@@ -864,29 +918,37 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, VaultTabMixin, RepoTabMixin, Lo
                     tool.enabled,
                     tool.project_scope,
                     self.projects_map,
+                    lang=self.lang,
                 )
                 self._save_state()
-                self.logs.add("INFO" if ok else "DBG", tool.name, f"94 skill seçimi kaydedildi ({len(self.active_skills)} açık).", disk_msg)
-                self.set_status(f"Blender Skills kaydedildi: {len(self.active_skills)}/94 açık. {disk_msg}")
+                self.logs.add("INFO" if ok else "DBG", tool.name, f"Saved {len(self.active_skills)}/94 skills.", disk_msg)
+                self.set_status(tr(self.lang, "msg_skills_saved", on=len(self.active_skills), detail=disk_msg))
                 self._refresh_table()
                 self._refresh_logs_tab()
         else:
-            dlg = ToolGearDialog(self, tool, self.vault, self.logs, self._format_scope_display(tool))
+            dlg = ToolGearDialog(self, tool, self._format_scope_display(tool))
             if dlg.exec() == QDialog.DialogCode.Accepted:
                 self._save_state()
-                self.logs.add("INFO", tool.name, "Teknik çark ayarları kaydedildi.")
-                self.set_status(f"⚙️ {tool.name} ayarları kaydedildi.")
+                self.logs.add("INFO", tool.name, "Tool settings saved.")
+                self.set_status(tr(self.lang, "msg_gear_saved", name=tool.name))
                 self._refresh_table()
                 self._refresh_logs_tab()
+                self._sync_live_environment_async(target_tools=[tool])
 
+    def open_settings(self, initial_tab: int = 0) -> None:
+        dlg = SettingsDialog(self, initial_tab=initial_tab)
+        dlg.exec()
+
+    def open_diagnostics(self) -> None:
+        dlg = DiagnosticsDialog(self)
+        dlg.exec()
+
+    # --- PERIODIC WATCHERS & HEALTH SCAN ---
     def _on_second_tick(self) -> None:
         self.seconds_left -= 1
         if self.seconds_left <= 0:
             self.run_health_scan()
-        m, s = divmod(max(0, self.seconds_left), 60)
-        self.timer_lbl.setText(f"{m:02d}:{s:02d}")
-
-        if self.seconds_left > 0 and self.seconds_left % 3 == 0:
+        elif self.seconds_left % 3 == 0:
             self._run_silent_live_watch()
 
         if self.seconds_left % 10 == 0:
@@ -901,15 +963,18 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, VaultTabMixin, RepoTabMixin, Lo
         snap_tools = copy.deepcopy(self.tools)
         sk_cnt = len(self.active_skills)
         proj_snap = dict(self.projects_map)
+        lang_snap = self.lang
 
         def worker() -> None:
             try:
-                live_map = scan_live_process_locations()
+                live_map = scan_live_process_locations(lang=lang_snap)
                 out = []
                 for t in snap_tools:
-                    ok, ping_str, ms, detail, loc_detail = probe_tool_health(t, sk_cnt, proj_snap, live_map)
-                    out.append((t.id, ok, ping_str, ms, detail, loc_detail))
-                self.bridge.health_done.emit(out, live_map, True)
+                    ok, h_state, ping_str, ms, detail, loc_detail = probe_tool_health(
+                        t, sk_cnt, proj_snap, live_map, lang=lang_snap
+                    )
+                    out.append((t.id, ok, h_state, ping_str, ms, detail, loc_detail))
+                safe_emit(self.bridge.health_done, out, live_map, True)
             finally:
                 self._live_watch_busy = False
 
@@ -925,21 +990,33 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, VaultTabMixin, RepoTabMixin, Lo
             try:
                 name, used_mb, total_mb = query_gpu_vram()
             finally:
-                self.bridge.vram_done.emit(name, used_mb, total_mb)
+                safe_emit(self.bridge.vram_done, name, used_mb, total_mb)
 
         threading.Thread(target=worker, daemon=True).start()
 
+    def _update_vram_visibility(self) -> None:
+        trellis_on = any(t.id == "trellis" and t.enabled for t in self.tools)
+        trellis_running = bool(self.last_detected_apps.get("trellis_server")) or ("trellis" in self._latest_live_map)
+        show_vram = self._has_nvidia_gpu and (trellis_on or trellis_running)
+        self.vram_bar.setVisible(show_vram)
+        self.btn_vram_free.setVisible(show_vram)
+
     def _on_vram_done(self, name: str, used_mb: int, total_mb: int) -> None:
         self._vram_busy = False
+        self._has_nvidia_gpu = total_mb > 0
         if total_mb > 0:
             self.vram_bar.setMaximum(total_mb)
             self.vram_bar.setValue(used_mb)
             short_gpu = name.replace("NVIDIA GeForce ", "")
-            self.vram_bar.setFormat(f"{short_gpu}: {used_mb / 1024:.1f} / {total_mb / 1024:.1f} GB")
+            fmt = f"{short_gpu}: {used_mb / 1024:.1f} / {total_mb / 1024:.1f} GB"
+            self.vram_bar.setFormat(fmt)
+            self.vram_lbl.setText(fmt)
         else:
             self.vram_bar.setMaximum(100)
             self.vram_bar.setValue(0)
-            self.vram_bar.setFormat("VRAM: Yok")
+            self.vram_bar.setFormat("")
+            self.vram_lbl.setText("")
+        self._update_vram_visibility()
 
     def _check_dcc_auto_switch(self) -> None:
         if self._dcc_busy:
@@ -952,45 +1029,53 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, VaultTabMixin, RepoTabMixin, Lo
             try:
                 cur = detect_running_dcc_apps()
             finally:
-                self.bridge.dcc_done.emit(cur)
+                safe_emit(self.bridge.dcc_done, cur)
 
         threading.Thread(target=worker, daemon=True).start()
 
     def _on_dcc_done(self, cur: dict[str, bool]) -> None:
         self._dcc_busy = False
         if cur.get("unity") and not self.last_detected_apps.get("unity"):
-            self.set_status("👁️ Unity.exe algılandı — İsterseniz üstten '🎮 Unity & Shader' hazır ayarını seçebilirsiniz.")
+            self.set_status(
+                tr(self.lang, "msg_dcc_detected", app="Unity Editor", prof=profile_title("unity_game", self.lang))
+            )
         elif cur.get("blender") and not self.last_detected_apps.get("blender"):
-            self.set_status("👁️ blender.exe algılandı — İsterseniz üstten '🎨 3D & Korku Asset' hazır ayarını seçebilirsiniz.")
+            self.set_status(
+                tr(self.lang, "msg_dcc_detected", app="Blender", prof=profile_title("asset_3d", self.lang))
+            )
         self.last_detected_apps = cur
+        self._update_vram_visibility()
 
     def run_health_scan(self) -> None:
         self.seconds_left = 30
         if self._health_busy:
             return
         self._health_busy = True
-        self.set_status("Sağlık, port ve canlı süreç konumları taranıyor...")
+        self.set_status(tr(self.lang, "msg_scanning"))
         snap_tools = copy.deepcopy(self.tools)
         sk_cnt = len(self.active_skills)
         proj_snap = dict(self.projects_map)
+        lang_snap = self.lang
 
         def worker() -> None:
             out = []
             live_map: dict[str, str] = {}
             try:
-                live_map = scan_live_process_locations()
+                live_map = scan_live_process_locations(lang=lang_snap)
                 for t in snap_tools:
-                    ok, ping_str, ms, detail, loc_detail = probe_tool_health(t, sk_cnt, proj_snap, live_map)
-                    out.append((t.id, ok, ping_str, ms, detail, loc_detail))
+                    ok, h_state, ping_str, ms, detail, loc_detail = probe_tool_health(
+                        t, sk_cnt, proj_snap, live_map, lang=lang_snap
+                    )
+                    out.append((t.id, ok, h_state, ping_str, ms, detail, loc_detail))
             finally:
                 self._health_busy = False
-            self.bridge.health_done.emit(out, live_map, False)
+            safe_emit(self.bridge.health_done, out, live_map, False)
 
         threading.Thread(target=worker, daemon=True).start()
 
     def _on_health_results(
         self,
-        results: list[tuple[str, bool, str, int, str, str]],
+        results: list[tuple[str, bool, str, str, int, str, str]],
         live_map: dict[str, str] | None = None,
         silent: bool = False,
     ) -> None:
@@ -999,20 +1084,14 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, VaultTabMixin, RepoTabMixin, Lo
         by_id = {t.id: t for t in self.tools}
         state_changed = False
 
-        def _ping_bucket(s: str) -> str:
-            if " (" in s and ":" in s[:6]:
-                return "LIVE_OK"
-            if s.startswith("Çalışıyor"):
-                return "LIVE_OK"
-            return s
-
-        for tid, ok, ping_str, ms, detail, loc_detail in results:
+        for tid, ok, h_state, ping_str, ms, detail, loc_detail in results:
             if tid in by_id:
                 t = by_id[tid]
-                old_bucket = _ping_bucket(t.last_ping)
-                new_bucket = _ping_bucket(ping_str)
-                if old_bucket != new_bucket or t.live_location_detail != loc_detail:
+                if t.health_state != h_state or t.live_location_detail != loc_detail or (
+                    h_state != "ok" and t.last_ping != ping_str
+                ):
                     state_changed = True
+                t.health_state = h_state
                 t.last_ping = ping_str
                 t.last_latency_ms = ms
                 t.live_location_detail = loc_detail
@@ -1025,8 +1104,9 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, VaultTabMixin, RepoTabMixin, Lo
                             continue
                     if not silent and now_mono - self._last_warn_time.get(tid, 0.0) > 300.0:
                         self._last_warn_time[tid] = now_mono
-                        self.logs.add("WARN", t.name, f"Açık işaretli servis yanıt vermedi ({ping_str})", detail, t.port)
+                        self.logs.add("WARN", t.name, f"Service not responding ({ping_str})", detail, t.port)
 
+        self._update_vram_visibility()
         if silent:
             if QApplication.activePopupWidget() is None:
                 self._refresh_host_dep_banner()
@@ -1038,12 +1118,12 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, VaultTabMixin, RepoTabMixin, Lo
         self._refresh_host_dep_banner()
         self._refresh_logs_tab()
         self._update_vram_bar()
-        self.set_status("Canlı süreç, port ve konum taraması tamamlandı (3 sn'de bir anlık izleniyor).")
+        self.set_status(tr(self.lang, "msg_scan_done"))
 
     def _refresh_host_dep_banner(self) -> None:
         if not hasattr(self, "host_dep_banner"):
             return
-        missing = get_missing_host_dependencies(self.tools, self._latest_live_map, self.projects_map)
+        missing = get_missing_host_dependencies(self.tools, self._latest_live_map, self.projects_map, lang=self.lang)
         while self.host_dep_btns_lay.count():
             item = self.host_dep_btns_lay.takeAt(0)
             w = item.widget()
@@ -1055,7 +1135,7 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, VaultTabMixin, RepoTabMixin, Lo
             return
 
         titles = "  |  ".join(m["title"] for m in missing)
-        self.host_dep_lbl.setText(f"⚠️ <b>Bağımlı Program Kapalı:</b> {titles} — Tek tıkla başlatabilirsiniz:")
+        self.host_dep_lbl.setText(tr(self.lang, "banner_host_missing", titles=titles))
         for m in missing:
             btn = QPushButton(m["btn_label"])
             btn.setObjectName("warnBtn")
@@ -1071,101 +1151,110 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, VaultTabMixin, RepoTabMixin, Lo
             host_kind=str(dep_info.get("host", "")),
             projects_map=self.projects_map,
             target_scope=str(dep_info.get("scope", "GLOBAL")),
-            headless=bool(dep_info.get("headless", True)),
+            headless=bool(dep_info.get("headless", False)),
             trellis_root=tr_tool.param_value if tr_tool else "",
+            lang=self.lang,
         )
-        self.logs.add("INFO" if ok else "WARN", "Bağımlı Program", msg)
-        self.set_status(f"🚀 {msg}" if ok else f"⚠️ {msg}")
+        self.logs.add("INFO" if ok else "WARN", "Host App", msg)
+        self.set_status(msg)
         self._refresh_logs_tab()
         QTimer.singleShot(2500, self.run_health_scan)
 
     def _auto_heal_tool_async(self, tool: ToolSpec) -> None:
-        # K9: copy snapshots before spawning worker thread
         tool_snap = copy.deepcopy(tool)
         proj_snap = dict(self.projects_map)
         sk_cnt = len(self.active_skills)
+        lang_snap = self.lang
 
         def worker() -> None:
-            note = enforce_tool_runtime_state(tool_snap, proj_snap, allow_stop=False)
+            note = enforce_tool_runtime_state(tool_snap, proj_snap, allow_stop=False, lang=lang_snap)
             if note:
-                self.logs.add("INFO", tool_snap.name, f"Otomatik Kurtarma:{note}")
+                self.logs.add("INFO", tool_snap.name, f"Auto-heal:{note}")
                 time.sleep(1.5)
-                live_map = scan_live_process_locations()
-                ok, ping_str, ms, detail, loc_detail = probe_tool_health(tool_snap, sk_cnt, proj_snap, live_map)
-                self.bridge.health_done.emit([(tool_snap.id, ok, ping_str, ms, detail, loc_detail)], live_map, True)
+                live_map = scan_live_process_locations(lang=lang_snap)
+                ok, h_state, ping_str, ms, detail, loc_detail = probe_tool_health(
+                    tool_snap, sk_cnt, proj_snap, live_map, lang=lang_snap
+                )
+                safe_emit(
+                    self.bridge.health_done,
+                    [(tool_snap.id, ok, h_state, ping_str, ms, detail, loc_detail)],
+                    live_map,
+                    True,
+                )
 
         threading.Thread(target=worker, daemon=True).start()
 
     def _handle_free_vram(self) -> None:
-        ok, msg = free_trellis_vram()
-        self.logs.add("INFO" if ok else "WARN", "Trellis Sunucu & CLI", msg)
+        ok, msg = free_trellis_vram(lang=self.lang)
+        self.logs.add("INFO" if ok else "WARN", "TRELLIS", msg)
         self._update_vram_bar()
         self._refresh_logs_tab()
         self.set_status(msg)
 
-    def _handle_kill_zombie_port(self, port: int) -> None:
+    def _handle_kill_zombie_port(self, port: int, parent_widget: QWidget | None = None) -> None:
         owner_pid, owner_name = find_port_owner(port)
         if owner_pid:
             ans = QMessageBox.question(
-                self,
-                "Asılı Portu Kapat",
-                f"Port {port} şu an '{owner_name}' (PID {owner_pid}) tarafından kullanılıyor.\n\n"
-                "Bu süreci sonlandırmak istediğinize emin misiniz? Bu süreç başka bir programa aitse "
-                "kaydedilmemiş verileri kaybolabilir.",
+                parent_widget or self,
+                tr(self.lang, "diag_port_confirm_title"),
+                tr(self.lang, "diag_port_confirm_msg", port=port, name=owner_name, pid=owner_pid),
             )
             if ans != QMessageBox.StandardButton.Yes:
                 return
-        self.set_status(f"Port {port} temizleniyor...")
+        self.set_status(tr(self.lang, "msg_port_cleaning", port=port))
+        lang_snap = self.lang
 
         def worker() -> None:
             ok, msg = False, ""
             try:
-                ok, msg = kill_zombie_port_process(port)
+                ok, msg = kill_zombie_port_process(port, lang=lang_snap)
             except Exception as exc:
-                msg = f"Port {port} temizlenemedi: {exc}"
+                msg = f"Port :{port} error: {exc}"
             finally:
-                self.bridge.port_kill_done.emit(port, ok, msg)
+                safe_emit(self.bridge.port_kill_done, port, ok, msg)
 
         threading.Thread(target=worker, daemon=True).start()
 
     def _on_port_kill_done(self, port: int, _ok: bool, msg: str) -> None:
-        self.logs.add("INFO", f"Port {port}", msg, msg, port)
+        self.logs.add("INFO", f"Port :{port}", msg, msg, port)
         self._refresh_logs_tab()
         self.set_status(msg)
         QTimer.singleShot(500, self.run_health_scan)
 
+    # --- CONFIG SYNC & IMPORT / EXPORT ---
     def _handle_sync_configs(self) -> None:
         bs_tool = next((t for t in self.tools if t.id == "blender_skills"), None)
         if bs_tool:
-            sync_blender_skills_on_disk(self.active_skills, bs_tool.enabled, bs_tool.project_scope, self.projects_map)
+            sync_blender_skills_on_disk(
+                self.active_skills, bs_tool.enabled, bs_tool.project_scope, self.projects_map, lang=self.lang
+            )
         msgs = sync_mcp_json_clients(self.tools, self.vault, self.projects_map)
-        summary = " | ".join(msgs) if msgs else "Güncellenecek istemci bulunamadı."
-        self.logs.add("INFO", "Config Senkronizasyon", summary)
+        summary = " | ".join(msgs) if msgs else "No client config files found."
+        self.logs.add("INFO", "Config Sync", summary)
         self._refresh_logs_tab()
-        self.set_status(f"🔄 AI Config dosyaları güncellendi: {summary}")
+        self.set_status(tr(self.lang, "msg_configs_synced", summary=summary))
         home = pathlib.Path.home()
         paths_info = (
             f"{summary}\n\n"
-            "Yazılan / Güncellenen Konumlar:\n"
-            f"• AGY: {home / '.gemini' / 'config' / 'mcp_config.json'}\n"
-            f"• CDX: {home / '.codex' / 'config.toml'}\n"
-            f"• CLD: {home / '.claude.json'} (ve proje içi .mcp.json)\n"
-            f"• CUR: {home / '.cursor' / 'mcp.json'} (ve proje içi .cursor/mcp.json)\n"
-            f"• Program Kaydı: {self.store.state_file}"
+            f"AGY: {home / '.gemini' / 'config' / 'mcp_config.json'}\n"
+            f"CDX: {home / '.codex' / 'config.toml'}\n"
+            f"CLD: {home / '.claude.json'} (+ <project>/.mcp.json)\n"
+            f"CUR: {home / '.cursor' / 'mcp.json'} (+ <project>/.cursor/mcp.json)\n"
+            f"State: {self.store.state_file}"
         )
-        QMessageBox.information(self, "AI Config Senkronizasyonu Tamamlandı", paths_info)
+        QMessageBox.information(self, tr(self.lang, "msg_configs_synced_title"), paths_info)
 
     def _export_settings(self) -> None:
         path, _ = QFileDialog.getSaveFileName(
             self,
-            "Ayarları Dışa Aktar (Export)",
-            "ai_arac_ayarlar.json",
-            "Ayar Dosyası (*.json *.aihub)",
+            tr(self.lang, "menu_export"),
+            "aiconomy-settings.json",
+            "AIconomy Settings (*.json *.aiconomy *.aihub)",
         )
         if not path:
             return
         self.export_to_file(pathlib.Path(path))
-        self.set_status(f"📤 Tüm ayarlar ve seçimler dışa aktarıldı: {path}")
+        self.set_status(tr(self.lang, "msg_exported", path=path))
 
     def export_to_file(self, target_path: pathlib.Path) -> None:
         self._save_state()
@@ -1175,22 +1264,18 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, VaultTabMixin, RepoTabMixin, Lo
     def _import_settings(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
             self,
-            "Ayarları İçe Aktar (Import)",
+            tr(self.lang, "menu_import"),
             "",
-            "Ayar Dosyası (*.json *.aihub)",
+            "AIconomy Settings (*.json *.aiconomy *.aihub)",
         )
         if not path:
             return
         try:
             self.import_from_file(pathlib.Path(path))
-            self.set_status(f"📥 Ayarlar ve tüm seçimler geri yüklendi: {path}")
-            QMessageBox.information(
-                self,
-                "Import Tamamlandı",
-                "Tüm araç durumları, proje kapsamları, çark ayarları ve kutucuk seçimleriniz geri yüklendi.",
-            )
+            self.set_status(tr(self.lang, "msg_imported", path=path))
+            QMessageBox.information(self, tr(self.lang, "msg_import_ok_title"), tr(self.lang, "msg_import_ok_msg"))
         except Exception as exc:
-            QMessageBox.warning(self, "Import Hatası", f"Dosya okunamadı: {exc}")
+            QMessageBox.warning(self, tr(self.lang, "msg_import_err_title"), tr(self.lang, "msg_import_err_msg", err=exc))
 
     def import_from_file(self, source_path: pathlib.Path) -> None:
         txt = source_path.read_text(encoding="utf-8")
@@ -1199,52 +1284,51 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, VaultTabMixin, RepoTabMixin, Lo
         self.tools = build_default_catalog()
         self.active_skills, self.meta = self.store.load_into(self.tools)
 
-        self.sort_key = str(self.meta.get("sort_key", "usage"))
+        self.sort_key = str(self.meta.get("sort_key", "enabled"))
         self.sort_desc = bool(self.meta.get("sort_desc", True))
+        self.lang = normalize_language(str(self.meta.get("lang") or self.lang))
+        self.meta["lang"] = self.lang
         self._apply_theme(self.meta.get("theme", "dark"))
 
-        self.auto_detect_cb.blockSignals(True)
-        self.auto_detect_cb.setChecked(bool(self.meta.get("auto_detect_apps", True)))
-        self.auto_detect_cb.blockSignals(False)
-
         for t in self.tools:
-            t.live_location_detail = resolve_disk_location(t, self.projects_map, {})
+            t.live_location_detail = resolve_disk_location(t, self.projects_map, {}, lang=self.lang)
 
         bs_tool = next((t for t in self.tools if t.id == "blender_skills"), None)
         if bs_tool:
-            sync_blender_skills_on_disk(self.active_skills, bs_tool.enabled, bs_tool.project_scope, self.projects_map)
+            sync_blender_skills_on_disk(
+                self.active_skills, bs_tool.enabled, bs_tool.project_scope, self.projects_map, lang=self.lang
+            )
 
-        self.tabs.setTabText(0, f"📊 Araç Paneli ({len(self.tools)})")
-        self._update_profile_buttons_ui()
+        self._retranslate_ui()
+        self._rebuild_kind_filter_combo()
         self._rebuild_project_filter_combo()
-        self._rebuild_custom_presets_combo()
+        self._rebuild_profile_combo()
+        self._rebuild_tray_menu()
+        self._refresh_first_run_banner()
         self._refresh_table()
         self._refresh_plugins_tab()
         self.run_health_scan()
 
+    # --- APP SELF-UPDATER ---
     def _apply_app_update_visual_state(self, res: UpdateCheckResult) -> None:
         if res.ok and res.has_update:
-            ver_cmp = f"{res.local_version}v > {res.remote_version}v"
-            self.btn_app_update_top.setText(f"⬆️ Yeni Program Sürümü ({ver_cmp})")
-            self.btn_app_update_top.setObjectName("warnBtn")
-            self.btn_do_app_upd.setText(f"🔔 Program Güncellemesi ({ver_cmp})")
+            self.btn_do_app_upd.setText(tr(self.lang, "ver_btn_update", remote=res.remote_version))
             self.btn_do_app_upd.setObjectName("warnBtn")
-            self.app_update_banner_lbl.setText(f"🚀 Bu programın yeni bir sürümü yayınlandı:  {ver_cmp}")
+            self.app_update_banner_lbl.setText(
+                tr(self.lang, "banner_app_update", local=res.local_version, remote=res.remote_version)
+            )
             if res.release_notes_url:
                 self.app_update_notes_lbl.setText(
-                    f"<a style='color:#93c5fd; font-weight:600;' href='{res.release_notes_url}'>📄 Yenilikleri Gör ↗</a>"
+                    f"<a style='color:#93c5fd; font-weight:600;' href='{res.release_notes_url}'>{tr(self.lang, 'banner_release_notes')}</a>"
                 )
             self.app_update_banner.show()
         elif res.ok:
-            self.btn_app_update_top.setText(tr(self.lang, "app_up_to_date"))
-            self.btn_app_update_top.setObjectName("primaryBtn")
             self.btn_do_app_upd.setText(tr(self.lang, "ver_btn", ver=res.local_version))
-            self.btn_do_app_upd.setObjectName("")
+            self.btn_do_app_upd.setObjectName("ghostBtn")
             self.app_update_banner.hide()
 
-        for b in (self.btn_app_update_top, self.btn_do_app_upd):
-            self.style().unpolish(b)
-            self.style().polish(b)
+        self.style().unpolish(self.btn_do_app_upd)
+        self.style().polish(self.btn_do_app_upd)
 
     def _run_startup_app_update_check(self) -> None:
         repo = resolve_effective_app_repo(str(self.meta.get("app_update_repo", "")))
@@ -1255,7 +1339,7 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, VaultTabMixin, RepoTabMixin, Lo
 
         def worker() -> None:
             res = check_for_app_updates(repo, tok)
-            self.bridge.app_check_done.emit(res)
+            safe_emit(self.bridge.app_check_done, res)
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -1264,44 +1348,40 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, VaultTabMixin, RepoTabMixin, Lo
             self._open_app_update_dialog(self.latest_app_check)
             return
         repo = resolve_effective_app_repo(str(self.meta.get("app_update_repo", "")))
-        self.btn_app_update_top.setEnabled(False)
-        self.btn_app_update_top.setText("🔍 Program Kontrol Ediliyor...")
-        self.set_status(f"🔍 {repo} üzerinden bu programın yeni sürümü kontrol ediliyor...")
+        self.set_status(tr(self.lang, "msg_app_checking"))
         tok = self.vault.get_secret("GITHUB_TOKEN")
         self._silent_app_check = True
 
         def worker() -> None:
             res = check_for_app_updates(repo, tok)
-            self.bridge.app_check_done.emit(res)
+            safe_emit(self.bridge.app_check_done, res)
 
         threading.Thread(target=worker, daemon=True).start()
 
     def _on_bg_app_check_done(self, res: UpdateCheckResult) -> None:
         self.latest_app_check = res
-        self.btn_app_update_top.setEnabled(True)
         self._apply_app_update_visual_state(res)
 
         if self._startup_app_check:
             self._startup_app_check = False
             if res.ok and res.has_update:
-                self.set_status(f"🔔 Program güncellemesi mevcut: {res.local_version}v > {res.remote_version}v — Üstteki butondan güncelleyebilirsiniz.")
+                self.set_status(
+                    tr(self.lang, "msg_app_update_found", local=res.local_version, remote=res.remote_version)
+                )
             return
 
         if not self._silent_app_check:
             return
         self._silent_app_check = False
         if res.has_update:
-            self.set_status(f"🔔 Yeni program sürümü bulundu: {res.local_version}v > {res.remote_version}v")
+            self.set_status(
+                tr(self.lang, "msg_app_update_found", local=res.local_version, remote=res.remote_version)
+            )
             self._open_app_update_dialog(res)
         elif res.ok:
-            self.set_status(f"✓ Kullandığınız program son sürümde ({res.local_version}v) — yeni güncelleme bulunmuyor.")
+            self.set_status(tr(self.lang, "msg_app_up_to_date", ver=res.local_version))
         else:
-            self.btn_app_update_top.setText("🔄 Program Güncelleme")
-            self.set_status(f"⚠️ {res.message}")
-
-    def _open_connection_test_dialog(self) -> None:
-        dlg = ConnectionTestDialog(self, self.tools, self.vault, self.projects_map, len(self.active_skills))
-        dlg.exec()
+            self.set_status(res.message)
 
     def _open_app_update_dialog(self, initial_res: UpdateCheckResult | None = None) -> None:
         self._silent_app_check = False

@@ -1,4 +1,4 @@
-"""Kalıcı SQLite Log Veritabanı, Windows DPAPI Şifreli Kasa ve Durum/Yedek Yönetimi."""
+"""Persistent SQLite log store, Windows DPAPI encrypted vault, and application state persistence."""
 from __future__ import annotations
 
 import base64
@@ -8,10 +8,40 @@ import ctypes.wintypes as wintypes
 import datetime as dt
 import json
 import pathlib
+import shutil
 import sqlite3
 from typing import Any
 
-from .catalog import CheckOption, DEFAULT_ACTIVE_BLENDER_SKILLS, ToolSpec, default_projects_map
+from .catalog import (
+    CheckOption,
+    DEFAULT_ACTIVE_BLENDER_SKILLS,
+    ToolSpec,
+    default_projects_map,
+    normalize_tool_kind,
+)
+
+STATE_FILENAME = "aiconomy-state.json"
+LOG_DB_FILENAME = "aiconomy.db"
+VAULT_FILENAME = "aiconomy-vault.dpapi.json"
+
+_LEGACY_FILES: tuple[tuple[str, str], ...] = (
+    ("hub_state.json", STATE_FILENAME),
+    ("ai_hub_logs.db", LOG_DB_FILENAME),
+    ("vault.dpapi.json", VAULT_FILENAME),
+)
+
+
+def migrate_legacy_data_files(data_dir: pathlib.Path) -> None:
+    """Copy legacy v1.3.x data filenames to clean AIconomy filenames once (non-destructive)."""
+    data_dir.mkdir(parents=True, exist_ok=True)
+    for old_name, new_name in _LEGACY_FILES:
+        old_p = data_dir / old_name
+        new_p = data_dir / new_name
+        if old_p.is_file() and not new_p.exists():
+            try:
+                shutil.copy2(old_p, new_p)
+            except OSError:
+                continue
 
 
 class DATA_BLOB(ctypes.Structure):
@@ -22,13 +52,13 @@ class DATA_BLOB(ctypes.Structure):
 
 
 class WindowsDpapiVault:
-    """Windows kullanıcı oturumuna özel CryptProtectData (DPAPI) şifreli anahtar kasası."""
+    """Windows session-scoped CryptProtectData (DPAPI) encrypted API key vault."""
 
     STANDARD_KEYS: list[tuple[str, str]] = [
-        ("MESHY_API_KEY", "Meshy 3D Bulut API Anahtarı"),
-        ("ELEVENLABS_API_KEY", "ElevenLabs Ses & SFX API Anahtarı"),
-        ("GITHUB_TOKEN", "GitHub Kişisel Erişim Anahtarı ( Yüksek API Limiti )"),
-        ("CONTEXT7_API_KEY", "Context7 Docs API Anahtarı (İsteğe Bağlı)"),
+        ("MESHY_API_KEY", "set_key_meshy"),
+        ("ELEVENLABS_API_KEY", "set_key_elevenlabs"),
+        ("GITHUB_TOKEN", "set_key_github"),
+        ("CONTEXT7_API_KEY", "set_key_context7"),
     ]
 
     def __init__(self, vault_file: pathlib.Path) -> None:
@@ -43,7 +73,7 @@ class WindowsDpapiVault:
         blob_out = DATA_BLOB()
         ok = ctypes.windll.crypt32.CryptProtectData(
             ctypes.byref(blob_in),
-            "AIAracMerkeziVault",
+            "AIconomyVault",
             None,
             None,
             None,
@@ -51,7 +81,7 @@ class WindowsDpapiVault:
             ctypes.byref(blob_out),
         )
         if not ok:
-            raise OSError("Windows DPAPI şifreleme başarısız oldu.")
+            raise OSError("Windows DPAPI encryption failed.")
         try:
             encrypted = ctypes.string_at(blob_out.pbData, blob_out.cbData)
             return base64.b64encode(encrypted).decode("ascii")
@@ -74,7 +104,7 @@ class WindowsDpapiVault:
             ctypes.byref(blob_out),
         )
         if not ok:
-            raise OSError("Windows DPAPI şifre çözme başarısız oldu.")
+            raise OSError("Windows DPAPI decryption failed.")
         try:
             plain = ctypes.string_at(blob_out.pbData, blob_out.cbData)
             return plain.decode("utf-8")
@@ -117,12 +147,12 @@ class WindowsDpapiVault:
             val = self.get_secret(k)
             if val:
                 prefix = val[:4] if len(val) >= 8 else val[:2]
-                out[k] = f"{prefix}{'•' * 12}"
+                out[k] = f"{prefix}{'*' * 12}"
         return out
 
 
 class LogDatabase:
-    """Kalıcı SQLite hata, uyarı ve debug geçmişi."""
+    """Persistent SQLite log store for errors, warnings, and operational events."""
 
     def __init__(self, db_path: pathlib.Path) -> None:
         self.db_path = db_path
@@ -155,9 +185,9 @@ class LogDatabase:
                     (
                         now,
                         "INFO",
-                        "Sistem",
-                        "AI Araç & Token Ekonomisi Kontrol Merkezi başlatıldı.",
-                        "SQLite log veritabanı ve Windows DPAPI şifreli kasa aktif.",
+                        "AIconomy",
+                        "AIconomy initialized.",
+                        "SQLite log database and Windows DPAPI vault ready.",
                         None,
                     ),
                 )
@@ -222,23 +252,30 @@ class LogDatabase:
 
 
 class StateStore:
-    """Araç durumları, 94 Blender Skill seçimi ve Export / Import ayar yönetimi."""
+    """Persist tool states, 94 Blender skills, profiles, projects, and user preferences."""
 
     def __init__(self, state_file: pathlib.Path) -> None:
         self.state_file = state_file
         self.state_file.parent.mkdir(parents=True, exist_ok=True)
 
+    @property
+    def has_saved_state(self) -> bool:
+        return self.state_file.is_file()
+
     def load_into(self, tools: list[ToolSpec]) -> tuple[set[str], dict[str, Any]]:
         active_skills = set(DEFAULT_ACTIVE_BLENDER_SKILLS)
         meta: dict[str, Any] = {
             "theme": "dark",
+            "minimize_to_tray": True,
             "auto_detect_apps": True,
-            "spent_tokens_k": 342,
+            "first_run_dismissed": False,
             "projects": default_projects_map(),
-            "plugin_checked_ids": [t.id for t in tools if t.enabled],
+            "plugin_checked_ids": [],
             "checked_blender_skills": [],
-            "sort_key": "usage",
+            "sort_key": "enabled",
             "sort_desc": True,
+            "active_profile": "",
+            "custom_presets": {},
         }
         if not self.state_file.is_file():
             return active_skills, meta
@@ -246,6 +283,9 @@ class StateStore:
             raw = json.loads(self.state_file.read_text(encoding="utf-8"))
         except Exception:
             return active_skills, meta
+
+        # Existing users who already had a state file shouldn't see the first-run welcome banner
+        meta["first_run_dismissed"] = True
 
         if isinstance(raw.get("active_blender_skills"), list):
             active_skills = set(raw["active_blender_skills"])
@@ -259,6 +299,16 @@ class StateStore:
         meta.update(saved_meta)
         meta["projects"] = merged_projs
 
+        # Migrate legacy sort_key="usage" -> "enabled"
+        if meta.get("sort_key") == "usage":
+            meta["sort_key"] = "enabled"
+
+        # Migrate legacy list active_profiles -> single active_profile key if empty
+        if not meta.get("active_profile") and isinstance(meta.get("active_profiles"), list):
+            ap = meta["active_profiles"]
+            if len(ap) == 1:
+                meta["active_profile"] = f"builtin:{ap[0]}"
+
         by_id = {t.id: t for t in tools}
         for tid, tdata in raw.get("tools", {}).items():
             if tid in by_id:
@@ -269,10 +319,12 @@ class StateStore:
                 if t.scope_selectable and "project_scope" in tdata:
                     sc = str(tdata["project_scope"])
                     t.project_scope = sc if (sc == "GLOBAL" or sc in merged_projs) else "GLOBAL"
-                t.mode_index = int(tdata.get("mode_index", t.mode_index))
+                if t.modes:
+                    t.mode_index = max(0, min(int(tdata.get("mode_index", t.mode_index)), len(t.modes) - 1))
+                else:
+                    t.mode_index = 0
                 t.param_value = str(tdata.get("param_value", t.param_value))
                 t.version = str(tdata.get("version", t.version))
-                t.usage_count = int(tdata.get("usage_count", t.usage_count))
                 opt_map = tdata.get("options", {})
                 for opt in t.options:
                     if opt.key in opt_map:
@@ -282,7 +334,7 @@ class StateStore:
                     ToolSpec(
                         id=tid,
                         name=tdata["name"],
-                        kind=tdata.get("kind", "stdio MCP"),
+                        kind=normalize_tool_kind(tdata.get("kind", "stdio")),
                         version=tdata.get("version", "v1.0.0"),
                         repo_url=tdata.get("repo_url", ""),
                         schema_tokens=int(tdata.get("schema_tokens", 1800)),
@@ -304,7 +356,10 @@ class StateStore:
                         mcp_server_key=tdata.get("mcp_server_key", tid),
                         mcp_command=tdata.get("mcp_command", ""),
                         mcp_args=tdata.get("mcp_args", []),
-                        ai_question_hint=tdata.get("ai_question_hint", "Bu aracın ayarlarını projem için nasıl optimize etmeliyim?"),
+                        ai_question_hint=tdata.get(
+                            "ai_question_hint",
+                            "How should I optimize this tool's settings for my project?",
+                        ),
                         options=[
                             CheckOption(o["key"], o["label"], o["enabled"], o.get("help_text", ""))
                             for o in tdata.get("custom_options", [])
@@ -313,7 +368,9 @@ class StateStore:
                 )
         return active_skills, meta
 
-    def serialize(self, tools: list[ToolSpec], active_skills: set[str], meta: dict[str, Any], default_ids: set[str]) -> dict[str, Any]:
+    def serialize(
+        self, tools: list[ToolSpec], active_skills: set[str], meta: dict[str, Any], default_ids: set[str]
+    ) -> dict[str, Any]:
         tools_dict: dict[str, Any] = {}
         for t in tools:
             entry: dict[str, Any] = {
@@ -324,14 +381,13 @@ class StateStore:
                 "project_scope": t.project_scope,
                 "mode_index": t.mode_index,
                 "param_value": t.param_value,
-                "usage_count": t.usage_count,
                 "options": {o.key: o.enabled for o in t.options},
             }
             if t.id not in default_ids:
                 entry.update(
                     {
                         "_custom": True,
-                        "kind": t.kind,
+                        "kind": normalize_tool_kind(t.kind),
                         "version": t.version,
                         "repo_url": t.repo_url,
                         "schema_tokens": t.schema_tokens,
@@ -363,6 +419,8 @@ class StateStore:
             "tools": tools_dict,
         }
 
-    def save(self, tools: list[ToolSpec], active_skills: set[str], meta: dict[str, Any], default_ids: set[str]) -> None:
+    def save(
+        self, tools: list[ToolSpec], active_skills: set[str], meta: dict[str, Any], default_ids: set[str]
+    ) -> None:
         payload = self.serialize(tools, active_skills, meta, default_ids)
         self.state_file.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")

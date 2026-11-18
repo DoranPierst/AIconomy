@@ -67,13 +67,20 @@ def sync_blender_skills_on_disk(
     plugin_enabled: bool,
     project_scope: str = "GLOBAL",
     projects_map: dict[str, str] | None = None,
+    lang: str = "en",
 ) -> tuple[bool, str]:
     """Sync active Blender skills either globally or into the selected project's .agents/skills folder."""
+    is_tr = lang == "tr"
     target_root = pathlib.Path.home() / ".gemini" / "config" / "plugins" / "blender-skills"
     skills_dir = target_root / "skills"
     disabled_dir = target_root / "skills_disabled"
     if not skills_dir.is_dir() and not disabled_dir.is_dir():
-        return False, "Blender Skills henüz diske indirilmemiş (Tercihiniz kaydedildi; Eklentiler sekmesinden indirebilirsiniz)."
+        msg = (
+            "Blender Skills henüz diske indirilmedi (Eklentiler sekmesinden kurabilirsiniz)."
+            if is_tr
+            else "Blender Skills is not installed on disk yet (install from the Plugins tab)."
+        )
+        return False, msg
 
     skills_dir.mkdir(parents=True, exist_ok=True)
     disabled_dir.mkdir(parents=True, exist_ok=True)
@@ -113,9 +120,20 @@ def sync_blender_skills_on_disk(
                 if dst_ref.exists():
                     _force_rmtree(dst_ref)
                 shutil.copytree(all_pool["references"], dst_ref)
-            return True, f"Sadece '{project_scope}' projesine ({len(active_skills) if plugin_enabled else 0} skill -> .agents/skills) senkronlandı."
+            cnt = len(active_skills) if plugin_enabled else 0
+            msg = (
+                f"'{project_scope}' projesine senkronlandı ({cnt} skill -> .agents/skills)."
+                if is_tr
+                else f"Synced to project '{project_scope}' ({cnt} skills -> .agents/skills)."
+            )
+            return True, msg
 
-    return True, f"Global senkronizasyon tamamlandı ({moved} skill taşındı; {len(global_effective)} aktif)."
+    msg = (
+        f"Global senkronizasyon tamamlandı ({moved} taşındı, {len(global_effective)} aktif)."
+        if is_tr
+        else f"Global sync complete ({moved} moved, {len(global_effective)} active)."
+    )
+    return True, msg
 
 
 def _is_http_mcp_tool(t: ToolSpec) -> bool:

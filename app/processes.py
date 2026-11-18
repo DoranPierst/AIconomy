@@ -1,4 +1,4 @@
-"""Process, port, GPU VRAM, visible GUI window detection, and live health probing."""
+"""Process, port, GPU VRAM, visible GUI window detection, and live health probing (emoji-free, EN & TR)."""
 from __future__ import annotations
 
 import csv
@@ -15,8 +15,9 @@ import urllib.request
 
 import psutil
 
-from .catalog import ToolSpec
+from .catalog import ToolSpec, localized_tool_modes
 from .host_apps import NO_WINDOW, _find_blender_exe
+from .i18n import tr
 
 PROTECTED_EXES = {"unity.exe", "blender.exe", "code.exe", "antigravity.exe", "explorer.exe"}
 _PY_HOST_EXES = {"python.exe", "pythonw.exe", "uv.exe", "uvx.exe"}
@@ -49,7 +50,7 @@ def query_gpu_vram() -> tuple[str, int, int]:
                 return parts[0], int(float(parts[1])), int(float(parts[2]))
     except Exception:
         pass
-    return "GPU Algılanamadı", 0, 0
+    return "", 0, 0
 
 
 def _is_interactive_default_desktop() -> bool:
@@ -160,11 +161,12 @@ def detect_running_dcc_apps() -> dict[str, bool]:
     return running
 
 
-def scan_live_process_locations() -> dict[str, str]:
+def scan_live_process_locations(lang: str = "en") -> dict[str, str]:
     """Inspect active managed and DCC processes to determine live project paths and window states."""
     live: dict[str, str] = {}
     dcc_procs: list[tuple[int, str, str, list[str]]] = []
     pids_by_img: dict[str, list[int]] = {}
+    is_tr = lang == "tr"
 
     for proc in psutil.process_iter():
         try:
@@ -197,9 +199,17 @@ def scan_live_process_locations() -> dict[str, str]:
                         proj_val = arg.split("=", 1)[1]
                         break
                 if proj_val:
-                    live["serena"] = f"🟢 Canlı Proje: {proj_val}  |  Süreç: {exe or nm} (PID {pid})"
+                    live["serena"] = (
+                        f"Canlı proje: {proj_val}  |  {exe or nm} (PID {pid})"
+                        if is_tr
+                        else f"Live project: {proj_val}  |  {exe or nm} (PID {pid})"
+                    )
                 else:
-                    live["serena"] = f"🟢 Çalışıyor: {exe or nm} (PID {pid})"
+                    live["serena"] = (
+                        f"Çalışıyor: {exe or nm} (PID {pid})"
+                        if is_tr
+                        else f"Running: {exe or nm} (PID {pid})"
+                    )
 
             elif nm == "unity.exe":
                 if "unity hub" in exe.lower():
@@ -215,17 +225,25 @@ def scan_live_process_locations() -> dict[str, str]:
                 live["blender_mcp_bridge_pid"] = str(pid)
 
             elif nm == "trellis-server.exe":
-                live["trellis"] = f"🟢 GPU Sunucu Aktif: {exe} (PID {pid})"
+                live["trellis"] = (
+                    f"GPU sunucusu aktif: {exe} (PID {pid})"
+                    if is_tr
+                    else f"GPU server active: {exe} (PID {pid})"
+                )
 
             elif nm == "qrenderdoc.exe":
                 live["renderdoc_open"] = "1"
-                live["renderdoc"] = f"🟢 RenderDoc Açık: {exe} (PID {pid})"
+                live["renderdoc"] = (
+                    f"RenderDoc açık: {exe} (PID {pid})"
+                    if is_tr
+                    else f"RenderDoc open: {exe} (PID {pid})"
+                )
         except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess, OSError):
             continue
 
     win_titles = get_gui_window_titles(pids_by_img) if pids_by_img else {}
 
-    for pid, kind, exe, cmdline in dcc_procs:
+    for pid, kind, _exe, cmdline in dcc_procs:
         w_title = win_titles.get(pid, "")
         if kind == "unity":
             proj_val = ""
@@ -236,9 +254,17 @@ def scan_live_process_locations() -> dict[str, str]:
             if w_title or proj_val:
                 live["unity_open"] = "1"
                 if proj_val:
-                    live["unity"] = f"🟢 Açık Unity Projesi: {proj_val} (PID {pid})"
+                    live["unity"] = (
+                        f"Açık Unity projesi: {proj_val} (PID {pid})"
+                        if is_tr
+                        else f"Open Unity project: {proj_val} (PID {pid})"
+                    )
                 else:
-                    live["unity"] = f"🟢 Unity Editör Açık: {w_title} (PID {pid})"
+                    live["unity"] = (
+                        f"Unity Editor açık: {w_title} (PID {pid})"
+                        if is_tr
+                        else f"Unity Editor open: {w_title} (PID {pid})"
+                    )
 
         elif kind == "blender":
             blend_files = [a for a in cmdline if a.lower().endswith(".blend")]
@@ -247,13 +273,23 @@ def scan_live_process_locations() -> dict[str, str]:
                 live["blender_pid"] = str(pid)
                 live["blender_title"] = w_title
                 if blend_files:
-                    live["blender"] = f"🟢 Açık Sahne: {blend_files[0]}  |  {w_title} (PID {pid})"
+                    live["blender"] = (
+                        f"Açık sahne: {blend_files[0]}  |  {w_title} (PID {pid})"
+                        if is_tr
+                        else f"Open scene: {blend_files[0]}  |  {w_title} (PID {pid})"
+                    )
                 else:
-                    live["blender"] = f"🟢 Blender Açık: {w_title} (PID {pid})"
+                    live["blender"] = (
+                        f"Blender açık: {w_title} (PID {pid})"
+                        if is_tr
+                        else f"Blender open: {w_title} (PID {pid})"
+                    )
             elif "blender_open" not in live:
                 live["blender_zombie_pid"] = str(pid)
                 live["blender"] = (
-                    f"⚠️ Penceresiz Asılı Süreç: blender.exe (PID {pid}) — Blender kapalı ama arka planda asılı kalmış!"
+                    f"Penceresiz asılı süreç: blender.exe (PID {pid})"
+                    if is_tr
+                    else f"Windowless stuck process: blender.exe (PID {pid})"
                 )
 
     return live
@@ -270,14 +306,15 @@ def find_port_owner(port: int) -> tuple[int | None, str]:
                         p = psutil.Process(pid)
                         return pid, p.name()
                     except Exception:
-                        return pid, "bilinmeyen-süreç"
+                        return pid, "unknown"
     except Exception:
         pass
     return None, ""
 
 
-def kill_zombie_port_process(port: int) -> tuple[bool, str]:
+def kill_zombie_port_process(port: int, lang: str = "en") -> tuple[bool, str]:
     """Terminate a stuck background server holding ``port`` while protecting visible GUI editors."""
+    is_tr = lang == "tr"
     cleaned_extra: list[str] = []
     if port == 9876:
         for p in psutil.process_iter(["pid", "name", "cmdline"]):
@@ -293,15 +330,27 @@ def kill_zombie_port_process(port: int) -> tuple[bool, str]:
     pid, name = find_port_owner(port)
     if not pid:
         if cleaned_extra:
-            return True, f"Asılı köprü temizlendi: {', '.join(cleaned_extra)}."
-        return False, f"Port {port} üzerinde dinleyen aktif bir süreç bulunamadı."
+            msg = (
+                f"Asılı köprü temizlendi: {', '.join(cleaned_extra)}."
+                if is_tr
+                else f"Cleaned up stuck bridge: {', '.join(cleaned_extra)}."
+            )
+            return True, msg
+        msg = (
+            f"Port :{port} üzerinde dinleyen süreç bulunamadı."
+            if is_tr
+            else f"No active process is listening on port :{port}."
+        )
+        return False, msg
 
     win_titles = get_gui_window_titles({name: [pid]}) if name.lower() in PROTECTED_EXES else {}
     if name.lower() in PROTECTED_EXES and pid in win_titles:
-        return (
-            False,
-            f"Port {port} şu an ekranda açık olan '{win_titles[pid]}' (PID {pid}) tarafından kullanılıyor. Sahne kaybını önlemek için açık editör kapatılmadı.",
+        msg = (
+            f"Port :{port} açık pencere '{win_titles[pid]}' (PID {pid}) tarafından kullanılıyor; editör korundu."
+            if is_tr
+            else f"Port :{port} is used by open editor '{win_titles[pid]}' (PID {pid}); left running to prevent data loss."
         )
+        return False, msg
     try:
         proc = psutil.Process(pid)
         proc.terminate()
@@ -310,9 +359,19 @@ def kill_zombie_port_process(port: int) -> tuple[bool, str]:
         except psutil.TimeoutExpired:
             proc.kill()
         extra_note = f" + {', '.join(cleaned_extra)}" if cleaned_extra else ""
-        return True, f"Port {port} üzerindeki penceresiz/asılı süreç ({name}, PID {pid}{extra_note}) temizlendi."
+        msg = (
+            f"Port :{port} üzerindeki süreç temizlendi ({name}, PID {pid}{extra_note})."
+            if is_tr
+            else f"Released port :{port} ({name}, PID {pid}{extra_note})."
+        )
+        return True, msg
     except Exception as exc:
-        return False, f"PID {pid} ({name}) sonlandırılamadı: {exc}"
+        msg = (
+            f"PID {pid} ({name}) sonlandırılamadı: {exc}"
+            if is_tr
+            else f"Could not terminate PID {pid} ({name}): {exc}"
+        )
+        return False, msg
 
 
 def _find_managed_processes(
@@ -320,11 +379,7 @@ def _find_managed_processes(
     host_keywords: tuple[str, ...] = (),
     require_all: tuple[str, ...] = (),
 ) -> list[psutil.Process]:
-    """Find only processes explicitly managed by AIconomy (by executable name or Python/uv cmdline).
-
-    Never matches by port ownership alone so unrelated user servers (e.g. Vite/Tomcat on :8080)
-    are never targeted.
-    """
+    """Find only processes explicitly managed by AIconomy (never matches by port ownership)."""
     out: list[psutil.Process] = []
     self_pid = os.getpid()
     for p in psutil.process_iter(["pid", "name", "cmdline"]):
@@ -355,12 +410,14 @@ def _terminate_all(procs: list[psutil.Process], label: str) -> list[str]:
     return stopped
 
 
-def enforce_tool_runtime_state(tool: ToolSpec, projects_map: dict[str, str], allow_stop: bool = True) -> str:
-    """Align managed background bridge processes with a tool's enabled state.
-
-    When ``allow_stop=False`` (e.g. app startup), no process is terminated; only enabled bridges
-    are started if needed. Stop actions strictly target managed bridge executables/cmdlines.
-    """
+def enforce_tool_runtime_state(
+    tool: ToolSpec,
+    projects_map: dict[str, str],
+    allow_stop: bool = True,
+    lang: str = "en",
+) -> str:
+    """Align managed background bridge processes with a tool's enabled state."""
+    is_tr = lang == "tr"
     if tool.id == "blender_mcp" and not tool.enabled:
         if not allow_stop:
             return ""
@@ -377,15 +434,17 @@ def enforce_tool_runtime_state(tool: ToolSpec, projects_map: dict[str, str], all
                 has_window = owner_pid in get_gui_window_titles({"blender.exe": [owner_pid]})
                 if not is_batch_job and not has_window:
                     bproc.terminate()
-                    killed.append(f"asılı blender.exe (PID {owner_pid})")
+                    killed.append(f"blender.exe (PID {owner_pid})")
             except (psutil.NoSuchProcess, psutil.AccessDenied):
                 pass
-        return f" ({', '.join(killed)} durduruldu)" if killed else ""
+        if not killed:
+            return ""
+        return f" ({', '.join(killed)} {'durduruldu' if is_tr else 'stopped'})"
 
     if tool.id == "trellis" and not tool.enabled:
         if not allow_stop:
             return ""
-        ok, msg = free_trellis_vram()
+        ok, msg = free_trellis_vram(lang=lang)
         return f" ({msg})" if ok and "PID" in msg else ""
 
     if tool.id == "unity_mcp":
@@ -400,7 +459,7 @@ def enforce_tool_runtime_state(tool: ToolSpec, projects_map: dict[str, str], all
                 ),
                 "Unity MCP",
             )
-            return f" ({', '.join(killed)} durduruldu)" if killed else ""
+            return f" ({', '.join(killed)} {'durduruldu' if is_tr else 'stopped'})" if killed else ""
         owner_pid, _owner_name = find_port_owner(port)
         if not owner_pid:
             local_bin = pathlib.Path.home() / ".local" / "bin"
@@ -430,7 +489,7 @@ def enforce_tool_runtime_state(tool: ToolSpec, projects_map: dict[str, str], all
             if cmd:
                 try:
                     subprocess.Popen(cmd, creationflags=NO_WINDOW)
-                    return f" (Unity MCP :{port} otomatik başlatıldı)"
+                    return f" (Unity MCP :{port} {'başlatıldı' if is_tr else 'started'})"
                 except Exception:
                     return ""
 
@@ -447,7 +506,7 @@ def enforce_tool_runtime_state(tool: ToolSpec, projects_map: dict[str, str], all
                 ),
                 "Serena",
             )
-            return f" ({', '.join(killed)} durduruldu)" if killed else ""
+            return f" ({', '.join(killed)} {'durduruldu' if is_tr else 'stopped'})" if killed else ""
         owner_pid, _ = find_port_owner(port)
         if not owner_pid:
             serena_exe = pathlib.Path.home() / ".local" / "bin" / "serena.exe"
@@ -470,14 +529,15 @@ def enforce_tool_runtime_state(tool: ToolSpec, projects_map: dict[str, str], all
                     cmd.extend(["--open-web-dashboard", "False", "--enable-gui-log-window", "False"])
                 try:
                     subprocess.Popen(cmd, creationflags=NO_WINDOW)
-                    return f" (Serena :{port} başlatıldı)"
+                    return f" (Serena :{port} {'başlatıldı' if is_tr else 'started'})"
                 except Exception:
                     return ""
     return ""
 
 
-def free_trellis_vram() -> tuple[bool, str]:
+def free_trellis_vram(lang: str = "en") -> tuple[bool, str]:
     """Terminate trellis-server.exe to release GPU VRAM."""
+    is_tr = lang == "tr"
     stopped: list[int] = []
     try:
         for proc in psutil.process_iter(["pid", "name"]):
@@ -485,52 +545,81 @@ def free_trellis_vram() -> tuple[bool, str]:
                 proc.terminate()
                 stopped.append(proc.info["pid"])
     except Exception as exc:
-        return False, f"Trellis kontrol hatası: {exc}"
+        return False, (f"TRELLIS kontrol hatası: {exc}" if is_tr else f"TRELLIS check failed: {exc}")
 
     if not stopped:
-        return True, "Trellis arka plan sunucusu zaten kapalı (VRAM boşta)."
-    return True, f"Trellis sunucusu (PID {', '.join(map(str, stopped))}) kapatıldı ve GPU VRAM boşaltıldı."
+        return True, (
+            "TRELLIS GPU sunucusu zaten kapalı (VRAM boşta)."
+            if is_tr
+            else "TRELLIS GPU server is already stopped (VRAM free)."
+        )
+    pids = ", ".join(map(str, stopped))
+    return True, (
+        f"TRELLIS sunucusu (PID {pids}) kapatıldı ve VRAM boşaltıldı."
+        if is_tr
+        else f"Stopped TRELLIS server (PID {pids}) and released GPU VRAM."
+    )
 
 
-def resolve_disk_location(tool: ToolSpec, projects_map: dict[str, str], live_map: dict[str, str]) -> str:
+def resolve_disk_location(
+    tool: ToolSpec,
+    projects_map: dict[str, str],
+    live_map: dict[str, str],
+    lang: str = "en",
+) -> str:
     """Resolve the active disk path or live process location string for a tool."""
+    is_tr = lang == "tr"
     if tool.id == "serena":
         if "serena" in live_map:
             return live_map["serena"]
         exe = pathlib.Path.home() / ".local" / "bin" / "serena.exe"
         proj_dir = projects_map.get(tool.project_scope, "Global")
-        return f"Kurulu: {exe if exe.is_file() else 'serena'}  |  Hedef: {proj_dir}"
+        return (
+            f"Kurulu: {exe if exe.is_file() else 'serena'}  |  Hedef: {proj_dir}"
+            if is_tr
+            else f"Binary: {exe if exe.is_file() else 'serena'}  |  Target: {proj_dir}"
+        )
 
     if tool.id in ("unity_mcp", "unity_pipeline"):
         if "unity" in live_map:
             return live_map["unity"]
-        proj_dir = projects_map.get(tool.project_scope, tool.param_value)
-        return f"Hedef Unity Klasörü: {proj_dir}"
+        proj_dir = projects_map.get(tool.project_scope, tool.param_value) or "Global"
+        return f"Unity projesi: {proj_dir}" if is_tr else f"Unity project: {proj_dir}"
 
     if tool.id == "blender_mcp":
         if "blender" in live_map:
             return live_map["blender"]
         b_exe = _find_blender_exe()
-        return f"Kurulu: {b_exe}" if b_exe else "Blender köprüsü (:9876)"
+        if b_exe:
+            return f"Kurulu: {b_exe}" if is_tr else f"Installed: {b_exe}"
+        return "Blender (:9876)"
 
     if tool.id == "trellis":
         if "trellis" in live_map:
             return live_map["trellis"]
-        return f"Kurulum Konumu: {tool.param_value}"
+        return f"Kurulum: {tool.param_value}" if is_tr else f"Install path: {tool.param_value}"
 
     if tool.id == "blender_skills":
         if tool.project_scope != "GLOBAL" and tool.project_scope in projects_map:
-            return f"Proje Skill Dizini: {pathlib.Path(projects_map[tool.project_scope]) / '.agents' / 'skills'}"
-        return f"Global Plugin Dizini: {pathlib.Path.home() / '.gemini' / 'config' / 'plugins' / 'blender-skills'}"
+            p = pathlib.Path(projects_map[tool.project_scope]) / ".agents" / "skills"
+            return f"Proje skill dizini: {p}" if is_tr else f"Project skills path: {p}"
+        p = pathlib.Path.home() / ".gemini" / "config" / "plugins" / "blender-skills"
+        return f"Global plugin dizini: {p}" if is_tr else f"Global plugin path: {p}"
 
     if tool.id == "caveman":
         skill_md = pathlib.Path.home() / ".agents" / "skills" / "caveman" / "SKILL.md"
-        return f"Dosya Konumu: {skill_md}" if skill_md.is_file() else "Global Kural / Skill"
+        if skill_md.is_file():
+            return f"Dosya: {skill_md}" if is_tr else f"File: {skill_md}"
+        return "Global kural" if is_tr else "Global rule"
 
     if tool.scope_selectable and tool.project_scope != "GLOBAL" and tool.project_scope in projects_map:
-        return f"Proje Klasörü: {projects_map[tool.project_scope]}"
+        return (
+            f"Proje klasörü: {projects_map[tool.project_scope]}"
+            if is_tr
+            else f"Project folder: {projects_map[tool.project_scope]}"
+        )
 
-    return "Kapsam: Tüm Projeler (Global Yapılandırma)"
+    return "Kapsam: Global" if is_tr else "Scope: Global"
 
 
 def probe_tool_health(
@@ -538,105 +627,90 @@ def probe_tool_health(
     active_skills_count: int,
     projects_map: dict[str, str],
     live_map: dict[str, str],
-) -> tuple[bool, str, int, str, str]:
-    """Return (is_healthy, short_ping_str, latency_ms, detail_msg, location_detail)."""
-    now_str = time.strftime("%H:%M:%S")
-    loc_detail = resolve_disk_location(tool, projects_map, live_map)
+    lang: str = "en",
+) -> tuple[bool, str, str, int, str, str]:
+    """Return (is_healthy, health_state, short_status_str, latency_ms, detail_msg, location_detail).
+
+    ``health_state`` is one of: ``'ok'``, ``'warn'``, ``'error'``, ``'idle'``, ``'off'``.
+    """
+    loc_detail = resolve_disk_location(tool, projects_map, live_map, lang=lang)
 
     if tool.id == "blender_skills":
         plugin_dir = pathlib.Path.home() / ".gemini" / "config" / "plugins" / "blender-skills"
         installed = (plugin_dir / "skills").is_dir() or (plugin_dir / "skills_disabled").is_dir()
-        tag = f"Aktif ({active_skills_count}/94)" if tool.enabled else "Paket Kapalı"
+        if not tool.enabled:
+            return False, "off", tr(lang, "st_disabled"), -1, loc_detail, loc_detail
         if not installed:
-            return tool.enabled, f"{tag} · Kurulmadı", 1, "Eklentiler sekmesinden tek tıkla indirilebilir.", loc_detail
-        return tool.enabled, tag, 2, f"Disk üzerinde {active_skills_count} skill aktif.", loc_detail
+            return True, "warn", tr(lang, "st_not_installed"), -1, loc_detail, loc_detail
+        return True, "ok", tr(lang, "st_active_count", on=active_skills_count), 1, loc_detail, loc_detail
 
     if tool.id == "caveman":
+        if not tool.enabled:
+            return False, "off", tr(lang, "st_disabled"), -1, loc_detail, loc_detail
         skill_md = pathlib.Path.home() / ".agents" / "skills" / "caveman" / "SKILL.md"
-        ok = skill_md.is_file()
-        status = f"Aktif ({tool.modes[tool.mode_index].split()[0]})" if tool.enabled else "Kapalı"
-        return ok and tool.enabled, status if ok else "Kurulu (Yerel)", 1, str(skill_md), loc_detail
+        modes = localized_tool_modes(tool, lang)
+        mode_short = modes[min(tool.mode_index, len(modes) - 1)].split()[0] if modes else ""
+        label = f"{tr(lang, 'st_ready')} ({mode_short})" if mode_short else tr(lang, "st_ready")
+        return True, "ok" if skill_md.is_file() else "idle", label, 1, str(skill_md), loc_detail
 
     if tool.id == "blender_mcp":
         port = int(tool.port or 9876)
         blender_window_open = live_map.get("blender_open") == "1"
-        blender_pid = live_map.get("blender_pid", "")
         zombie_pid = live_map.get("blender_zombie_pid", "")
         if not tool.enabled:
-            if blender_window_open and blender_pid:
-                state_lbl = f"Devre Dışı (Blender PID {blender_pid} Açık)"
-            elif zombie_pid:
-                state_lbl = f"Devre Dışı (Asılı PID {zombie_pid})"
-            else:
-                state_lbl = "Devre Dışı"
-            return False, state_lbl, -1, "Panelde KAPALI durumda (AI yapılandırmasından çıkarıldı ve köprü durduruldu).", loc_detail
+            return False, "off", tr(lang, "st_disabled"), -1, loc_detail, loc_detail
 
         if not blender_window_open:
             if zombie_pid:
-                return (
-                    False,
-                    f"⚠️ Blender Kapalı (Asılı PID {zombie_pid})",
-                    -1,
-                    f"Blender penceresi kapalı; ancak arka planda asılı kalan blender.exe (PID {zombie_pid}) port :{port} tutuyor. Port Kurtarıcı ile temizleyebilirsiniz.",
-                    loc_detail,
-                )
-            return False, f"⏸️ Blender Kapalı (:{port})", -1, "Açık bir Blender penceresi bulunamadı.", loc_detail
+                return False, "warn", tr(lang, "st_blender_zombie", pid=zombie_pid), -1, loc_detail, loc_detail
+            return False, "idle", tr(lang, "st_blender_closed", port=port), -1, loc_detail, loc_detail
 
         t0 = time.perf_counter()
         try:
             with socket.create_connection(("127.0.0.1", port), timeout=0.65):
                 ms = max(1, int((time.perf_counter() - t0) * 1000))
-                return True, f"Çalışıyor ({ms}ms)", ms, f"Blender açık ({live_map.get('blender_title', '')}) ve 127.0.0.1:{port} soketi aktif.", loc_detail
+                return True, "ok", tr(lang, "st_running", ms=ms), ms, f"127.0.0.1:{port} active", loc_detail
         except OSError as exc:
-            return (
-                False,
-                f"Blender Açık · Soket Kapalı (:{port})",
-                -1,
-                f"Blender açık ama N yan menüsünden BlenderMCP sunucusu başlatılmamış ({exc}).",
-                loc_detail,
-            )
+            return False, "warn", tr(lang, "st_blender_no_sock", port=port), -1, str(exc), loc_detail
 
     if tool.port:
+        port = int(tool.port)
         if not tool.enabled:
             try:
-                with socket.create_connection(("127.0.0.1", int(tool.port)), timeout=0.4):
-                    return (
-                        False,
-                        f"Devre Dışı (:{tool.port} Açık)",
-                        -1,
-                        f"AI için KAPALI tutuldu; arka planda 127.0.0.1:{tool.port} portu açık.",
-                        loc_detail,
-                    )
+                with socket.create_connection(("127.0.0.1", port), timeout=0.35):
+                    return False, "off", tr(lang, "st_port_open_disabled", port=port), -1, loc_detail, loc_detail
             except OSError:
-                return False, "Devre Dışı", -1, "Kullanıcı tarafından kapalı tutuldu.", loc_detail
+                return False, "off", tr(lang, "st_disabled"), -1, loc_detail, loc_detail
 
         t0 = time.perf_counter()
         try:
-            with socket.create_connection(("127.0.0.1", int(tool.port)), timeout=0.65):
+            with socket.create_connection(("127.0.0.1", port), timeout=0.65):
                 ms = max(1, int((time.perf_counter() - t0) * 1000))
                 if tool.health_url:
                     try:
                         with urllib.request.urlopen(tool.health_url, timeout=1.2) as resp:
                             body = resp.read(64).decode("utf-8", errors="replace").strip()
-                            return True, f"{now_str} ({ms}ms)", ms, f"HTTP 200: {body}", loc_detail
+                            return True, "ok", tr(lang, "st_running", ms=ms), ms, f"HTTP 200: {body}", loc_detail
                     except Exception as exc:
-                        return False, f"Port Açık / HTTP Hata (:{tool.port})", ms, str(exc), loc_detail
-                return True, f"{now_str} ({ms}ms)", ms, f"127.0.0.1:{tool.port} TCP bağlantı başarılı.", loc_detail
+                        return False, "error", tr(lang, "st_http_err", port=port), ms, str(exc), loc_detail
+                return True, "ok", tr(lang, "st_running", ms=ms), ms, f"127.0.0.1:{port} TCP OK", loc_detail
         except OSError as exc:
             if tool.id == "trellis":
                 cli_exe = pathlib.Path(tool.param_value) / "runtime" / "trellis-cli.exe"
                 if cli_exe.is_file():
-                    return False, f"Uyku Modu (:{tool.port})", -1, "Trellis CLI kurulu; yerel GPU sunucusu uykuda.", loc_detail
-            return False, f"Kapalı (:{tool.port})", -1, f"127.0.0.1:{tool.port} yanıt vermiyor ({exc}).", loc_detail
+                    return False, "idle", tr(lang, "st_standby", port=port), -1, str(cli_exe), loc_detail
+            return False, "error", tr(lang, "st_offline", port=port), -1, str(exc), loc_detail
 
     if tool.id == "unity_pipeline":
+        if not tool.enabled:
+            return False, "off", tr(lang, "st_disabled"), -1, loc_detail, loc_detail
         target_proj = projects_map.get(tool.project_scope, tool.param_value)
         manifest = pathlib.Path(target_proj) / "Packages" / "manifest.json"
         if manifest.is_file() and "com.unity.pipeline" in manifest.read_text(encoding="utf-8", errors="ignore"):
-            return tool.enabled, "Kurulu (Unity 6)" if tool.enabled else "Devre Dışı", 3, "com.unity.pipeline doğrulandı.", loc_detail
-        return False, "Paket Yok", -1, f"Manifest kontrol edilemedi: {manifest}", loc_detail
+            return True, "ok", tr(lang, "st_installed"), 2, str(manifest), loc_detail
+        return False, "warn", tr(lang, "st_missing_pkg"), -1, str(manifest), loc_detail
 
     if not tool.enabled:
-        return False, "Devre Dışı", -1, "Kullanıcı tarafından kapalı tutuldu (0 şema token).", loc_detail
+        return False, "off", tr(lang, "st_disabled"), -1, loc_detail, loc_detail
 
-    return True, "Hazır (stdio)", 4, f"Komut: {tool.mcp_command or tool.install_cmd or 'Hazır'}", loc_detail
+    return True, "ok", tr(lang, "st_ready"), 2, tool.mcp_command or tool.install_cmd or "stdio", loc_detail

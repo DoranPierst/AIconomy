@@ -1,7 +1,17 @@
 """Thread-safe Qt signal bridge between background workers and the UI thread."""
 from __future__ import annotations
 
+from typing import Any
+
 from PySide6.QtCore import QObject, Signal
+
+
+def safe_emit(sig: Any, *args: Any) -> None:
+    """Emit a Qt signal safely, ignoring shutdown races if the QObject was already destroyed."""
+    try:
+        sig.emit(*args)
+    except RuntimeError:
+        pass
 
 
 class WorkerBridge(QObject):

@@ -1,13 +1,14 @@
-"""Plugins & updates tab mixin (K9 thread-safe update check and batch upgrade)."""
+"""Plugins & updates tab mixin (emoji-free, includes Add from GitHub dialog, K9 thread-safe)."""
 from __future__ import annotations
 
 import copy
 import threading
 
-from PySide6.QtCore import QTimer
+from PySide6.QtCore import QTimer, Qt
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
+    QDialog,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -19,63 +20,64 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ...catalog import ToolSpec
+from ...catalog import ToolSpec, localized_tool_text, tool_kind_label
+from ...i18n import tr
 from ...plugins import PluginCheckResult, check_all_tools_updates_parallel, update_single_tool
+from ..dialogs.add_repo import AddRepoDialog
+from ..dialogs.tool_info import ToolInfoDialog
+from ..workers import safe_emit
 
 
 class PluginsTabMixin:
-    """Mixin implementing Tab 2 (Plugins & Updates)."""
+    """Mixin implementing Tab 1 (Plugins)."""
 
     def _init_plugins_tab(self) -> None:
         tab = QWidget()
         lay = QVBoxLayout(tab)
+        lay.setContentsMargins(10, 10, 10, 10)
+        lay.setSpacing(8)
 
         top = QHBoxLayout()
-        btn_sel_all = QPushButton("Tümünü Seç")
-        btn_sel_all.clicked.connect(lambda: self._set_all_plugin_checks(True))
-        top.addWidget(btn_sel_all)
+        top.setSpacing(6)
+        self.btn_plug_sel_all = QPushButton(tr(self.lang, "plug_sel_all"))
+        self.btn_plug_sel_all.clicked.connect(lambda: self._set_all_plugin_checks(True))
+        top.addWidget(self.btn_plug_sel_all)
 
-        btn_clr_all = QPushButton("Seçimi Temizle")
-        btn_clr_all.clicked.connect(lambda: self._set_all_plugin_checks(False))
-        top.addWidget(btn_clr_all)
+        self.btn_plug_clr_all = QPushButton(tr(self.lang, "plug_clr_all"))
+        self.btn_plug_clr_all.clicked.connect(lambda: self._set_all_plugin_checks(False))
+        top.addWidget(self.btn_plug_clr_all)
 
-        self.btn_plugins_check = QPushButton("🔍 Güncellemeleri Kontrol Et")
+        self.btn_plugins_check = QPushButton(tr(self.lang, "plug_check"))
         self.btn_plugins_check.setObjectName("primaryBtn")
         self.btn_plugins_check.clicked.connect(lambda: self.run_plugin_update_check(manual=True))
         top.addWidget(self.btn_plugins_check)
 
-        self.btn_plugins_update_all = QPushButton("⬆️ Mevcut Güncellemeleri Başlat (0)")
+        self.btn_plugins_update_all = QPushButton(tr(self.lang, "plug_upd_avail", n=0))
         self.btn_plugins_update_all.setObjectName("successBtn")
         self.btn_plugins_update_all.setEnabled(False)
         self.btn_plugins_update_all.clicked.connect(self._handle_start_available_updates)
         top.addWidget(self.btn_plugins_update_all)
 
-        self.btn_plugins_install_sel = QPushButton("📦 Seçilenleri Kur / Güncelle")
+        self.btn_plugins_install_sel = QPushButton(tr(self.lang, "plug_upd_sel"))
         self.btn_plugins_install_sel.clicked.connect(self._handle_update_selected_plugins)
         top.addWidget(self.btn_plugins_install_sel)
 
         top.addStretch()
 
-        btn_export = QPushButton("📤 Export")
-        btn_export.setToolTip("Tüm açık/kapalı durumlarını, 94 skill seçimini, proje kapsamlarını, çark ve kutucuk seçimlerini dışa aktarır")
-        btn_export.clicked.connect(self._export_settings)
-        top.addWidget(btn_export)
-
-        btn_import = QPushButton("📥 Import")
-        btn_import.setToolTip("Dışa aktarılan ayar dosyasını tüm seçimlerinizle birlikte geri yükler")
-        btn_import.clicked.connect(self._import_settings)
-        top.addWidget(btn_import)
+        self.btn_add_github = QPushButton(tr(self.lang, "plug_add_github"))
+        self.btn_add_github.clicked.connect(self._open_add_repo_dialog)
+        top.addWidget(self.btn_add_github)
         lay.addLayout(top)
 
         banner = QFrame()
         banner.setObjectName("card")
         b_lay = QHBoxLayout(banner)
-        b_lay.setContentsMargins(10, 6, 10, 6)
-        self.plugins_banner_lbl = QLabel("🔍 Açılış güncelleme kontrolü yapılıyor...")
+        b_lay.setContentsMargins(12, 7, 12, 7)
+        self.plugins_banner_lbl = QLabel(tr(self.lang, "plug_banner_checking"))
         self.plugins_banner_lbl.setStyleSheet("font-weight: 600;")
         b_lay.addWidget(self.plugins_banner_lbl, stretch=1)
 
-        self.btn_jump_err_logs = QPushButton("🐛 Hata Logunu Gör")
+        self.btn_jump_err_logs = QPushButton(tr(self.lang, "plug_btn_view_errs"))
         self.btn_jump_err_logs.setObjectName("warnBtn")
         self.btn_jump_err_logs.hide()
         self.btn_jump_err_logs.clicked.connect(self._jump_to_error_logs)
@@ -88,12 +90,27 @@ class PluginsTabMixin:
 
         self.plugins_scroll = QScrollArea()
         self.plugins_scroll.setWidgetResizable(True)
+        self.plugins_scroll.setFrameShape(QFrame.Shape.NoFrame)
         self.plugins_host = QWidget()
         self.plugins_lay = QVBoxLayout(self.plugins_host)
+        self.plugins_lay.setContentsMargins(0, 0, 4, 0)
+        self.plugins_lay.setSpacing(6)
         self.plugins_scroll.setWidget(self.plugins_host)
         lay.addWidget(self.plugins_scroll, stretch=1)
 
-        self.tabs.addTab(tab, "🧩 Eklentiler")
+        self.tabs.addTab(tab, tr(self.lang, "tab_plugins"))
+
+    def _open_add_repo_dialog(self) -> None:
+        dlg = AddRepoDialog(self)
+        if dlg.exec() == QDialog.DialogCode.Accepted and dlg.added_tool is not None:
+            new_tool = dlg.added_tool
+            self.tools.append(new_tool)
+            self._save_state()
+            self._update_tab_titles()
+            self._refresh_table()
+            self._refresh_plugins_tab()
+            self.tabs.setCurrentIndex(0)
+            self.set_status(tr(self.lang, "msg_repo_added", name=new_tool.name))
 
     def _set_all_plugin_checks(self, state: bool) -> None:
         for cb in self.plugin_checks.values():
@@ -124,13 +141,15 @@ class PluginsTabMixin:
                 item.widget().deleteLater()
 
         upd_count = sum(1 for t in self.tools if t.has_update)
-        self.btn_plugins_update_all.setText(f"⬆️ Mevcut Güncellemeleri Başlat ({upd_count})")
+        self.btn_plugins_update_all.setText(tr(self.lang, "plug_upd_avail", n=upd_count))
         self.btn_plugins_update_all.setEnabled(upd_count > 0 and not self.updating_busy)
 
         for t in self.tools:
             card = QFrame()
             card.setObjectName("card")
             row = QHBoxLayout(card)
+            row.setContentsMargins(12, 8, 12, 8)
+            row.setSpacing(10)
 
             cb = QCheckBox()
             cb.setChecked(t.id in checked_set)
@@ -140,49 +159,55 @@ class PluginsTabMixin:
 
             cur_v = t.version.strip().lstrip("vV")
             lat_v = (t.latest_version or t.version).strip().lstrip("vV")
-
-            if t.has_update:
-                ver_html = (
-                    f"<span style='color:#f59e0b; font-weight:700;'>🔔 Güncelleme Mevcut:  {cur_v}v &gt; {lat_v}v</span>"
-                )
+            if t.has_update and lat_v != cur_v:
+                ver_html = f"<span style='color:#f59e0b; font-weight:700;'>{tr(self.lang, 'plug_ver_update', cur=cur_v, lat=lat_v)}</span>"
             else:
-                ver_html = f"<span style='color:#22c55e; font-weight:600;'>✓ Güncel ({cur_v}v)</span>"
+                ver_html = f"<span style='color:#22c55e; font-weight:600;'>{tr(self.lang, 'plug_ver_up_to_date', ver=cur_v)}</span>"
 
             info_col = QVBoxLayout()
             info_col.setSpacing(2)
             title_row = QHBoxLayout()
-            title_row.setSpacing(6)
-            title_row.addWidget(QLabel(f"<b>{t.name}</b>"))
-            title_row.addWidget(self._make_info_btn(t))
-            title_row.addWidget(QLabel(f"<span style='color:#94a3b8;'>({t.kind})</span>   {ver_html}"))
+            title_row.setSpacing(8)
+            name_btn = QPushButton(t.name)
+            name_btn.setObjectName("ghostBtn")
+            name_btn.setStyleSheet("font-weight: 700; padding: 0px; text-align: left;")
+            name_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            name_btn.clicked.connect(lambda _=False, tool_obj=t: ToolInfoDialog(self, tool_obj).exec())
+            title_row.addWidget(name_btn)
+            title_row.addWidget(QLabel(f"<span style='color:#94a3b8;'>{tool_kind_label(t.kind, self.lang)}</span>"))
+            title_row.addWidget(QLabel(ver_html))
             title_row.addStretch()
             info_col.addLayout(title_row)
-            if t.summary:
-                desc_lbl = QLabel(t.summary)
+
+            summary = localized_tool_text(t, "summary", self.lang)
+            if summary:
+                desc_lbl = QLabel(summary)
                 desc_lbl.setStyleSheet("color: #94a3b8; font-size: 11px;")
                 desc_lbl.setWordWrap(True)
                 info_col.addWidget(desc_lbl)
             row.addLayout(info_col, stretch=1)
 
             if t.release_notes_url:
-                notes_lbl = QLabel(f"<a style='color:#60a5fa;' href='{t.release_notes_url}'>📄 Sürüm Notları ↗</a>")
+                notes_lbl = QLabel(
+                    f"<a style='color:#60a5fa;' href='{t.release_notes_url}'>{tr(self.lang, 'plug_release_notes')}</a>"
+                )
                 notes_lbl.setOpenExternalLinks(True)
                 notes_lbl.setToolTip(t.release_notes_url)
                 row.addWidget(notes_lbl)
 
             if t.has_update:
-                upd_one = QPushButton(f"⬆️ Güncelle ({cur_v}v > {lat_v}v)")
+                upd_one = QPushButton(tr(self.lang, "plug_btn_update"))
                 upd_one.setObjectName("warnBtn")
             else:
-                upd_one = QPushButton("🔄 Kur / Yenile")
+                upd_one = QPushButton(tr(self.lang, "plug_btn_reinstall"))
             upd_one.clicked.connect(lambda _=False, tool_obj=t: self._run_batch_update([tool_obj], install_if_missing=True))
             row.addWidget(upd_one)
 
-            copy_cmd = QPushButton("📋 Komut")
+            copy_cmd = QPushButton(tr(self.lang, "plug_btn_copy_cmd"))
             copy_cmd.clicked.connect(
                 lambda _=False, c=(t.install_cmd or t.repo_url), nm=t.name: (
                     QApplication.clipboard().setText(c),
-                    self.set_status(f"{nm} kurulum komutu panoya kopyalandı: {c}"),
+                    self.set_status(tr(self.lang, "msg_cmd_copied", name=nm)),
                 )
             )
             row.addWidget(copy_cmd)
@@ -194,20 +219,19 @@ class PluginsTabMixin:
             return
         self.checking_plugins_busy = True
         self.btn_plugins_check.setEnabled(False)
-        self.plugins_banner_lbl.setText("🔍 Eklenti sürümleri kontrol ediliyor...")
+        self.plugins_banner_lbl.setText(tr(self.lang, "plug_banner_checking"))
         self.plugins_banner_lbl.setStyleSheet("color: #94a3b8; font-weight: 600;")
         if manual:
-            self.set_status("🔍 Tüm eklentiler için güncel sürüm kontrolü yapılıyor...")
+            self.set_status(tr(self.lang, "msg_plug_checking"))
 
-        # K9: pass immutable deep copies to worker; UI thread applies results via signal
         snap = copy.deepcopy(self.tools)
         tok = self.vault.get_secret("GITHUB_TOKEN")
 
         def worker() -> None:
             results, chk_errs = check_all_tools_updates_parallel(snap, tok)
             for t_name, err_det in chk_errs:
-                self.logs.add("WARN", t_name, f"Güncelleme kontrolü sırasında ağ/API hatası: {err_det.splitlines()[0]}", err_det)
-            self.bridge.plugin_check_done.emit(results, manual)
+                self.logs.add("WARN", t_name, f"Update check network/API error: {err_det.splitlines()[0]}", err_det)
+            safe_emit(self.bridge.plugin_check_done, results, manual)
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -216,7 +240,6 @@ class PluginsTabMixin:
         self.btn_plugins_check.setEnabled(True)
         self.btn_jump_err_logs.hide()
 
-        # K9: mutate shared ToolSpec objects exclusively on the UI thread
         if results:
             by_id = {t.id: t for t in self.tools}
             for item in results:
@@ -233,35 +256,36 @@ class PluginsTabMixin:
         self._refresh_logs_tab()
 
         if upd_count == 0:
-            self.plugins_banner_lbl.setText("✓ Tüm eklentiler güncel.")
-            self.plugins_banner_lbl.setStyleSheet("color: #22c55e; font-weight: 700;")
-            self.tabs.setTabText(1, "🧩 Eklentiler")
+            self.plugins_banner_lbl.setText(tr(self.lang, "plug_banner_all_ok"))
+            self.plugins_banner_lbl.setStyleSheet("color: #22c55e; font-weight: 600;")
             if manual:
-                self.set_status("✓ Tüm eklentiler güncel.")
+                self.set_status(tr(self.lang, "msg_plug_all_ok"))
         else:
-            self.plugins_banner_lbl.setText(
-                f"🔔 Güncelleme Mevcut ({upd_count} eklenti) — Güncellemeyi başlatmak için aşağıdaki butonları kullanabilirsiniz."
-            )
-            self.plugins_banner_lbl.setStyleSheet("color: #f59e0b; font-weight: 700;")
-            self.tabs.setTabText(1, f"🧩 Eklentiler (🔔 {upd_count})")
-            self.set_status(f"🔔 {upd_count} eklenti için güncelleme mevcut — Eklentiler sekmesinden başlatabilirsiniz.")
+            self.plugins_banner_lbl.setText(tr(self.lang, "plug_banner_updates", n=upd_count))
+            self.plugins_banner_lbl.setStyleSheet("color: #f59e0b; font-weight: 600;")
+            self.set_status(tr(self.lang, "msg_plug_updates_found", n=upd_count))
             if manual:
                 self.tabs.setCurrentIndex(1)
 
+        self._update_tab_titles()
         self._refresh_table()
         self._refresh_plugins_tab()
 
     def _handle_start_available_updates(self) -> None:
         targets = [t for t in self.tools if t.has_update]
         if not targets:
-            self.set_status("✓ Tüm eklentiler zaten güncel.")
+            self.set_status(tr(self.lang, "msg_plug_all_ok"))
             return
         self._run_batch_update(targets, install_if_missing=True)
 
     def _handle_update_selected_plugins(self) -> None:
         selected = [t for t in self.tools if self.plugin_checks.get(t.id) and self.plugin_checks[t.id].isChecked()]
         if not selected:
-            QMessageBox.information(self, "Araç Seçilmedi", "Lütfen listeden kurmak veya güncellemek istediğiniz araçları işaretleyin.")
+            QMessageBox.information(
+                self,
+                tr(self.lang, "plug_none_selected_title"),
+                tr(self.lang, "plug_none_selected_msg"),
+            )
             return
         self._run_batch_update(selected, install_if_missing=True)
 
@@ -276,11 +300,10 @@ class PluginsTabMixin:
         total = len(target_tools)
         self.update_prog.setMaximum(total)
         self.update_prog.setValue(0)
-        self.update_prog.setFormat(f"Güncelleme uygulanıyor (0/{total})...")
+        self.update_prog.setFormat(tr(self.lang, "plug_prog_init", tot=total))
         self.update_prog.show()
-        self.set_status(f"⬆️ {total} araç güncelleniyor...")
+        self.set_status(tr(self.lang, "msg_plug_updating", n=total))
 
-        # K9: pass immutable snapshots; worker never touches live ToolSpec instances
         wanted_skills = set(self.active_skills)
         items = copy.deepcopy(target_tools)
 
@@ -289,28 +312,27 @@ class PluginsTabMixin:
             fail_cnt = 0
             details: list[str] = []
             for idx, tool_snap in enumerate(items, start=1):
-                self.bridge.update_progress.emit(idx, total, tool_snap.name)
+                safe_emit(self.bridge.update_progress, idx, total, tool_snap.name)
                 prev_v = tool_snap.version.strip().lstrip("vV")
                 ok, new_ver, msg, raw_log = update_single_tool(
                     tool_snap, wanted_skills, install_if_missing=install_if_missing
                 )
                 target_v = (tool_snap.latest_version or new_ver or tool_snap.version).strip().lstrip("vV")
-                self.bridge.update_item_done.emit(tool_snap.id, ok, prev_v, target_v, msg, raw_log)
+                safe_emit(self.bridge.update_item_done, tool_snap.id, ok, prev_v, target_v, msg, raw_log)
                 if ok:
                     ok_cnt += 1
-                    ver_note = f"{prev_v}v > {target_v}v" if prev_v != target_v else f"{target_v}v"
-                    details.append(f"✓ {tool_snap.name} ({ver_note}): {msg}")
+                    ver_note = f"v{prev_v} -> v{target_v}" if prev_v != target_v else f"v{target_v}"
+                    details.append(f"OK {tool_snap.name} ({ver_note}): {msg}")
                 else:
                     fail_cnt += 1
-                    details.append(f"🔴 {tool_snap.name}: {msg}")
-            self.bridge.update_all_done.emit(ok_cnt, fail_cnt, "\n".join(details))
+                    details.append(f"ERR {tool_snap.name}: {msg}")
+            safe_emit(self.bridge.update_all_done, ok_cnt, fail_cnt, "\n".join(details))
 
         threading.Thread(target=worker, daemon=True).start()
 
     def _on_update_item_done(
         self, tool_id: str, ok: bool, prev_v: str, target_v: str, msg: str, raw_log: str
     ) -> None:
-        """K9: apply single-tool upgrade result onto UI-thread ToolSpec safely."""
         tool_obj = next((t for t in self.tools if t.id == tool_id), None)
         t_name = tool_obj.name if tool_obj else tool_id
         if ok:
@@ -318,34 +340,33 @@ class PluginsTabMixin:
                 tool_obj.version = f"v{target_v}"
                 tool_obj.latest_version = f"v{target_v}"
                 tool_obj.has_update = False
-            ver_note = f"{prev_v}v > {target_v}v" if prev_v != target_v else f"{target_v}v"
-            self.logs.add("INFO", t_name, f"Güncellendi ({ver_note})", raw_log)
+            ver_note = f"v{prev_v} -> v{target_v}" if prev_v != target_v else f"v{target_v}"
+            self.logs.add("INFO", t_name, f"Updated ({ver_note})", raw_log)
         else:
-            self.logs.add("ERR", t_name, f"Güncelleme Hatası: {msg}", raw_log)
+            self.logs.add("ERR", t_name, f"Update failed: {msg}", raw_log)
 
     def _on_update_progress(self, idx: int, total: int, tool_name: str) -> None:
         self.update_prog.setValue(idx - 1)
-        self.update_prog.setFormat(f"Güncelleniyor ({idx}/{total}): {tool_name}...")
-        self.set_status(f"⬆️ Güncelleniyor ({idx}/{total}): {tool_name}...")
+        step = tr(self.lang, "plug_prog_step", idx=idx, tot=total, name=tool_name)
+        self.update_prog.setFormat(step)
+        self.set_status(step)
 
-    def _on_update_all_done(self, ok_cnt: int, fail_cnt: int, summary_text: str) -> None:
+    def _on_update_all_done(self, ok_cnt: int, fail_cnt: int, _summary_text: str) -> None:
         self.updating_busy = False
         self.btn_plugins_check.setEnabled(True)
         self.btn_plugins_install_sel.setEnabled(True)
         self.update_prog.setValue(self.update_prog.maximum())
-        self.update_prog.setFormat(f"Tamamlandı: {ok_cnt} güncellendi, {fail_cnt} hata")
+        self.update_prog.setFormat(tr(self.lang, "plug_prog_done", ok=ok_cnt, fail=fail_cnt))
         QTimer.singleShot(3500, self.update_prog.hide)
 
         self._on_plugin_check_done(None, manual=False)
         if fail_cnt > 0:
-            self.plugins_banner_lbl.setText(
-                f"🔴 {fail_cnt} araç güncellenirken hata alındı ({ok_cnt} başarılı) — Hata detayları Debug & Log sekmesine kaydedildi."
-            )
-            self.plugins_banner_lbl.setStyleSheet("color: #ef4444; font-weight: 700;")
+            self.plugins_banner_lbl.setText(tr(self.lang, "plug_banner_err", fail=fail_cnt, ok=ok_cnt))
+            self.plugins_banner_lbl.setStyleSheet("color: #ef4444; font-weight: 600;")
             self.btn_jump_err_logs.show()
-            self.set_status(f"🔴 Güncelleme sırasında {fail_cnt} hata oluştu — Debug & Log sekmesinden tam çıktıyı görebilirsiniz.")
+            self.set_status(tr(self.lang, "msg_plug_update_err", fail=fail_cnt))
         else:
-            self.set_status(f"✓ Güncelleme tamamlandı ({ok_cnt} araç güncellendi).")
+            self.set_status(tr(self.lang, "msg_plug_update_ok", n=ok_cnt))
         self._save_state()
         self._refresh_logs_tab()
         self.run_health_scan()

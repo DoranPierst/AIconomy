@@ -1,4 +1,4 @@
-"""End-to-end live MCP connection diagnostics (HTTP JSON-RPC, Blender socket, stdio handshake)."""
+"""End-to-end live MCP connection diagnostics (HTTP JSON-RPC, Blender socket, stdio handshake; EN & TR)."""
 from __future__ import annotations
 
 import json
@@ -23,11 +23,13 @@ def test_tool_connection_e2e(
     vault: WindowsDpapiVault,
     projects_map: dict[str, str],
     active_skills_count: int = 0,
+    lang: str = "en",
 ) -> tuple[bool, int, str, str]:
     """Run an end-to-end connection probe even when AI IDEs are closed.
 
     Returns (ok, latency_ms, short_summary, technical_detail).
     """
+    is_tr = lang == "tr"
     t0 = time.perf_counter()
     cfg_note = ""
     if tool.mcp_server_key:
@@ -37,14 +39,19 @@ def test_tool_connection_e2e(
                 servers = json.loads(agy_cfg.read_text(encoding="utf-8") or "{}").get("mcpServers", {})
                 in_agy = tool.mcp_server_key in servers
                 if tool.enabled and tool.clients.get("AGY") and not in_agy:
-                    cfg_note = " | AGY mcp_config.json missing"
+                    cfg_note = " | AGY config eksik" if is_tr else " | Missing in AGY config"
                 elif in_agy:
-                    cfg_note = " | AGY Config OK"
+                    cfg_note = " | AGY config OK"
             except Exception:
                 pass
 
     if not tool.enabled:
-        return False, -1, "Panelde KAPALI (Test atlandı)", "Araç devre dışı bırakılmış; önce AÇIK yapın."
+        return (
+            False,
+            -1,
+            "Devre dışı (atlandı)" if is_tr else "Disabled (skipped)",
+            "Araç kapalı; önce etkinleştirin." if is_tr else "Tool is disabled; enable it first.",
+        )
 
     app_ver = get_current_app_version()
 
@@ -78,15 +85,17 @@ def test_tool_connection_e2e(
                 ms = max(1, int((time.perf_counter() - t0) * 1000))
                 if "result" in body or "serverInfo" in body or resp.status == 200:
                     return True, ms, f"MCP Initialize OK ({ms}ms){cfg_note}", f"POST {url} -> HTTP {resp.status}\n{body[:400]}"
-                return False, ms, f"Beklenmeyen yanıt (HTTP {resp.status})", body[:400]
+                return False, ms, f"HTTP {resp.status}", body[:400]
         except urllib.error.HTTPError as exc:
             ms = max(1, int((time.perf_counter() - t0) * 1000))
             err_b = exc.read(512).decode("utf-8", errors="replace")
             if exc.code in (400, 405, 406):
-                return True, ms, f"HTTP Sunucu Aktif ({ms}ms, HTTP {exc.code}){cfg_note}", f"{url} ayakta: {err_b}"
-            return False, -1, f"HTTP Hata {exc.code}", err_b
+                lbl = f"HTTP sunucu aktif ({ms}ms, HTTP {exc.code}){cfg_note}" if is_tr else f"HTTP server reachable ({ms}ms, HTTP {exc.code}){cfg_note}"
+                return True, ms, lbl, f"{url}: {err_b}"
+            return False, -1, f"HTTP {exc.code}", err_b
         except Exception as exc:
-            return False, -1, f"Bağlantı Yok (:{port})", f"{url} yanıt vermiyor: {exc}"
+            lbl = f"Bağlantı yok (:{port})" if is_tr else f"No connection (:{port})"
+            return False, -1, lbl, f"{url}: {exc}"
 
     if tool.id == "blender_mcp":
         port = int(tool.port or 9876)
@@ -97,30 +106,37 @@ def test_tool_connection_e2e(
                 resp = s.recv(4096).decode("utf-8", errors="replace")
                 ms = max(1, int((time.perf_counter() - t0) * 1000))
                 if "result" in resp or "status" in resp or "name" in resp:
-                    return True, ms, f"Blender Sahne Yanıtı OK ({ms}ms){cfg_note}", resp[:400]
-                return False, ms, "Soket açık ama sahne yanıtı boş", resp[:300]
+                    lbl = f"Blender sahne yanıtı OK ({ms}ms){cfg_note}" if is_tr else f"Blender scene response OK ({ms}ms){cfg_note}"
+                    return True, ms, lbl, resp[:400]
+                return False, ms, ("Boş soket yanıtı" if is_tr else "Empty socket response"), resp[:300]
         except Exception as exc:
-            return False, -1, f"Blender :{port} Bağlanamadı", f"Blender açık ve BlenderMCP bağlı değil: {exc}"
+            lbl = f"Blender :{port} bağlanamadı" if is_tr else f"Blender :{port} unreachable"
+            return False, -1, lbl, str(exc)
 
     if tool.id == "trellis":
         port = int(tool.port or 8790)
         try:
             with socket.create_connection(("127.0.0.1", port), timeout=1.0):
                 ms = max(1, int((time.perf_counter() - t0) * 1000))
-                return True, ms, f"Trellis GPU Sunucusu Açık ({ms}ms)", f"127.0.0.1:{port} bağlantısı başarılı."
+                lbl = f"TRELLIS GPU sunucusu açık ({ms}ms)" if is_tr else f"TRELLIS GPU server running ({ms}ms)"
+                return True, ms, lbl, f"127.0.0.1:{port} TCP OK"
         except OSError:
             cli_exe = pathlib.Path(tool.param_value) / "runtime" / "trellis-cli.exe"
             if cli_exe.is_file():
                 ms = max(1, int((time.perf_counter() - t0) * 1000))
-                return True, ms, f"CLI Hazır · Sunucu Uykuda ({ms}ms)", f"{cli_exe} doğrulandı."
-            return False, -1, "Trellis kurulumu bulunamadı", f"Kontrol edilen yol: {cli_exe}"
+                lbl = f"CLI hazır, sunucu uykuda ({ms}ms)" if is_tr else f"CLI ready, server standby ({ms}ms)"
+                return True, ms, lbl, str(cli_exe)
+            return False, -1, ("TRELLIS kurulumu bulunamadı" if is_tr else "TRELLIS install not found"), str(cli_exe)
 
     if tool.mcp_command:
         cmd_bin = shutil.which(f"{tool.mcp_command}.cmd") or shutil.which(tool.mcp_command)
         if not cmd_bin:
-            return False, -1, f"Komut bulunamadı: {tool.mcp_command}", f"PATH üzerinde '{tool.mcp_command}' yok."
+            lbl = f"Komut bulunamadı: {tool.mcp_command}" if is_tr else f"Command not found: {tool.mcp_command}"
+            return False, -1, lbl, f"'{tool.mcp_command}' is not on PATH."
         if tool.vault_key_name and not vault.has_secret(tool.vault_key_name):
-            return False, -1, f"API Anahtarı Eksik ({tool.vault_key_name})", "API Keys ayarlarından anahtarı ekleyin."
+            lbl = f"API anahtarı eksik ({tool.vault_key_name})" if is_tr else f"Missing API key ({tool.vault_key_name})"
+            det = "Ayarlar > API Anahtarları bölümünden ekleyin." if is_tr else "Configure in Settings > API Keys."
+            return False, -1, lbl, det
 
         env = os.environ.copy()
         if tool.vault_key_name:
@@ -128,28 +144,35 @@ def test_tool_connection_e2e(
             if sec:
                 env[tool.vault_key_name] = sec
 
-        return _run_stdio_handshake(cmd_bin, tool.mcp_args, env, t0, cfg_note, app_ver)
+        return _run_stdio_handshake(cmd_bin, tool.mcp_args, env, t0, cfg_note, app_ver, lang=lang)
 
     if tool.id == "blender_skills":
         plugin_dir = pathlib.Path.home() / ".gemini" / "config" / "plugins" / "blender-skills"
         ok = (plugin_dir / "skills").is_dir()
         ms = max(1, int((time.perf_counter() - t0) * 1000))
-        return ok, ms, f"{active_skills_count}/94 Skill Diskte Hazır" if ok else "Kurulmamış", str(plugin_dir)
+        lbl = (
+            f"{active_skills_count}/94 skill hazır" if ok else "Kurulu değil"
+        ) if is_tr else (
+            f"{active_skills_count}/94 skills ready" if ok else "Not installed"
+        )
+        return ok, ms, lbl, str(plugin_dir)
 
     if tool.id == "caveman":
         skill_md = pathlib.Path.home() / ".agents" / "skills" / "caveman" / "SKILL.md"
         ok = skill_md.is_file()
         ms = max(1, int((time.perf_counter() - t0) * 1000))
-        return ok, ms, "SKILL.md Doğrulandı" if ok else "SKILL.md Eksik", str(skill_md)
+        lbl = ("SKILL.md doğrulandı" if ok else "SKILL.md eksik") if is_tr else ("SKILL.md verified" if ok else "SKILL.md missing")
+        return ok, ms, lbl, str(skill_md)
 
     if tool.id == "unity_pipeline":
         target_proj = projects_map.get(tool.project_scope, tool.param_value)
         manifest = pathlib.Path(target_proj) / "Packages" / "manifest.json"
         ok = manifest.is_file() and "com.unity.pipeline" in manifest.read_text(encoding="utf-8", errors="ignore")
         ms = max(1, int((time.perf_counter() - t0) * 1000))
-        return ok, ms, "Unity Pipeline Paketi Doğrulandı" if ok else "Paket Eksik", str(manifest)
+        lbl = ("Paket doğrulandı" if ok else "Paket eksik") if is_tr else ("Package verified" if ok else "Package missing")
+        return ok, ms, lbl, str(manifest)
 
-    return True, 1, "Hazır", tool.summary
+    return True, 1, ("Hazır" if is_tr else "Ready"), tool.summary
 
 
 def _run_stdio_handshake(
@@ -159,8 +182,10 @@ def _run_stdio_handshake(
     t0: float,
     cfg_note: str,
     app_ver: str = "1.0.0",
+    lang: str = "en",
 ) -> tuple[bool, int, str, str]:
     """Send a JSON-RPC initialize message over stdio and read the response with timeout."""
+    is_tr = lang == "tr"
     init_msg = (
         json.dumps(
             {
@@ -210,8 +235,11 @@ def _run_stdio_handshake(
         if proc.stderr and rc is not None:
             err_txt = proc.stderr.read(400).strip()
         if rc is None:
-            return True, ms, f"stdio Süreç Başladı ({ms}ms){cfg_note}", "Süreç ayakta; ilk yanıt beklenenden uzun sürdü."
-        return False, -1, f"stdio Çıkış Kodu {rc}", err_txt or joined or "Süreç erken kapandı."
+            lbl = f"stdio süreç başladı ({ms}ms){cfg_note}" if is_tr else f"stdio process started ({ms}ms){cfg_note}"
+            det = "Süreç ayakta; ilk yanıt beklenenden uzun sürdü." if is_tr else "Process is running; initial reply timed out."
+            return True, ms, lbl, det
+        lbl = f"stdio çıkış kodu {rc}" if is_tr else f"stdio exit code {rc}"
+        return False, -1, lbl, err_txt or joined or ("Süreç erken kapandı." if is_tr else "Process exited early.")
     finally:
         try:
             proc.terminate()
