@@ -495,8 +495,8 @@ def detect_default_language() -> str:
     return "en"
 
 
-def tr(lang: str, key: str, **kwargs: Any) -> str:
-    bucket = TRANSLATIONS.get(lang) or TRANSLATIONS["en"]
+def tr(lang_code: str, key: str, **kwargs: Any) -> str:
+    bucket = TRANSLATIONS.get(lang_code) or TRANSLATIONS["en"]
     tmpl = bucket.get(key) or TRANSLATIONS["en"].get(key) or TRANSLATIONS["tr"].get(key) or key
     try:
         return tmpl.format(**kwargs) if kwargs else tmpl
