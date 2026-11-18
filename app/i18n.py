@@ -17,7 +17,7 @@ SUPPORTED_LANGUAGES: list[tuple[str, str]] = [
 
 TRANSLATIONS: dict[str, dict[str, str]] = {
     "tr": {
-        "app_title": "AIconmy — AI Araç & Token Ekonomisi Kontrol Merkezi v{ver}",
+        "app_title": "AIconomy — AI Araç & Token Ekonomisi Kontrol Merkezi ({ver}v)",
         "preset_lbl": "<b>🎯 Hazır Ayar:</b>",
         "auto_detect": "👁️ Oto-Algıla",
         "vram_free": "🧹 VRAM Boşalt",
@@ -75,7 +75,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "lang_changed": "🌐 Arayüz dili değiştirildi: {lang}",
     },
     "en": {
-        "app_title": "AIconmy — AI Tools & Token Economy Control Center v{ver}",
+        "app_title": "AIconomy — AI Tools & Token Economy Control Center (v{ver})",
         "preset_lbl": "<b>🎯 Presets:</b>",
         "auto_detect": "👁️ Auto-Detect",
         "vram_free": "🧹 Free VRAM",
@@ -133,7 +133,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "lang_changed": "🌐 Interface language changed: {lang}",
     },
     "de": {
-        "app_title": "AIconmy — KI-Tools & Token-Ökonomie Kontrollzentrum v{ver}",
+        "app_title": "AIconomy — KI-Tools & Token-Ökonomie Kontrollzentrum (v{ver})",
         "preset_lbl": "<b>🎯 Vorlagen:</b>",
         "auto_detect": "👁️ Auto-Erkennung",
         "vram_free": "🧹 VRAM leeren",
@@ -191,7 +191,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "lang_changed": "🌐 Sprache geändert: {lang}",
     },
     "fr": {
-        "app_title": "AIconmy — Centre de Contrôle Outils IA & Tokens v{ver}",
+        "app_title": "AIconomy — Centre de Contrôle Outils IA & Tokens (v{ver})",
         "preset_lbl": "<b>🎯 Profils :</b>",
         "auto_detect": "👁️ Détection auto",
         "vram_free": "🧹 Libérer VRAM",
@@ -249,7 +249,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "lang_changed": "🌐 Langue modifiée : {lang}",
     },
     "es": {
-        "app_title": "AIconmy — Centro de Control de Herramientas IA y Tokens v{ver}",
+        "app_title": "AIconomy — Centro de Control IA y Economía de Tokens (v{ver})",
         "preset_lbl": "<b>🎯 Preajustes:</b>",
         "auto_detect": "👁️ Autodetección",
         "vram_free": "🧹 Liberar VRAM",
@@ -307,7 +307,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "lang_changed": "🌐 Idioma cambiado: {lang}",
     },
     "ru": {
-        "app_title": "AIconmy — Центр Управления ИИ и Токенами v{ver}",
+        "app_title": "AIconomy — Центр Управления ИИ и Токенами (v{ver})",
         "preset_lbl": "<b>🎯 Профили:</b>",
         "auto_detect": "👁️ Авто-поиск",
         "vram_free": "🧹 Очистить VRAM",
@@ -365,7 +365,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "lang_changed": "🌐 Язык изменён: {lang}",
     },
     "ja": {
-        "app_title": "AIconmy — AIツール＆トークン経済コントロールセンター v{ver}",
+        "app_title": "AIconomy — AIツール＆トークン経済コントロールセンター (v{ver})",
         "preset_lbl": "<b>🎯 プリセット:</b>",
         "auto_detect": "👁️ 自動検出",
         "vram_free": "🧹 VRAM解放",
@@ -423,7 +423,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "lang_changed": "🌐 言語を変更しました: {lang}",
     },
     "zh": {
-        "app_title": "AIconmy — AI 工具与 Token 经济控制中心 v{ver}",
+        "app_title": "AIconomy — AI 工具与 Token 经济控制中心 (v{ver})",
         "preset_lbl": "<b>🎯 预设:</b>",
         "auto_detect": "👁️ 自动检测",
         "vram_free": "🧹 释放显存",

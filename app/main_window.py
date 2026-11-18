@@ -4,6 +4,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 import pathlib
+import sys
 import threading
 import time
 from typing import Any
@@ -128,6 +129,19 @@ QFrame#card { background-color: #f8fafc; border: 1px solid #cbd5e1; border-radiu
 
 
 def create_app_icon() -> QIcon:
+    candidates: list[pathlib.Path] = []
+    if getattr(sys, "frozen", False):
+        meipass = getattr(sys, "_MEIPASS", "")
+        if meipass:
+            candidates.append(pathlib.Path(meipass) / "assets" / "aiconomy.png")
+        candidates.append(pathlib.Path(sys.executable).resolve().parent / "assets" / "aiconomy.png")
+    candidates.append(pathlib.Path(__file__).resolve().parent.parent / "assets" / "aiconomy.png")
+    for c in candidates:
+        if c.is_file():
+            ico = QIcon(str(c))
+            if not ico.isNull():
+                return ico
+
     pix = QPixmap(64, 64)
     pix.fill(Qt.GlobalColor.transparent)
     p = QPainter(pix)
@@ -454,7 +468,7 @@ class AppUpdateDialog(QDialog):
         )
         row = QHBoxLayout()
         self.repo_inp = QLineEdit(cur_repo)
-        self.repo_inp.setPlaceholderText("https://github.com/kullanici_adiniz/ai-arac-merkezi")
+        self.repo_inp.setPlaceholderText("https://github.com/DoranPierst/AIconomy")
         row.addWidget(self.repo_inp, stretch=1)
 
         btn_save_repo = QPushButton("💾 Kanalı Kaydet && Kontrol Et")
@@ -569,7 +583,7 @@ class AppUpdateDialog(QDialog):
         if res.release_notes_url:
             lines.append(f"Güncelleme Notları: {res.release_notes_url}")
         if res.exe_download_url:
-            lines.append("Güncelleme Yöntemi: Doğrudan AI-Arac-Merkezi.exe otomatik yenileme (ayarlarınız korunur)")
+            lines.append("Güncelleme Yöntemi: Doğrudan AIconomy.exe otomatik yenileme (ayarlarınız korunur)")
         elif res.can_git_pull:
             lines.append("Güncelleme Yöntemi: Git Kaynak Deposu (git pull)")
         if res.changelog:
@@ -1423,7 +1437,7 @@ class MainWindow(QMainWindow):
         self.btn_app_update_top.setObjectName("primaryBtn")
         self.btn_app_update_top.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.btn_app_update_top.setToolTip(
-            "Bu programın (DoranPierst/ai-arac-merkezi) yeni bir sürümü var mı doğrudan kontrol eder.\n"
+            "Bu programın (DoranPierst/AIconomy) yeni bir sürümü var mı doğrudan kontrol eder.\n"
             "• Yeni sürüm çıktığında tek tıkla indirip programı otomatik yeniler.\n"
             "• Sağ tık: Program sürüm detaylarını açar."
         )
@@ -3707,9 +3721,9 @@ class MainWindow(QMainWindow):
                 )
             self.app_update_banner.show()
         elif res.ok:
-            self.btn_app_update_top.setText("✓ Program Güncel")
+            self.btn_app_update_top.setText(tr(self.lang, "app_up_to_date"))
             self.btn_app_update_top.setObjectName("primaryBtn")
-            self.btn_do_app_upd.setText(f"📦 Program Sürümü: {res.local_version}v")
+            self.btn_do_app_upd.setText(tr(self.lang, "ver_btn", ver=res.local_version))
             self.btn_do_app_upd.setObjectName("")
             self.app_update_banner.hide()
 

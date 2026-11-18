@@ -37,8 +37,10 @@ jobs:
       - name: Sync dependencies & Build EXE
         run: |
           uv sync --dev
-          uv run pyinstaller --noconfirm --onefile --windowed --name "AIconmy" `
+          uv run pyinstaller --noconfirm --onefile --windowed --name "AIconomy" `
+            --icon "assets/aiconomy.ico" `
             --add-data "version.json;." `
+            --add-data "assets;assets" `
             --exclude-module PySide6.QtWebEngineCore `
             --exclude-module PySide6.QtWebEngineWidgets `
             --exclude-module PySide6.QtPdf `
@@ -46,11 +48,10 @@ jobs:
             --exclude-module PySide6.QtQuick `
             main.py
 
-      - name: Publish GitHub Release with AIconmy.exe
+      - name: Publish GitHub Release with AIconomy.exe
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.meta.outputs.tag }}
-          name: "AIconmy ${{ steps.meta.outputs.tag }}"
+          name: "AIconomy ${{ steps.meta.outputs.tag }}"
           body: ${{ steps.meta.outputs.changelog }}
-          files: dist/AIconmy.exe
-          generate_release_notes: true
+          files: dist/AIconomy.exe

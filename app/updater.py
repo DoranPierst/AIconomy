@@ -15,8 +15,8 @@ from typing import Callable
 
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
 
-FALLBACK_VERSION = "1.3.1"
-DEFAULT_APP_REPO = "https://github.com/DoranPierst/AIconmy"
+FALLBACK_VERSION = "1.3.2"
+DEFAULT_APP_REPO = "https://github.com/DoranPierst/AIconomy"
 
 
 def get_source_root() -> pathlib.Path:
@@ -140,7 +140,7 @@ def parse_github_owner_repo(repo_input: str) -> tuple[str, str]:
         parts = s.split("/")
         if len(parts) == 2 and parts[0] and parts[1]:
             return parts[0], parts[1]
-    raise ValueError("Geçerli bir GitHub repo adresi girin (örn: https://github.com/kullanici/ai-arac-merkezi).")
+    raise ValueError("Geçerli bir GitHub repo adresi girin (örn: https://github.com/DoranPierst/AIconomy).")
 
 
 @dataclasses.dataclass
@@ -380,7 +380,7 @@ def apply_self_update(
     return (
         False,
         "none",
-        "Bu sürüm için GitHub Releases altında henüz derlenmiş bir 'AI-Arac-Merkezi.exe' dosyası eklenmemiş.",
+        "Bu sürüm için GitHub Releases altında henüz derlenmiş bir 'AIconomy.exe' dosyası eklenmemiş.",
     )
 
 
