@@ -2406,12 +2406,12 @@ class MainWindow(QMainWindow):
         self.log_search_inp.textChanged.connect(self._refresh_logs_tab)
         top.addWidget(self.log_search_inp, stretch=1)
 
-        top.addWidget(QLabel("⚡ Port Temizle (Asılıysa):"))
+        top.addWidget(QLabel("🔌 Asılı Portu Kapat:"))
         for port_num, lbl in [(8080, "8080 Unity"), (9876, "9876 Blender"), (9121, "9121 Serena"), (8790, "8790 Trellis")]:
-            zb = QPushButton(f"🧹 {lbl}")
+            zb = QPushButton(f"🔌 {lbl}")
             zb.setToolTip(
-                f"Bu bir hata göstergesi değildir — yalnızca {port_num} portu arkada asılı kalırsa\n"
-                "manuel olarak temizlemek için basacağınız kurtarma butonudur."
+                f"Logları silmez! Yalnızca {port_num} portu arkada asılı kalırsa o porttaki arka plan sürecini kapatır.\n"
+                "(Logları temizlemek için aşağıdaki '🧹 Logları Temizle' butonunu kullanın.)"
             )
             zb.clicked.connect(lambda _=False, p=port_num: self._handle_kill_zombie_port(p))
             top.addWidget(zb)
@@ -2613,9 +2613,12 @@ class MainWindow(QMainWindow):
     def _clear_all_logs(self) -> None:
         self.logs.clear()
         self.checked_log_ids.clear()
+        now_m = time.monotonic()
+        for t in self.tools:
+            self._last_warn_time[t.id] = now_m
         self._refresh_logs_tab()
         self.log_raw_view.clear()
-        self.set_status("🧹 Tüm eski log kayıtları temizlendi.")
+        self.set_status("🧹 Tüm log kayıtları kalıcı olarak temizlendi.")
 
     def _on_log_row_selected(self) -> None:
         idxs = self.log_table.selectionModel().selectedRows()
@@ -3318,7 +3321,8 @@ class MainWindow(QMainWindow):
 
     def _handle_kill_zombie_port(self, port: int) -> None:
         ok, msg = kill_zombie_port_process(port)
-        self.logs.add("INFO" if ok else "WARN", f"Port {port}", msg, msg, port)
+        # Port zaten boşsa veya açık editör (Blender/Unity) tarafından kullanılıyorsa sarı WARN yerine INFO yaz
+        self.logs.add("INFO", f"Port {port}", msg, msg, port)
         self._refresh_logs_tab()
         self.set_status(msg)
         QTimer.singleShot(500, self.run_health_scan)

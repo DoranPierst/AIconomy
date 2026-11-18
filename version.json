@@ -1,5 +1,5 @@
 {
-  "version": "1.2.13",
+  "version": "1.2.14",
   "update_repo": "https://github.com/DoranPierst/ai-arac-merkezi",
-  "changelog": "Blender ve Unity açıkken (simge durumundayken) bağımlı program uyarı çubuğunun takılı kalmasına yol açan _latest_live_map senkronizasyon hatası düzeltildi."
+  "changelog": "Port Kurtarıcı butonları log temizlemeyle karışmaması için '🔌 Asılı Portu Kapat' olarak ayrıldı ve açık editör/boş port durumlarında gereksiz sarı WARN yerine INFO kaydı yazılacak şekilde güncellendi."
 }
