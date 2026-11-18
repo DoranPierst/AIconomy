@@ -1,5 +1,5 @@
 {
-  "version": "1.2.11",
+  "version": "1.2.12",
   "update_repo": "https://github.com/DoranPierst/ai-arac-merkezi",
-  "changelog": "Bağımlı program uyarı & başlatıcı eklendi: Blender MCP, Unity MCP/Pipeline, RenderDoc veya Trellis AÇIK iken bağlı olduğu program kapalıysa tablonun üstünde tek tıkla (UI'sız/simge modunda) başlatma uyarısı çıkar."
+  "changelog": "🔌 Bağlantıları Test Et (Bağlantı Test Merkezi) penceresi eklendi: Antigravity açık olmasa bile tüm aktif araçlara gerçek MCP/soket/stdio el sıkışma testi uygular. Debug & Log içindeki Port Temizle butonları hata gibi görünmeyecek şekilde sadeleştirildi."
 }
