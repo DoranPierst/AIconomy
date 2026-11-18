@@ -6,6 +6,17 @@
 
 A native Windows desktop control center (`PySide6` / Qt 6) for managing MCP servers, AI coding assistants (**Google Antigravity**, **OpenAI Codex**, **Claude Code**, **Cursor**), local GPU/3D tools (**Blender**, **Unity**, **RenderDoc**, **Trellis**), and token schema budgets from one unified interface.
 
+---
+
+## ⬇️ Download (Windows)
+
+No Python or setup required:
+1. Download **`AIconomy.exe`** from the [**Latest Release**](https://github.com/DoranPierst/AIconomy/releases/latest).
+2. Double-click `AIconomy.exe` to run (all settings are stored locally in `data/` next to the `.exe`).
+3. Use the in-app **App Update** button anytime to pull future releases automatically.
+
+---
+
 ## ✨ Key Features
 
 - **8 Built-in Languages:** 🇹🇷 Türkçe · 🇺🇸 English · 🇩🇪 Deutsch · 🇫🇷 Français · 🇪🇸 Español · 🇷🇺 Русский · 🇯🇵 日本語 · 🇨🇳 中文 (instant live switching + OS locale auto-detection).
@@ -15,17 +26,14 @@ A native Windows desktop control center (`PySide6` / Qt 6) for managing MCP serv
 - **Host-App Dependency Launcher:** Detects when an enabled tool's host program (`Unity`, `Blender`, `RenderDoc`, `Trellis`) is closed and offers 1-click headless/minimized startup.
 - **Custom Named Presets (`💾 My Presets`) & Multi-Select Profiles:** Save named configurations for different projects and switch back anytime.
 - **Windows DPAPI Encrypted Vault:** Stores API keys securely using Windows `CryptProtectData` (never plaintext).
-- **Self-Updater:** Checks GitHub Releases (`DoranPierst/AIconomy`) and updates `AIconomy.exe` in one click.
 
-## 🚀 Running from Source
+---
+
+## 🛠️ For Developers (Running from Source / Building EXE)
 
 ```powershell
 uv sync
 uv run python main.py
 ```
 
-## 📦 Building Standalone `.exe`
-
-```powershell
-.\build_exe.bat
-```
+Or double-click `start.bat` to launch without a console window, and `build_exe.bat` to build a standalone `dist/AIconomy.exe`.

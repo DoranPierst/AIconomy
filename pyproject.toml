@@ -1,7 +1,7 @@
 [project]
-name = "ai-arac-merkezi"
-version = "1.0.0"
-description = "Yapay Zeka Araç, MCP, Skill ve Token Ekonomisi Masaüstü Kontrol Merkezi (PySide6)"
+name = "aiconomy"
+version = "1.3.3"
+description = "AIconomy — AI Tools, MCP Servers, Skills & Token Economy Desktop Control Center (PySide6)"
 requires-python = ">=3.11"
 dependencies = [
     "pyside6>=6.7.0",
