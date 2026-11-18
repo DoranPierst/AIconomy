@@ -666,6 +666,9 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, QMainWindow):
             return
         self.lang = norm
         self.meta["lang"] = norm
+        for t in self.tools:
+            t.last_ping = tr(self.lang, "st_disabled") if not t.enabled else tr(self.lang, "st_scanning")
+            t.live_location_detail = resolve_disk_location(t, self.projects_map, {}, lang=self.lang)
         self._save_state()
         self._retranslate_ui()
         self._rebuild_kind_filter_combo()
@@ -727,6 +730,8 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, QMainWindow):
             self.plugins_banner_lbl.setText(tr(self.lang, "plug_banner_all_ok"))
 
         self.lbl_log_level.setText(tr(self.lang, "log_level_lbl"))
+        if self.log_lvl_cmb.count() > 0:
+            self.log_lvl_cmb.setItemText(0, tr(self.lang, "log_level_all"))
         self.log_search_inp.setPlaceholderText(tr(self.lang, "log_search_ph"))
         self.btn_log_wipe.setText(tr(self.lang, "log_clear_all"))
         self.btn_log_all.setText(tr(self.lang, "log_sel_all"))
@@ -1337,8 +1342,10 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, QMainWindow):
         tok = self.vault.get_secret("GITHUB_TOKEN")
         self._startup_app_check = True
 
+        lang_snap = self.lang
+
         def worker() -> None:
-            res = check_for_app_updates(repo, tok)
+            res = check_for_app_updates(repo, tok, lang=lang_snap)
             safe_emit(self.bridge.app_check_done, res)
 
         threading.Thread(target=worker, daemon=True).start()
@@ -1352,8 +1359,10 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, QMainWindow):
         tok = self.vault.get_secret("GITHUB_TOKEN")
         self._silent_app_check = True
 
+        lang_snap = self.lang
+
         def worker() -> None:
-            res = check_for_app_updates(repo, tok)
+            res = check_for_app_updates(repo, tok, lang=lang_snap)
             safe_emit(self.bridge.app_check_done, res)
 
         threading.Thread(target=worker, daemon=True).start()

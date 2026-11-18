@@ -187,9 +187,9 @@ def _rewrite_mcp_json(
             raw_txt = cfg_path.read_text(encoding="utf-8")
             data = json.loads(raw_txt) if raw_txt.strip() else {}
         except Exception as exc:
-            return False, f"okuma hatası ({exc})"
+            return False, f"read error ({exc})"
         if not isinstance(data, dict):
-            return False, "beklenmeyen JSON biçimi"
+            return False, "unexpected JSON format"
     original = copy.deepcopy(data)
 
     servers = data.get("mcpServers")
@@ -263,11 +263,11 @@ def _sync_mcp_json_clients_impl(
         try:
             written, err = _rewrite_mcp_json(cfg_path, managed_keys, wanted, create_if_missing=(code == "AGY"))
         except Exception as exc:
-            written, err = False, f"yazma hatası ({exc})"
+            written, err = False, f"write error ({exc})"
         if err:
             messages.append(f"{code}: {err}")
         elif cfg_path.is_file():
-            messages.append(f"{code} Global ({len(wanted)} MCP{'' if written else ', değişiklik yok'})")
+            messages.append(f"{code} Global ({len(wanted)} MCP{'' if written else ', unchanged'})")
 
     for proj_name, proj_dir_str in projects_map.items():
         proj_dir = pathlib.Path(proj_dir_str)
@@ -289,7 +289,7 @@ def _sync_mcp_json_clients_impl(
             try:
                 written, err = _rewrite_mcp_json(p_cfg, managed_keys, p_wanted, create_if_missing=True)
             except Exception as exc:
-                written, err = False, f"yazma hatası ({exc})"
+                written, err = False, f"write error ({exc})"
             if err:
                 messages.append(f"{proj_name}/{rel_cfg}: {err}")
             elif written:
@@ -366,8 +366,8 @@ def _sync_mcp_json_clients_impl(
                 _atomic_write_text(codex_cfg, new_toml)
                 messages.append(f"CDX ({cdx_added} MCP)")
             else:
-                messages.append(f"CDX ({cdx_added} MCP, değişiklik yok)")
+                messages.append(f"CDX ({cdx_added} MCP, unchanged)")
         except Exception as exc:
-            messages.append(f"CDX hata ({exc})")
+            messages.append(f"CDX error ({exc})")
 
     return messages

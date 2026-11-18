@@ -1,4 +1,4 @@
-"""Plugin update checking, package upgrades, Blender skills installation, and GitHub repo inspection."""
+"""Plugin update checking, package upgrades, Blender skills installation, and GitHub repo inspection (EN & TR)."""
 from __future__ import annotations
 
 import concurrent.futures
@@ -60,8 +60,9 @@ class PluginCheckResult:
     error_detail: str = ""
 
 
-def install_or_update_blender_skills(active_skills: set[str]) -> tuple[bool, str, str]:
+def install_or_update_blender_skills(active_skills: set[str], lang: str = "en") -> tuple[bool, str, str]:
     """Download arjun988/blender-skills into the Antigravity plugin folder and apply active skill split."""
+    is_tr = lang == "tr"
     target_root = pathlib.Path.home() / ".gemini" / "config" / "plugins" / "blender-skills"
     legacy_tmp = target_root.parent / "_tmp_blender_skills_clone"
     if legacy_tmp.exists():
@@ -78,11 +79,16 @@ def install_or_update_blender_skills(active_skills: set[str]) -> tuple[bool, str
             creationflags=NO_WINDOW,
         )
         if proc.returncode != 0:
-            return False, "", f"Git clone başarısız: {proc.stderr.strip()}"
+            err = proc.stderr.strip()
+            return False, "", (f"Git clone başarısız: {err}" if is_tr else f"Git clone failed: {err}")
 
         src_skills = clone_dest / ".claude" / "skills"
         if not src_skills.is_dir():
-            return False, "", "Repo içinde .claude/skills klasörü bulunamadı."
+            return False, "", (
+                "Repo içinde .claude/skills klasörü bulunamadı."
+                if is_tr
+                else "Directory .claude/skills was not found in the repository."
+            )
 
         ver_tag = "v1.3.0"
         ver_json = clone_dest / "version.json"
@@ -134,22 +140,28 @@ def install_or_update_blender_skills(active_skills: set[str]) -> tuple[bool, str
             "repository": "https://github.com/arjun988/blender-skills",
         }
         (target_root / "plugin.json").write_text(json.dumps(plugin_json, ensure_ascii=False, indent=2), encoding="utf-8")
-        return (
-            True,
-            ver_tag,
-            f"{count} Blender skill güncellendi ({ver_tag}); {len(active_skills)} açık, {count - len(active_skills)} kapalı.",
+        msg = (
+            f"{count} Blender skill güncellendi ({ver_tag}); {len(active_skills)} açık, {count - len(active_skills)} kapalı."
+            if is_tr
+            else f"Updated {count} Blender skills ({ver_tag}); {len(active_skills)} enabled, {count - len(active_skills)} disabled."
         )
+        return True, ver_tag, msg
     except Exception as exc:
-        return False, "", f"Kurulum hatası: {exc}"
+        return False, "", (f"Kurulum hatası: {exc}" if is_tr else f"Install error: {exc}")
     finally:
         _force_rmtree(temp_clone)
 
 
-def inspect_github_repo(repo_url: str, github_token: str = "") -> dict[str, Any]:
+def inspect_github_repo(repo_url: str, github_token: str = "", lang: str = "en") -> dict[str, Any]:
     """Query GitHub API to detect whether a repository is an MCP server, skill pack, or CLI tool."""
+    is_tr = lang == "tr"
     m = re.search(r"github\.com/([^/\s]+)/([^/\s#?]+)", repo_url)
     if not m:
-        raise ValueError("Geçerli bir GitHub repo adresi girin (örn: https://github.com/owner/repo).")
+        raise ValueError(
+            "Geçerli bir GitHub repo adresi girin (örn: https://github.com/owner/repo)."
+            if is_tr
+            else "Enter a valid GitHub repository URL (e.g. https://github.com/owner/repo)."
+        )
     owner, repo = m.group(1), m.group(2).removesuffix(".git")
     headers = {"User-Agent": _user_agent()}
     if github_token:
@@ -174,30 +186,30 @@ def inspect_github_repo(repo_url: str, github_token: str = "") -> dict[str, Any]
     needs_key = any("API_KEY" in p.upper() or ".env.example" in p for p in paths)
 
     if len(skill_files) > 1:
-        kind = "Skill Paketi"
+        kind = "skill_pack"
         cmd = f"git clone https://github.com/{owner}/{repo}.git ({len(skill_files)} SKILL.md)"
         mcp_cmd, mcp_args = "", []
     elif len(skill_files) == 1 and not has_pkg and not has_py:
-        kind = "Skill / Kural"
+        kind = "rule"
         cmd = f"git clone https://github.com/{owner}/{repo}.git"
         mcp_cmd, mcp_args = "", []
     elif has_pkg:
-        kind = "stdio MCP"
+        kind = "stdio"
         cmd = f"npx -y {repo}"
         mcp_cmd, mcp_args = "npx", ["-y", repo]
     elif has_py:
-        kind = "stdio MCP"
+        kind = "stdio"
         cmd = f"uvx {repo}"
         mcp_cmd, mcp_args = "uvx", [repo]
     else:
-        kind = "CLI / GPU"
+        kind = "cli"
         cmd = f"git clone https://github.com/{owner}/{repo}.git"
         mcp_cmd, mcp_args = "", []
 
     return {
         "id": f"gh_{owner}_{repo}".lower().replace("-", "_"),
         "name": f"{repo} ({owner})",
-        "description": meta.get("description") or "GitHub üzerinden algılanan araç.",
+        "description": meta.get("description") or ("GitHub üzerinden algılanan araç." if is_tr else "Tool detected from GitHub."),
         "stars": meta.get("stargazers_count", 0),
         "kind": kind,
         "install_cmd": cmd,
@@ -335,42 +347,43 @@ def update_single_tool(
     tool: ToolSpec,
     active_skills: set[str],
     install_if_missing: bool = False,
+    lang: str = "en",
 ) -> tuple[bool, str, str, str]:
     """Safely upgrade (or install when ``install_if_missing=True``) a single tool.
 
     Returns (ok, new_version_tag, short_summary, raw_log_detail). Never mutates ``tool``.
     """
+    is_tr = lang == "tr"
     ua = _user_agent()
     try:
         if tool.id == "blender_skills":
             plugin_dir = pathlib.Path.home() / ".gemini" / "config" / "plugins" / "blender-skills"
             is_installed = (plugin_dir / "skills").is_dir() or (plugin_dir / "skills_disabled").is_dir()
             if is_installed or install_if_missing:
-                ok, ver_tag, msg = install_or_update_blender_skills(active_skills)
+                ok, ver_tag, msg = install_or_update_blender_skills(active_skills, lang=lang)
                 return ok, ver_tag or tool.version, msg, msg
-            msg = "Henüz indirilmemiş (Kurmak için kutucuğu seçip 'Seçilenleri Kur / Güncelle' diyebilirsiniz)."
+            msg = (
+                "Henüz indirilmedi (kurmak için seçip 'Seçilenleri kur / güncelle' tıklayın)."
+                if is_tr
+                else "Not installed yet (select and click 'Install / Update selected')."
+            )
             return True, tool.version, msg, msg
 
         if tool.id == "caveman":
             cav_dir = pathlib.Path.home() / ".agents" / "skills" / "caveman"
             if (cav_dir / ".git").is_dir():
                 cmd = ["git", "-C", str(cav_dir), "pull", "--ff-only"]
-                proc = subprocess.run(
-                    cmd,
-                    capture_output=True,
-                    text=True,
-                    timeout=30,
-                    creationflags=NO_WINDOW,
-                )
-                raw = f"Komut: {' '.join(cmd)}\nÇıkış Kodu: {proc.returncode}\nSTDOUT:\n{proc.stdout}\nSTDERR:\n{proc.stderr}"
+                proc = subprocess.run(cmd, capture_output=True, text=True, timeout=30, creationflags=NO_WINDOW)
+                raw = f"Command: {' '.join(cmd)}\nExit: {proc.returncode}\nSTDOUT:\n{proc.stdout}\nSTDERR:\n{proc.stderr}"
                 if proc.returncode == 0:
-                    out = proc.stdout.strip() or "Güncel."
-                    return True, tool.version, f"Git pull tamamlandı: {out}", raw
-                err_first = (proc.stderr.strip() or proc.stdout.strip() or "Bilinmeyen git hatası").splitlines()[0]
-                return False, "", f"Git pull hatası: {err_first}", raw
+                    out = proc.stdout.strip() or ("Güncel." if is_tr else "Up to date.")
+                    return True, tool.version, f"git pull: {out}", raw
+                err_first = (proc.stderr.strip() or proc.stdout.strip() or "git error").splitlines()[0]
+                return False, "", f"git pull failed: {err_first}", raw
             if (cav_dir / "SKILL.md").is_file():
-                return True, tool.version, "Yerel SKILL.md doğrulandı ve güncel.", str(cav_dir / "SKILL.md")
-            return True, tool.version, "Caveman kuralı hazır.", str(cav_dir)
+                msg = "Yerel SKILL.md doğrulandı." if is_tr else "Local SKILL.md verified."
+                return True, tool.version, msg, str(cav_dir / "SKILL.md")
+            return True, tool.version, ("Caveman kuralı hazır." if is_tr else "Caveman rule ready."), str(cav_dir)
 
         if tool.id in UV_TOOL_MAP:
             pkg = UV_TOOL_MAP[tool.id]
@@ -382,76 +395,76 @@ def update_single_tool(
             else:
                 cmd = ["uv", "tool", "upgrade", pkg]
 
-            proc = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=90,
-                creationflags=NO_WINDOW,
-            )
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=90, creationflags=NO_WINDOW)
             combined = (proc.stdout + "\n" + proc.stderr).strip()
-            raw = f"Komut: {' '.join(cmd)}\nÇıkış Kodu: {proc.returncode}\nSTDOUT:\n{proc.stdout}\nSTDERR:\n{proc.stderr}"
+            raw = f"Command: {' '.join(cmd)}\nExit: {proc.returncode}\nSTDOUT:\n{proc.stdout}\nSTDERR:\n{proc.stderr}"
             if proc.returncode == 0 or "Nothing to upgrade" in combined or "already installed" in combined.lower():
-                return True, tool.version, f"uv tool ({pkg}): Güncel.", raw
+                return True, tool.version, (f"uv tool ({pkg}): Güncel." if is_tr else f"uv tool ({pkg}): Up to date."), raw
             if "is not installed" in combined.lower() and not install_if_missing:
-                return True, tool.version, f"{pkg} özel dizinde kurulu (mevcut kurulum korundu).", raw
-            first_line = (proc.stderr.strip() or proc.stdout.strip() or "uv tool hatası").splitlines()[0]
-            return False, "", f"uv tool ({pkg}) hatası: {first_line}", raw
+                msg = (
+                    f"{pkg} özel dizinde kurulu (mevcut kurulum korundu)."
+                    if is_tr
+                    else f"{pkg} is installed in a custom path (existing installation preserved)."
+                )
+                return True, tool.version, msg, raw
+            first_line = (proc.stderr.strip() or proc.stdout.strip() or "uv tool error").splitlines()[0]
+            return False, "", f"uv tool ({pkg}): {first_line}", raw
 
         if tool.id in NPM_PACKAGE_MAP:
             pkg = NPM_PACKAGE_MAP[tool.id]
             latest_ver = ""
             try:
                 encoded_pkg = pkg.replace("/", "%2F")
-                req = urllib.request.Request(
-                    f"https://registry.npmjs.org/{encoded_pkg}/latest",
-                    headers={"User-Agent": ua},
-                )
+                req = urllib.request.Request(f"https://registry.npmjs.org/{encoded_pkg}/latest", headers={"User-Agent": ua})
                 with urllib.request.urlopen(req, timeout=6) as resp:
                     meta = json.loads(resp.read().decode("utf-8"))
                     latest_ver = meta.get("version", "")
             except Exception as exc:
-                return False, "", f"npm sürüm sorgulama hatası ({pkg}): {exc}", traceback.format_exc()
+                return False, "", f"npm lookup error ({pkg}): {exc}", traceback.format_exc()
 
             new_v_tag = f"v{latest_ver}" if latest_ver else tool.version
             if install_if_missing and pkg in ("bla-agents", "@gltf-transform/cli"):
                 npm_exe = "npm.cmd" if shutil.which("npm.cmd") else "npm"
                 cmd = [npm_exe, "install", "-g", f"{pkg}@latest"]
-                proc = subprocess.run(
-                    cmd,
-                    capture_output=True,
-                    text=True,
-                    timeout=90,
-                    creationflags=NO_WINDOW,
-                )
-                raw = f"Komut: {' '.join(cmd)}\nÇıkış Kodu: {proc.returncode}\nSTDOUT:\n{proc.stdout}\nSTDERR:\n{proc.stderr}"
+                proc = subprocess.run(cmd, capture_output=True, text=True, timeout=90, creationflags=NO_WINDOW)
+                raw = f"Command: {' '.join(cmd)}\nExit: {proc.returncode}\nSTDOUT:\n{proc.stdout}\nSTDERR:\n{proc.stderr}"
                 if proc.returncode != 0:
-                    first_err = (proc.stderr.strip() or proc.stdout.strip() or "npm install hatası").splitlines()[0]
-                    return False, new_v_tag, f"npm kurulum hatası ({pkg}): {first_err}", raw
-                return True, new_v_tag, f"{pkg} global olarak {new_v_tag} sürümüne güncellendi.", raw
+                    first_err = (proc.stderr.strip() or proc.stdout.strip() or "npm install error").splitlines()[0]
+                    return False, new_v_tag, f"npm install ({pkg}): {first_err}", raw
+                msg = (
+                    f"{pkg} global olarak {new_v_tag} sürümüne güncellendi."
+                    if is_tr
+                    else f"Updated {pkg} globally to {new_v_tag}."
+                )
+                return True, new_v_tag, msg, raw
 
-            msg = f"npm son sürümü doğrulandı -> {new_v_tag} (npx ile güncel çalışır)."
+            msg = (
+                f"npm son sürümü doğrulandı -> {new_v_tag} (npx ile güncel çalışır)."
+                if is_tr
+                else f"Verified latest npm version -> {new_v_tag} (runs latest via npx)."
+            )
             return True, new_v_tag, msg, msg
 
         if tool.id in PYPI_PACKAGE_MAP:
             pkg = PYPI_PACKAGE_MAP[tool.id]
             latest_ver = ""
             try:
-                req = urllib.request.Request(
-                    f"https://pypi.org/pypi/{pkg}/json",
-                    headers={"User-Agent": ua},
-                )
+                req = urllib.request.Request(f"https://pypi.org/pypi/{pkg}/json", headers={"User-Agent": ua})
                 with urllib.request.urlopen(req, timeout=6) as resp:
                     meta = json.loads(resp.read().decode("utf-8"))
                     latest_ver = meta.get("info", {}).get("version", "")
             except Exception as exc:
-                return False, "", f"PyPI sürüm sorgulama hatası ({pkg}): {exc}", traceback.format_exc()
+                return False, "", f"PyPI lookup error ({pkg}): {exc}", traceback.format_exc()
             new_v_tag = f"v{latest_ver}" if latest_ver else tool.version
-            msg = f"PyPI son sürümü doğrulandı ({new_v_tag})."
+            msg = f"PyPI doğrulandı ({new_v_tag})." if is_tr else f"Verified latest PyPI release ({new_v_tag})."
             return True, new_v_tag, msg, msg
 
         if tool.id in ("unity_pipeline", "trellis"):
-            msg = "Yerel motor/GPU kurulumu doğrulandı (özel ağırlık ve proje dosyaları korundu)."
+            msg = (
+                "Yerel kurulum doğrulandı (mevcut proje ve ağırlık dosyaları korundu)."
+                if is_tr
+                else "Local installation verified (existing weights and project files preserved)."
+            )
             return True, tool.version, msg, msg
 
         if "github.com/" in tool.repo_url:
@@ -468,18 +481,27 @@ def update_single_tool(
                         tag = rel.get("tag_name", "")
                         if tag:
                             v_t = tag if tag.startswith("v") else f"v{tag}"
-                            return True, v_t, f"GitHub son sürümü doğrulandı: {v_t}", str(rel.get("html_url", ""))
+                            msg = (
+                                f"GitHub son sürümü doğrulandı: {v_t}"
+                                if is_tr
+                                else f"Verified latest GitHub release: {v_t}"
+                            )
+                            return True, v_t, msg, str(rel.get("html_url", ""))
                 except urllib.error.HTTPError as http_exc:
                     if http_exc.code != 404:
-                        return False, "", f"GitHub API hatası (HTTP {http_exc.code})", traceback.format_exc()
+                        return False, "", f"GitHub API error (HTTP {http_exc.code})", traceback.format_exc()
                 except Exception as exc:
-                    return False, "", f"GitHub bağlantı hatası: {exc}", traceback.format_exc()
-            return True, tool.version, "GitHub kaynağı doğrulandı ve güncel.", tool.repo_url
+                    return False, "", f"GitHub connection error: {exc}", traceback.format_exc()
+            return True, tool.version, ("GitHub kaynağı güncel." if is_tr else "GitHub source verified."), tool.repo_url
 
-        return True, tool.version, "Sürüm kontrolü tamamlandı.", tool.name
+        return True, tool.version, ("Sürüm kontrolü tamamlandı." if is_tr else "Version check complete."), tool.name
     except FileNotFoundError as fnf_exc:
         missing_bin = str(fnf_exc.filename or fnf_exc)
-        hint = "Git (https://git-scm.com), uv (https://docs.astral.sh/uv/) veya Node.js (https://nodejs.org) kurulu olduğundan emin olun."
-        return False, "", f"Gerekli sistem aracı bulunamadı ({missing_bin}). {hint}", traceback.format_exc()
+        msg = (
+            f"Gerekli araç bulunamadı ({missing_bin}). Git, uv veya Node.js kurulu olduğundan emin olun."
+            if is_tr
+            else f"Required executable not found ({missing_bin}). Ensure Git, uv, or Node.js is installed."
+        )
+        return False, "", msg, traceback.format_exc()
     except Exception as exc:
-        return False, "", f"Beklenmeyen güncelleme hatası: {exc}", traceback.format_exc()
+        return False, "", (f"Beklenmeyen güncelleme hatası: {exc}" if is_tr else f"Unexpected update error: {exc}"), traceback.format_exc()

@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
 )
 
 from ...i18n import tr
+from ..workers import safe_emit
 from ...updater import (
     UpdateCheckResult,
     apply_self_update,
@@ -134,9 +135,11 @@ class AppUpdateDialog(QDialog):
         self.info_box.setPlainText(tr(self.lang, "upd_checking"))
         tok = self.main_win.vault.get_secret("GITHUB_TOKEN")
 
+        lang = self.lang
+
         def worker() -> None:
-            res = check_for_app_updates(repo, tok)
-            self.main_win.bridge.app_check_done.emit(res)
+            res = check_for_app_updates(repo, tok, lang=lang)
+            safe_emit(self.main_win.bridge.app_check_done, res)
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -214,13 +217,16 @@ class AppUpdateDialog(QDialog):
         tok = self.main_win.vault.get_secret("GITHUB_TOKEN")
         chk = self.last_check
 
+        lang = self.lang
+
         def worker() -> None:
             ok, mode, msg = apply_self_update(
                 chk,
                 tok,
-                progress_cb=lambda cur, tot: self.main_win.bridge.app_dl_progress.emit(cur, tot),
+                progress_cb=lambda cur, tot: safe_emit(self.main_win.bridge.app_dl_progress, cur, tot),
+                lang=lang,
             )
-            self.main_win.bridge.app_apply_done.emit(ok, mode, msg)
+            safe_emit(self.main_win.bridge.app_apply_done, ok, mode, msg)
 
         threading.Thread(target=worker, daemon=True).start()
 

@@ -1,4 +1,4 @@
-"""GitHub Üzerinden Program Sürüm Kontrolü ve Tek Tıkla Otomatik Kendi Kendini Güncelleme (Self-Updater)."""
+"""GitHub release checker and one-click self-updater for AIconomy (EN & TR, single version source)."""
 from __future__ import annotations
 
 import dataclasses
@@ -15,7 +15,6 @@ from typing import Callable
 
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
 
-FALLBACK_VERSION = "1.3.2"
 DEFAULT_APP_REPO = "https://github.com/DoranPierst/AIconomy"
 
 
@@ -35,6 +34,7 @@ def _iter_version_json_candidates() -> list[pathlib.Path]:
 
 
 def get_current_app_version() -> str:
+    """Read application version from bundled/root version.json (single source of truth)."""
     for c in _iter_version_json_candidates():
         if c.is_file():
             try:
@@ -43,11 +43,10 @@ def get_current_app_version() -> str:
                     return v.lstrip("vV")
             except Exception:
                 pass
-    return FALLBACK_VERSION
+    return "0.0.0"
 
 
 def get_bundled_update_repo() -> str:
-    """Paylaşılan .exe içine gömülü version.json dosyasındaki resmi güncelleme reposunu döndürür."""
     for c in _iter_version_json_candidates():
         if c.is_file():
             try:
@@ -59,64 +58,10 @@ def get_bundled_update_repo() -> str:
     return ""
 
 
-def stamp_repo_into_version_json(repo_url: str) -> None:
-    """Geliştirici ortamında version.json içine update_repo yazar; böylece üretilen .exe paylaşıldığında karşı taraf adres girmeden günceller."""
-    if getattr(sys, "frozen", False):
-        return
-    v_file = get_source_root() / "version.json"
-    if not v_file.is_file():
-        return
-    try:
-        data = json.loads(v_file.read_text(encoding="utf-8"))
-        data["update_repo"] = repo_url.strip()
-        v_file.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    except Exception:
-        pass
-
-
-def auto_stamp_version_json() -> None:
-    """build_exe.bat çalışırken git origin veya data/hub_state.json içindeki repo adresini version.json'a otomatik gömer."""
-    if get_bundled_update_repo():
-        return
-    origin = detect_git_origin_url()
-    if origin:
-        stamp_repo_into_version_json(origin)
-        return
-    for st in (get_source_root() / "data" / "hub_state.json", get_source_root() / "dist" / "data" / "hub_state.json"):
-        if st.is_file():
-            try:
-                saved = str(json.loads(st.read_text(encoding="utf-8")).get("meta", {}).get("app_update_repo", "")).strip()
-                if saved:
-                    stamp_repo_into_version_json(saved)
-                    return
-            except Exception:
-                pass
-
-
 def resolve_effective_app_repo(saved_meta_repo: str = "") -> str:
-    """Kullanıcı ayarı -> .exe içine gömülü update_repo -> git origin sırasıyla güncelleme kanalını bulur."""
-    for candidate in (saved_meta_repo.strip(), get_bundled_update_repo(), detect_git_origin_url(), DEFAULT_APP_REPO):
+    for candidate in (saved_meta_repo.strip(), get_bundled_update_repo(), DEFAULT_APP_REPO):
         if candidate:
             return candidate
-    return ""
-
-
-def detect_git_origin_url() -> str:
-    for candidate_dir in (get_source_root(), get_source_root().parent):
-        if (candidate_dir / ".git").is_dir():
-            try:
-                proc = subprocess.run(
-                    ["git", "-C", str(candidate_dir), "remote", "get-url", "origin"],
-                    capture_output=True,
-                    text=True,
-                    timeout=3,
-                    creationflags=NO_WINDOW,
-                )
-                if proc.returncode == 0 and "github.com" in proc.stdout:
-                    url = proc.stdout.strip().removesuffix(".git")
-                    return url
-            except Exception:
-                pass
     return DEFAULT_APP_REPO
 
 
@@ -131,7 +76,7 @@ def parse_semver(ver_str: str) -> tuple[int, ...]:
     return tuple(parts)
 
 
-def parse_github_owner_repo(repo_input: str) -> tuple[str, str]:
+def parse_github_owner_repo(repo_input: str, lang: str = "en") -> tuple[str, str]:
     s = repo_input.strip().removesuffix(".git").strip("/")
     m = re.search(r"github\.com/([^/\s]+)/([^/\s#?]+)", s)
     if m:
@@ -140,7 +85,12 @@ def parse_github_owner_repo(repo_input: str) -> tuple[str, str]:
         parts = s.split("/")
         if len(parts) == 2 and parts[0] and parts[1]:
             return parts[0], parts[1]
-    raise ValueError("Geçerli bir GitHub repo adresi girin (örn: https://github.com/DoranPierst/AIconomy).")
+    msg = (
+        "Geçerli bir GitHub repo adresi girin (örn: https://github.com/DoranPierst/AIconomy)."
+        if lang == "tr"
+        else "Enter a valid GitHub repository URL (e.g. https://github.com/DoranPierst/AIconomy)."
+    )
+    raise ValueError(msg)
 
 
 @dataclasses.dataclass
@@ -157,32 +107,19 @@ class UpdateCheckResult:
     message: str
 
 
-def check_for_app_updates(repo_input: str, github_token: str = "") -> UpdateCheckResult:
+def check_for_app_updates(repo_input: str, github_token: str = "", lang: str = "en") -> UpdateCheckResult:
+    is_tr = lang == "tr"
     local_ver = get_current_app_version()
     if not repo_input.strip():
-        detected = resolve_effective_app_repo("")
-        if not detected:
-            return UpdateCheckResult(
-                ok=False,
-                has_update=False,
-                local_version=local_ver,
-                remote_version=local_ver,
-                changelog="",
-                release_notes_url="",
-                exe_download_url="",
-                repo_url="",
-                can_git_pull=False,
-                message="Henüz bir GitHub güncelleme kanalı bağlanmadı.",
-            )
-        repo_input = detected
+        repo_input = resolve_effective_app_repo("")
 
     try:
-        owner, repo = parse_github_owner_repo(repo_input)
+        owner, repo = parse_github_owner_repo(repo_input, lang=lang)
     except ValueError as exc:
         return UpdateCheckResult(False, False, local_ver, local_ver, "", "", "", repo_input, False, str(exc))
 
     clean_repo_url = f"https://github.com/{owner}/{repo}"
-    headers = {"User-Agent": "AI-Arac-Merkezi-Updater/1.1"}
+    headers = {"User-Agent": f"AIconomy/{local_ver}"}
     if github_token:
         headers["Authorization"] = f"Bearer {github_token}"
 
@@ -192,7 +129,6 @@ def check_for_app_updates(repo_input: str, github_token: str = "") -> UpdateChec
     exe_url = ""
     github_reachable = False
 
-    # 1) GitHub Releases (Hazır .exe ve sürüm notu var mı?)
     try:
         req = urllib.request.Request(f"https://api.github.com/repos/{owner}/{repo}/releases/latest", headers=headers)
         with urllib.request.urlopen(req, timeout=7) as resp:
@@ -214,7 +150,6 @@ def check_for_app_updates(repo_input: str, github_token: str = "") -> UpdateChec
     except Exception:
         pass
 
-    # 2) main dalındaki version.json
     for branch in ("main", "master"):
         try:
             v_req = urllib.request.Request(
@@ -239,39 +174,27 @@ def check_for_app_updates(repo_input: str, github_token: str = "") -> UpdateChec
 
     if not remote_ver:
         if github_reachable:
-            return UpdateCheckResult(
-                ok=True,
-                has_update=False,
-                local_version=local_ver,
-                remote_version=local_ver,
-                changelog="",
-                release_notes_url=notes_url,
-                exe_download_url="",
-                repo_url=clean_repo_url,
-                can_git_pull=False,
-                message=f"Program güncel ({local_ver}v) — GitHub üzerinde yayınlanmış daha yeni bir sürüm yok.",
+            msg = (
+                f"AIconomy güncel (v{local_ver}) — daha yeni bir sürüm bulunmuyor."
+                if is_tr
+                else f"AIconomy is up to date (v{local_ver})."
             )
-        return UpdateCheckResult(
-            ok=False,
-            has_update=False,
-            local_version=local_ver,
-            remote_version=local_ver,
-            changelog="",
-            release_notes_url="",
-            exe_download_url="",
-            repo_url=clean_repo_url,
-            can_git_pull=False,
-            message="GitHub sunucusuna ulaşılamadı (internet bağlantınızı kontrol edin).",
+            return UpdateCheckResult(True, False, local_ver, local_ver, "", notes_url, "", clean_repo_url, False, msg)
+        msg = (
+            "GitHub sunucusuna ulaşılamadı (internet bağlantınızı kontrol edin)."
+            if is_tr
+            else "Could not reach GitHub (check your internet connection)."
         )
+        return UpdateCheckResult(False, False, local_ver, local_ver, "", "", "", clean_repo_url, False, msg)
 
     has_upd = parse_semver(remote_ver) > parse_semver(local_ver)
     src_root = get_source_root()
     git_dir_exists = (src_root / ".git").is_dir() or (src_root.parent / ".git").is_dir()
 
     if has_upd:
-        msg = f"Güncelleme Mevcut: {local_ver}v > {remote_ver}v"
+        msg = f"Güncelleme mevcut: v{local_ver} -> v{remote_ver}" if is_tr else f"Update available: v{local_ver} -> v{remote_ver}"
     else:
-        msg = f"Program güncel ({local_ver}v)"
+        msg = f"AIconomy güncel (v{local_ver})" if is_tr else f"AIconomy is up to date (v{local_ver})"
 
     return UpdateCheckResult(
         ok=True,
@@ -291,17 +214,17 @@ def apply_self_update(
     check_res: UpdateCheckResult,
     github_token: str = "",
     progress_cb: Callable[[int, int], None] | None = None,
+    lang: str = "en",
 ) -> tuple[bool, str, str]:
-    """Güncellemeyi indirir/çeker ve yeniden başlatma kipini döndürür:
-    Dönüş: (ok, action_kind ['swap_exe' | 'restart_py' | 'none'], message)
-    """
+    """Download/pull update and return (ok, action_kind ['swap_exe' | 'restart_py' | 'none'], message)."""
+    is_tr = lang == "tr"
     is_frozen = getattr(sys, "frozen", False)
+    local_ver = get_current_app_version()
 
-    # Durum A: .exe modunda çalışıyor ve GitHub Release üzerinde hazır .exe var -> Atomik Sıcak Değişim (Hot-Swap)
     if is_frozen and check_res.exe_download_url:
         current_exe = pathlib.Path(sys.executable).resolve()
         new_exe = current_exe.with_suffix(".exe.new")
-        headers = {"User-Agent": "AI-Arac-Merkezi-Updater/1.1"}
+        headers = {"User-Agent": f"AIconomy/{local_ver}"}
         if github_token:
             headers["Authorization"] = f"Bearer {github_token}"
 
@@ -320,14 +243,23 @@ def apply_self_update(
                         if progress_cb and total > 0:
                             progress_cb(downloaded, total)
 
-            # Bozuk indirmeye karşı PE (MZ) başlık ve boyut doğrulaması
             if not new_exe.is_file() or new_exe.stat().st_size < 1_000_000:
                 new_exe.unlink(missing_ok=True)
-                return False, "none", "İndirilen güncelleme dosyası eksik görünüyor; mevcut sürüm korundu."
+                msg = (
+                    "İndirilen dosya eksik görünüyor; mevcut sürüm korundu."
+                    if is_tr
+                    else "Downloaded update file looks incomplete; keeping current version."
+                )
+                return False, "none", msg
             with open(new_exe, "rb") as chk:
                 if chk.read(2) != b"MZ":
                     new_exe.unlink(missing_ok=True)
-                    return False, "none", "İndirilen dosya geçerli bir Windows .exe dosyası değil; mevcut sürüm korundu."
+                    msg = (
+                        "İndirilen dosya geçerli bir Windows .exe değil; mevcut sürüm korundu."
+                        if is_tr
+                        else "Downloaded file is not a valid Windows executable; keeping current version."
+                    )
+                    return False, "none", msg
 
             bat_path = current_exe.parent / "_apply_update.bat"
             bat_content = (
@@ -346,12 +278,17 @@ def apply_self_update(
             )
             bat_path.write_text(bat_content, encoding="utf-8")
             subprocess.Popen(["cmd.exe", "/c", str(bat_path)], creationflags=NO_WINDOW)
-            return True, "swap_exe", f"v{check_res.remote_version} indirildi! Program şimdi otomatik yenilenip açılacak."
+            msg = (
+                f"v{check_res.remote_version} indirildi; uygulama şimdi yeniden başlatılacak."
+                if is_tr
+                else f"Downloaded v{check_res.remote_version}; restarting AIconomy now."
+            )
+            return True, "swap_exe", msg
         except Exception as exc:
             new_exe.unlink(missing_ok=True)
-            return False, "none", f".exe indirme hatası: {exc}\n\n{traceback.format_exc()}"
+            prefix = ".exe indirme hatası" if is_tr else "Executable download failed"
+            return False, "none", f"{prefix}: {exc}\n\n{traceback.format_exc()}"
 
-    # Durum B: Kaynak koddan (veya üst klasöründe .git olan dizinden) çalışıyor -> git pull --ff-only
     src_root = get_source_root()
     git_dir = src_root if (src_root / ".git").is_dir() else (src_root.parent if (src_root.parent / ".git").is_dir() else None)
     if git_dir is not None:
@@ -365,23 +302,33 @@ def apply_self_update(
                 creationflags=NO_WINDOW,
             )
             if proc.returncode != 0:
-                raw = f"Komut: {' '.join(cmd)}\nÇıkış Kodu: {proc.returncode}\nSTDOUT:\n{proc.stdout}\nSTDERR:\n{proc.stderr}"
-                return False, "none", f"git pull başarısız: {proc.stderr.strip() or proc.stdout.strip()}\n\n{raw}"
+                raw = f"Command: {' '.join(cmd)}\nExit code: {proc.returncode}\nSTDOUT:\n{proc.stdout}\nSTDERR:\n{proc.stderr}"
+                err_txt = proc.stderr.strip() or proc.stdout.strip()
+                prefix = "git pull başarısız" if is_tr else "git pull failed"
+                return False, "none", f"{prefix}: {err_txt}\n\n{raw}"
             if not is_frozen:
-                return True, "restart_py", f"Kaynak kodlar v{check_res.remote_version} sürümüne çekildi! Yeniden başlatılıyor..."
-            return (
-                True,
-                "none",
-                f"Kaynak kodlar çekildi ({proc.stdout.strip()}). .exe olarak kullandığınız için build_exe.bat çalıştırabilir veya GitHub Release .exe yayınlandığında doğrudan tek tıkla güncelleyebilirsiniz.",
+                msg = (
+                    f"Kaynak kodlar v{check_res.remote_version} sürümüne güncellendi; yeniden başlatılıyor..."
+                    if is_tr
+                    else f"Updated source to v{check_res.remote_version}; restarting..."
+                )
+                return True, "restart_py", msg
+            msg = (
+                f"Kaynak kodlar çekildi ({proc.stdout.strip()}). .exe güncellemek için build_exe.bat çalıştırabilirsiniz."
+                if is_tr
+                else f"Source updated ({proc.stdout.strip()}). Run build_exe.bat to rebuild AIconomy.exe."
             )
+            return True, "none", msg
         except Exception as exc:
-            return False, "none", f"Git güncelleme hatası: {exc}\n\n{traceback.format_exc()}"
+            prefix = "Git güncelleme hatası" if is_tr else "Git update failed"
+            return False, "none", f"{prefix}: {exc}\n\n{traceback.format_exc()}"
 
-    return (
-        False,
-        "none",
-        "Bu sürüm için GitHub Releases altında henüz derlenmiş bir 'AIconomy.exe' dosyası eklenmemiş.",
+    msg = (
+        "Bu sürüm için GitHub Releases altında derlenmiş AIconomy.exe bulunamadı."
+        if is_tr
+        else "No compiled AIconomy.exe asset was found on this GitHub release."
     )
+    return False, "none", msg
 
 
 def restart_running_python_app() -> None:

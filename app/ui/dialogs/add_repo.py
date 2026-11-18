@@ -18,7 +18,7 @@ from PySide6.QtWidgets import (
 from ...catalog import ToolSpec, normalize_tool_kind, tool_kind_label
 from ...i18n import tr
 from ...plugins import inspect_github_repo
-from ..workers import WorkerBridge
+from ..workers import WorkerBridge, safe_emit
 
 if TYPE_CHECKING:
     from ..main_window import MainWindow
@@ -86,12 +86,14 @@ class AddRepoDialog(QDialog):
         self.result_box.setPlainText(tr(self.lang, "repo_inspecting"))
         tok = self.main_win.vault.get_secret("GITHUB_TOKEN")
 
+        lang = self.lang
+
         def worker() -> None:
             try:
-                info = inspect_github_repo(url, tok)
-                self._bridge.repo_done.emit({"ok": True, "info": info})
+                info = inspect_github_repo(url, tok, lang=lang)
+                safe_emit(self._bridge.repo_done, {"ok": True, "info": info})
             except Exception as exc:
-                self._bridge.repo_done.emit({"ok": False, "error": str(exc)})
+                safe_emit(self._bridge.repo_done, {"ok": False, "error": str(exc)})
 
         threading.Thread(target=worker, daemon=True).start()
 

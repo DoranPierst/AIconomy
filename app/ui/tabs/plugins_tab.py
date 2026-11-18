@@ -306,6 +306,7 @@ class PluginsTabMixin:
 
         wanted_skills = set(self.active_skills)
         items = copy.deepcopy(target_tools)
+        lang_snap = self.lang
 
         def worker() -> None:
             ok_cnt = 0
@@ -315,7 +316,7 @@ class PluginsTabMixin:
                 safe_emit(self.bridge.update_progress, idx, total, tool_snap.name)
                 prev_v = tool_snap.version.strip().lstrip("vV")
                 ok, new_ver, msg, raw_log = update_single_tool(
-                    tool_snap, wanted_skills, install_if_missing=install_if_missing
+                    tool_snap, wanted_skills, install_if_missing=install_if_missing, lang=lang_snap
                 )
                 target_v = (tool_snap.latest_version or new_ver or tool_snap.version).strip().lstrip("vV")
                 safe_emit(self.bridge.update_item_done, tool_snap.id, ok, prev_v, target_v, msg, raw_log)

@@ -44,8 +44,10 @@ class LogsTabMixin:
         top.addWidget(self.lbl_log_level)
 
         self.log_lvl_cmb = QComboBox()
-        self.log_lvl_cmb.addItems(["ALL", "ERR", "WARN", "INFO", "DBG"])
-        self.log_lvl_cmb.currentTextChanged.connect(self._refresh_logs_tab)
+        self.log_lvl_cmb.addItem(tr(self.lang, "log_level_all"), "ALL")
+        for _lvl in ("ERR", "WARN", "INFO", "DBG"):
+            self.log_lvl_cmb.addItem(_lvl, _lvl)
+        self.log_lvl_cmb.currentIndexChanged.connect(self._refresh_logs_tab)
         top.addWidget(self.log_lvl_cmb)
 
         self.log_search_inp = QLineEdit()
@@ -132,7 +134,7 @@ class LogsTabMixin:
         )
 
     def _refresh_logs_tab(self) -> None:
-        lvl = self.log_lvl_cmb.currentText()
+        lvl = str(self.log_lvl_cmb.currentData() or "ALL")
         q = self.log_search_inp.text()
         self._current_logs = self.logs.query(level=lvl, search=q)
         self.log_row_checks.clear()
@@ -167,7 +169,9 @@ class LogsTabMixin:
         self._update_log_selection_ui()
 
     def _jump_to_error_logs(self) -> None:
-        self.log_lvl_cmb.setCurrentText("ERR")
+        idx = self.log_lvl_cmb.findData("ERR")
+        if idx >= 0:
+            self.log_lvl_cmb.setCurrentIndex(idx)
         self._refresh_logs_tab()
         self._set_log_checks("issues_only")
         self.tabs.setCurrentIndex(2)
