@@ -1,4 +1,4 @@
-"""94-skill Blender selector dialog (emoji-free, EN & TR)."""
+"""94-skill Blender selector dialog with specialist tag subgroup filters (emoji-free, EN & TR)."""
 from __future__ import annotations
 
 from PySide6.QtCore import QEvent, QObject
@@ -18,9 +18,12 @@ from PySide6.QtWidgets import (
 )
 
 from ...catalog import (
+    BLENDER_SKILL_GROUP_IDS,
     BLENDER_SKILL_INDEX_TOKENS,
     BLENDER_SKILLS_94,
     DEFAULT_ACTIVE_BLENDER_SKILLS,
+    blender_group_label,
+    blender_skill_group,
     describe_blender_skill,
 )
 from ...i18n import tr
@@ -28,7 +31,7 @@ from ..widgets import create_option_help_badge
 
 
 class BlenderSkillsDialog(QDialog):
-    """Multi-select manager for the 94 Blender specialist skills."""
+    """Multi-select manager for the 94 Blender specialist skills with subgroup filtering."""
 
     def __init__(
         self,
@@ -40,9 +43,10 @@ class BlenderSkillsDialog(QDialog):
         super().__init__(parent)
         self.lang = lang
         self.setWindowTitle(tr(lang, "skills_title"))
-        self.resize(920, 640)
+        self.resize(960, 650)
         self.draft_active: set[str] = set(active_skills)
         self.checked_items: set[str] = set(checked_skills or set())
+        self.current_filtered: list[str] = list(BLENDER_SKILLS_94)
         self.saved_result: set[str] | None = None
         self.saved_checked: set[str] = set()
 
@@ -50,6 +54,7 @@ class BlenderSkillsDialog(QDialog):
         root.setSpacing(8)
 
         top_bar = QHBoxLayout()
+        top_bar.setSpacing(6)
         self.btn_all_on = QPushButton(tr(lang, "skills_all_on"))
         self.btn_all_off = QPushButton(tr(lang, "skills_all_off"))
         self.btn_default = QPushButton(tr(lang, "skills_btn_default", n=len(DEFAULT_ACTIVE_BLENDER_SKILLS)))
@@ -78,8 +83,15 @@ class BlenderSkillsDialog(QDialog):
         top_bar.addStretch()
         self.search_inp = QLineEdit()
         self.search_inp.setPlaceholderText(tr(lang, "skills_search_ph"))
-        self.search_inp.setFixedWidth(220)
+        self.search_inp.setFixedWidth(185)
         self.search_inp.textChanged.connect(self._rebuild_grid)
+
+        self.group_cmb = QComboBox()
+        self.group_cmb.addItem(tr(lang, "skgrp_all"), "ALL")
+        for gid in BLENDER_SKILL_GROUP_IDS:
+            cnt = sum(1 for sk in BLENDER_SKILLS_94 if blender_skill_group(sk) == gid)
+            self.group_cmb.addItem(f"{blender_group_label(gid, lang)} ({cnt})", gid)
+        self.group_cmb.currentIndexChanged.connect(self._rebuild_grid)
 
         self.filter_cmb = QComboBox()
         self.filter_cmb.addItems(
@@ -93,12 +105,15 @@ class BlenderSkillsDialog(QDialog):
         self.filter_cmb.currentIndexChanged.connect(self._rebuild_grid)
 
         top_bar.addWidget(self.search_inp)
+        top_bar.addWidget(self.group_cmb)
         top_bar.addWidget(self.filter_cmb)
         root.addLayout(top_bar)
 
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
+        self.scroll.viewport().setObjectName("cellBox")
         self.grid_host = QWidget()
+        self.grid_host.setObjectName("cellBox")
         self.grid_layout = QGridLayout(self.grid_host)
         self.grid_layout.setSpacing(6)
         self.scroll.setWidget(self.grid_host)
@@ -138,7 +153,8 @@ class BlenderSkillsDialog(QDialog):
         self._rebuild_grid()
 
     def _show_skill_help(self, skill_name: str) -> None:
-        self.skill_help_title.setText(f"<b>{skill_name}</b>")
+        grp_lbl = blender_group_label(blender_skill_group(skill_name), self.lang)
+        self.skill_help_title.setText(f"<b>{skill_name}</b>  <span style='color:#94a3b8; font-size:11px;'>({grp_lbl})</span>")
         self.skill_help_body.setText(describe_blender_skill(skill_name, self.lang))
 
     def eventFilter(self, watched: QObject, event: QEvent) -> bool:  # noqa: N802
@@ -155,11 +171,15 @@ class BlenderSkillsDialog(QDialog):
                 item.widget().deleteLater()
 
         q = self.search_inp.text().strip().lower()
+        g_code = str(self.group_cmb.currentData() or "ALL")
         f_idx = self.filter_cmb.currentIndex()
 
         filtered: list[str] = []
         for sk in BLENDER_SKILLS_94:
-            if q and q not in sk:
+            grp_id = blender_skill_group(sk)
+            if g_code != "ALL" and grp_id != g_code:
+                continue
+            if q and q not in sk and q not in blender_group_label(grp_id, self.lang).lower():
                 continue
             if f_idx == 1 and sk not in self.draft_active:
                 continue
@@ -168,6 +188,8 @@ class BlenderSkillsDialog(QDialog):
             if f_idx == 3 and sk not in self.checked_items:
                 continue
             filtered.append(sk)
+
+        self.current_filtered = filtered
 
         cols = 3
         on_txt = tr(self.lang, "skills_badge_on")
@@ -179,17 +201,18 @@ class BlenderSkillsDialog(QDialog):
             row_lay.setContentsMargins(8, 4, 8, 4)
             row_lay.setSpacing(5)
 
+            grp_lbl = blender_group_label(blender_skill_group(sk), self.lang)
             desc_txt = describe_blender_skill(sk, self.lang)
             cb = QCheckBox(sk)
             cb.setChecked(sk in self.checked_items)
-            cb.setToolTip(f"{sk}\n{desc_txt}")
+            cb.setToolTip(f"{sk} [{grp_lbl}]\n{desc_txt}")
             cb.setProperty("skill_name", sk)
             cb.installEventFilter(self)
             cb.toggled.connect(lambda checked, name=sk: self._on_check_toggled(name, checked))
             row_lay.addWidget(cb, stretch=1)
 
             q_btn = create_option_help_badge(
-                f"{sk}\n{desc_txt}",
+                f"{sk} [{grp_lbl}]\n{desc_txt}",
                 lambda name=sk: self._show_skill_help(name),
                 size=18,
             )
@@ -229,11 +252,17 @@ class BlenderSkillsDialog(QDialog):
         )
 
     def _enable_all(self) -> None:
-        self.draft_active = set(BLENDER_SKILLS_94)
+        if len(self.current_filtered) < len(BLENDER_SKILLS_94) and self.current_filtered:
+            self.draft_active.update(self.current_filtered)
+        else:
+            self.draft_active = set(BLENDER_SKILLS_94)
         self._rebuild_grid()
 
     def _disable_all(self) -> None:
-        self.draft_active.clear()
+        if len(self.current_filtered) < len(BLENDER_SKILLS_94) and self.current_filtered:
+            self.draft_active.difference_update(self.current_filtered)
+        else:
+            self.draft_active.clear()
         self._rebuild_grid()
 
     def _restore_defaults(self) -> None:

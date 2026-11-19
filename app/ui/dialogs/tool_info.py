@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING
 
 from PySide6.QtWidgets import QDialog, QFrame, QHBoxLayout, QLabel, QPushButton, QVBoxLayout
 
-from ...catalog import ToolSpec, localized_tool_text, tool_kind_label
+from ...catalog import ToolSpec, is_benefit_tag, localized_tool_text, tag_label, tool_kind_label
 from ...i18n import tr
 
 if TYPE_CHECKING:
@@ -36,6 +36,16 @@ class ToolInfoDialog(QDialog):
         hdr_row.addWidget(badge_lbl)
         hdr_row.addStretch()
         lay.addLayout(hdr_row)
+
+        if tool.tags:
+            tags_row = QHBoxLayout()
+            tags_row.setSpacing(6)
+            for tg in tool.tags:
+                pill = QLabel(tag_label(tg, lang))
+                pill.setObjectName("tagBenefitPill" if is_benefit_tag(tg) else "tagDomainPill")
+                tags_row.addWidget(pill)
+            tags_row.addStretch()
+            lay.addLayout(tags_row)
 
         what_card = QFrame()
         what_card.setObjectName("card")

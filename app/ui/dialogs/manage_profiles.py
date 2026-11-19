@@ -64,6 +64,10 @@ class ManageProfilesDialog(QDialog):
         lay.addLayout(row1)
 
         bot = QHBoxLayout()
+        btn_new = QPushButton(tr(self.lang, "btn_new_profile"))
+        btn_new.setObjectName("newProfileBtn")
+        btn_new.clicked.connect(lambda: (self.accept(), self.main_win.open_profile_wizard()))
+        bot.addWidget(btn_new)
         bot.addStretch()
         btn_close = QPushButton(tr(self.lang, "btn_close"))
         btn_close.clicked.connect(self.accept)

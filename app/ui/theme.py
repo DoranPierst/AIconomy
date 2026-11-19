@@ -227,6 +227,84 @@ QPushButton#tokenSummaryBtn:hover {
     border-color: #10b981;
     color: #6ee7b7;
 }
+QPushButton#newProfileBtn {
+    background-color: #132036;
+    border: 1px solid #2563eb;
+    color: #93c5fd;
+    font-weight: 600;
+    padding: 5px 11px;
+}
+QPushButton#newProfileBtn:hover {
+    background-color: #1e3a5f;
+    border-color: #60a5fa;
+    color: #ffffff;
+}
+QPushButton#tagBenefitBtn, QLabel#tagBenefitPill {
+    background-color: #08271f;
+    border: 1px solid #0d5c46;
+    border-radius: 3px;
+    color: #34d399;
+    padding: 0px 6px;
+    font-size: 10px;
+    font-weight: 600;
+}
+QPushButton#tagBenefitBtn:hover {
+    background-color: #0f3d30;
+    border-color: #10b981;
+    color: #6ee7b7;
+}
+QPushButton#tagDomainBtn, QLabel#tagDomainPill {
+    background-color: #141e2d;
+    border: 1px solid #253449;
+    border-radius: 3px;
+    color: #94a3b8;
+    padding: 0px 6px;
+    font-size: 10px;
+    font-weight: 500;
+}
+QPushButton#tagDomainBtn:hover {
+    background-color: #1e2d42;
+    border-color: #3b82f6;
+    color: #e2e8f0;
+}
+QPushButton#wizBenefitChip {
+    background-color: #0d1d18;
+    border: 1px solid #14533d;
+    border-radius: 6px;
+    color: #6ee7b7;
+    padding: 5px 15px;
+    font-size: 11px;
+    font-weight: 600;
+}
+QPushButton#wizBenefitChip:hover {
+    background-color: #133026;
+    border-color: #10b981;
+}
+QPushButton#wizBenefitChip:checked {
+    background-color: #059669;
+    border: 1px solid #34d399;
+    color: #ffffff;
+    font-weight: 700;
+}
+QPushButton#wizDomainChip {
+    background-color: #131c29;
+    border: 1px solid #263549;
+    border-radius: 6px;
+    color: #cbd5e1;
+    padding: 5px 9px;
+    font-size: 11px;
+    font-weight: 500;
+}
+QPushButton#wizDomainChip:hover {
+    background-color: #1b283b;
+    border-color: #3b82f6;
+}
+QPushButton#wizDomainChip:checked {
+    background-color: #2563eb;
+    border: 1px solid #60a5fa;
+    color: #ffffff;
+    font-weight: 700;
+}
 
 QLineEdit, QComboBox, QPlainTextEdit {
     background-color: #0c1117;
@@ -548,6 +626,82 @@ QPushButton#tokenSummaryBtn:hover {
     background-color: #d1fae5;
     border-color: #059669;
     color: #065f46;
+}
+QPushButton#newProfileBtn {
+    background-color: #eff6ff;
+    border: 1px solid #3b82f6;
+    color: #1d4ed8;
+    font-weight: 600;
+    padding: 5px 11px;
+}
+QPushButton#newProfileBtn:hover {
+    background-color: #dbeafe;
+    border-color: #2563eb;
+    color: #1e3a8a;
+}
+QPushButton#tagBenefitBtn, QLabel#tagBenefitPill {
+    background-color: #ecfdf5;
+    border: 1px solid #6ee7b7;
+    border-radius: 3px;
+    color: #047857;
+    padding: 0px 6px;
+    font-size: 10px;
+    font-weight: 600;
+}
+QPushButton#tagBenefitBtn:hover {
+    background-color: #d1fae5;
+    border-color: #059669;
+}
+QPushButton#tagDomainBtn, QLabel#tagDomainPill {
+    background-color: #f1f5f9;
+    border: 1px solid #cbd5e1;
+    border-radius: 3px;
+    color: #475569;
+    padding: 0px 6px;
+    font-size: 10px;
+    font-weight: 500;
+}
+QPushButton#tagDomainBtn:hover {
+    background-color: #e2e8f0;
+    border-color: #3b82f6;
+    color: #0f172a;
+}
+QPushButton#wizBenefitChip {
+    background-color: #ecfdf5;
+    border: 1px solid #6ee7b7;
+    border-radius: 6px;
+    color: #047857;
+    padding: 5px 15px;
+    font-size: 11px;
+    font-weight: 600;
+}
+QPushButton#wizBenefitChip:hover {
+    background-color: #d1fae5;
+}
+QPushButton#wizBenefitChip:checked {
+    background-color: #059669;
+    border: 1px solid #047857;
+    color: #ffffff;
+    font-weight: 700;
+}
+QPushButton#wizDomainChip {
+    background-color: #ffffff;
+    border: 1px solid #cbd5e1;
+    border-radius: 6px;
+    color: #334155;
+    padding: 5px 9px;
+    font-size: 11px;
+    font-weight: 500;
+}
+QPushButton#wizDomainChip:hover {
+    background-color: #f1f5f9;
+    border-color: #3b82f6;
+}
+QPushButton#wizDomainChip:checked {
+    background-color: #2563eb;
+    border: 1px solid #1d4ed8;
+    color: #ffffff;
+    font-weight: 700;
 }
 
 QLineEdit, QComboBox, QPlainTextEdit {

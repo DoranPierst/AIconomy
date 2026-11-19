@@ -133,6 +133,7 @@ class AddRepoDialog(QDialog):
             )
             return
         has_real_gear = bool(info["needs_api_key"])
+        auto_tags = ["automation"] if info["needs_api_key"] else ["free_local", "automation"]
         self.added_tool = ToolSpec(
             id=info["id"],
             name=info["name"],
@@ -152,5 +153,6 @@ class AddRepoDialog(QDialog):
             mcp_server_key=info["id"] if info["mcp_command"] else "",
             mcp_command=info["mcp_command"],
             mcp_args=info["mcp_args"],
+            tags=auto_tags,
         )
         self.accept()

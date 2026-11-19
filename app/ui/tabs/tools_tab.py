@@ -25,14 +25,17 @@ from PySide6.QtWidgets import (
 
 from ...catalog import (
     AI_CLIENTS,
+    ALL_TAG_IDS,
     BLENDER_SKILLS_94,
     PROFILES,
     TOOL_KINDS,
     ToolSpec,
+    is_benefit_tag,
     localized_tool_modes,
     localized_tool_text,
     normalize_tool_kind,
     profile_title,
+    tag_label,
     tool_kind_label,
 )
 from ...i18n import tr
@@ -62,12 +65,17 @@ class ToolsTabMixin:
         flt.addWidget(self.search_inp, stretch=1)
 
         self.kind_cmb = QComboBox()
-        self.kind_cmb.setMinimumWidth(120)
+        self.kind_cmb.setMinimumWidth(115)
         self.kind_cmb.currentIndexChanged.connect(self._refresh_table)
         flt.addWidget(self.kind_cmb)
 
+        self.tag_cmb = QComboBox()
+        self.tag_cmb.setMinimumWidth(155)
+        self.tag_cmb.currentIndexChanged.connect(self._refresh_table)
+        flt.addWidget(self.tag_cmb)
+
         self.proj_filter_cmb = QComboBox()
-        self.proj_filter_cmb.setMinimumWidth(145)
+        self.proj_filter_cmb.setMinimumWidth(140)
         self.proj_filter_cmb.currentIndexChanged.connect(self._refresh_table)
         flt.addWidget(self.proj_filter_cmb)
         lay.addLayout(flt)
@@ -137,6 +145,7 @@ class ToolsTabMixin:
 
         self._displayed_tools: list[ToolSpec] = []
         self._rebuild_kind_filter_combo()
+        self._rebuild_tag_filter_combo()
         self._refresh_first_run_banner()
         self.tabs.addTab(tab, tr(self.lang, "tab_tools", n=len(self.tools)))
 
@@ -150,6 +159,26 @@ class ToolsTabMixin:
         idx = self.kind_cmb.findData(cur_data)
         self.kind_cmb.setCurrentIndex(max(0, idx))
         self.kind_cmb.blockSignals(False)
+
+    def _rebuild_tag_filter_combo(self) -> None:
+        cur_data = self.tag_cmb.currentData() if self.tag_cmb.count() else "ALL"
+        present_tags = {tg for t in self.tools if getattr(t, "in_workspace", True) for tg in t.tags}
+        self.tag_cmb.blockSignals(True)
+        self.tag_cmb.clear()
+        self.tag_cmb.addItem(tr(self.lang, "tag_all"), "ALL")
+        for tid in ALL_TAG_IDS:
+            if tid in present_tags:
+                self.tag_cmb.addItem(tag_label(tid, self.lang), tid)
+        idx = self.tag_cmb.findData(cur_data)
+        self.tag_cmb.setCurrentIndex(max(0, idx))
+        self.tag_cmb.blockSignals(False)
+
+    def _filter_by_tag_pill(self, tag_code: str) -> None:
+        cur = str(self.tag_cmb.currentData() or "ALL")
+        target = "ALL" if cur == tag_code else tag_code
+        idx = self.tag_cmb.findData(target)
+        if idx >= 0:
+            self.tag_cmb.setCurrentIndex(idx)
 
     def _rebuild_project_filter_combo(self) -> None:
         cur_data = self.proj_filter_cmb.currentData() if self.proj_filter_cmb.count() else "ALL"
@@ -277,6 +306,7 @@ class ToolsTabMixin:
     def _refresh_table(self) -> None:
         q = self.search_inp.text().strip().lower()
         kf = str(self.kind_cmb.currentData() or "ALL")
+        tf = str(self.tag_cmb.currentData() or "ALL")
         pf = self.proj_filter_cmb.currentData() or "ALL"
         is_light = self.meta.get("theme", "dark") == "light"
 
@@ -287,17 +317,23 @@ class ToolsTabMixin:
 
         rows: list[ToolSpec] = []
         for t in self.tools:
+            if not getattr(t, "in_workspace", True):
+                continue
             t_kind = normalize_tool_kind(t.kind)
             t_summary = localized_tool_text(t, "summary", self.lang)
+            tag_text_joined = " ".join(tag_label(tg, self.lang).lower() for tg in t.tags)
             if q and (
                 q not in t.name.lower()
                 and q not in tool_kind_label(t_kind, self.lang).lower()
                 and q not in t_summary.lower()
+                and q not in tag_text_joined
                 and q not in t.project_scope.lower()
                 and q not in t.live_location_detail.lower()
             ):
                 continue
             if kf != "ALL" and t_kind != kf:
+                continue
+            if tf != "ALL" and tf not in t.tags:
                 continue
             if pf == "GLOBAL" and (not t.scope_selectable or t.project_scope != "GLOBAL"):
                 continue
@@ -333,18 +369,22 @@ class ToolsTabMixin:
         )
 
         for r_idx, t in enumerate(rows):
-            self.table.setRowHeight(r_idx, 42)
+            self.table.setRowHeight(r_idx, 52 if t.tags else 42)
             t_summary = localized_tool_text(t, "summary", self.lang)
             tooltip_full = f"{t.name}\n{t_summary}".strip()
             if t.live_location_detail:
                 tooltip_full = f"{tooltip_full}\n\n{t.live_location_detail}"
 
-            # Col 0: Name + type pill + version + compact active skill/mode pill
+            # Col 0: Line 1 (Name + type pill + version + skill/mode pill) + Line 2 (concise tags)
             nm_w = QWidget()
             nm_w.setObjectName("cellBox")
-            nm_w.setMinimumWidth(310)
-            nm_l = QHBoxLayout(nm_w)
-            nm_l.setContentsMargins(12, 6, 8, 6)
+            nm_w.setMinimumWidth(320)
+            nm_outer = QVBoxLayout(nm_w)
+            nm_outer.setContentsMargins(12, 4, 8, 4)
+            nm_outer.setSpacing(2)
+
+            nm_l = QHBoxLayout()
+            nm_l.setContentsMargins(0, 0, 0, 0)
             nm_l.setSpacing(7)
 
             nm_lbl = QLabel(f"<b>{t.name}</b>")
@@ -352,7 +392,7 @@ class ToolsTabMixin:
             nm_l.addWidget(nm_lbl, alignment=Qt.AlignmentFlag.AlignVCenter)
 
             kind_pill = QLabel(tool_kind_label(t.kind, self.lang))
-            kind_pill.setFixedHeight(20)
+            kind_pill.setFixedHeight(19)
             kind_pill.setAlignment(Qt.AlignmentFlag.AlignCenter)
             kind_pill.setStyleSheet(pill_style)
             nm_l.addWidget(kind_pill, alignment=Qt.AlignmentFlag.AlignVCenter)
@@ -362,7 +402,7 @@ class ToolsTabMixin:
             if t.has_update and lat_v != cur_v:
                 upd_btn = QPushButton(f"v{cur_v} -> v{lat_v}")
                 upd_btn.setObjectName("updatePillBtn")
-                upd_btn.setFixedHeight(20)
+                upd_btn.setFixedHeight(19)
                 upd_btn.setCursor(Qt.CursorShape.PointingHandCursor)
                 upd_btn.setToolTip(tr(self.lang, "row_update_tip", cur=cur_v, lat=lat_v))
                 upd_btn.clicked.connect(
@@ -377,7 +417,7 @@ class ToolsTabMixin:
 
             if t.id == "blender_skills":
                 sk_btn = QPushButton(tr(self.lang, "skills_btn", on=len(self.active_skills), tot=len(BLENDER_SKILLS_94)))
-                sk_btn.setFixedHeight(20)
+                sk_btn.setFixedHeight(19)
                 sk_btn.setStyleSheet(mode_btn_style)
                 sk_btn.setCursor(Qt.CursorShape.PointingHandCursor)
                 sk_btn.setToolTip(tr(self.lang, "row_gear_tip", name=t.name))
@@ -387,7 +427,7 @@ class ToolsTabMixin:
                 modes_loc = localized_tool_modes(t, self.lang)
                 cur_m = modes_loc[max(0, min(t.mode_index, len(modes_loc) - 1))]
                 m_btn = QPushButton(cur_m)
-                m_btn.setFixedHeight(20)
+                m_btn.setFixedHeight(19)
                 m_btn.setStyleSheet(mode_btn_style)
                 m_btn.setCursor(Qt.CursorShape.PointingHandCursor)
                 m_btn.setToolTip(tr(self.lang, "row_gear_tip", name=t.name))
@@ -395,6 +435,24 @@ class ToolsTabMixin:
                 nm_l.addWidget(m_btn, alignment=Qt.AlignmentFlag.AlignVCenter)
 
             nm_l.addStretch()
+            nm_outer.addLayout(nm_l)
+
+            if t.tags:
+                tg_l = QHBoxLayout()
+                tg_l.setContentsMargins(0, 0, 0, 0)
+                tg_l.setSpacing(5)
+                for tg in t.tags[:3]:
+                    tg_txt = tag_label(tg, self.lang)
+                    tg_btn = QPushButton(tg_txt.replace("&", "&&"))
+                    tg_btn.setObjectName("tagBenefitBtn" if is_benefit_tag(tg) else "tagDomainBtn")
+                    tg_btn.setFixedHeight(16)
+                    tg_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+                    tg_btn.setToolTip(tr(self.lang, "tag_filter_tip", tag=tg_txt))
+                    tg_btn.clicked.connect(lambda _=False, code=tg: self._filter_by_tag_pill(code))
+                    tg_l.addWidget(tg_btn)
+                tg_l.addStretch()
+                nm_outer.addLayout(tg_l)
+
             self.table.setCellWidget(r_idx, 0, nm_w)
 
             # Col 1: Scope (clean combobox or muted fixed label)

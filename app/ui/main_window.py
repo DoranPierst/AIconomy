@@ -86,6 +86,7 @@ from .dialogs import (
     BlenderSkillsDialog,
     DiagnosticsDialog,
     ManageProfilesDialog,
+    ProfileWizardDialog,
     SettingsDialog,
     TokenBreakdownDialog,
     ToolGearDialog,
@@ -244,11 +245,18 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, QMainWindow):
         top_bar.addWidget(self.lbl_profile)
 
         self.profile_cmb = QComboBox()
-        self.profile_cmb.setMinimumWidth(240)
+        self.profile_cmb.setMinimumWidth(230)
         self.profile_cmb.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
         self.profile_cmb.setCursor(Qt.CursorShape.PointingHandCursor)
         self.profile_cmb.activated.connect(self._on_profile_combo_activated)
         top_bar.addWidget(self.profile_cmb)
+
+        self.btn_new_profile = QPushButton(tr(self.lang, "btn_new_profile"))
+        self.btn_new_profile.setObjectName("newProfileBtn")
+        self.btn_new_profile.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_new_profile.setToolTip(tr(self.lang, "tip_new_profile"))
+        self.btn_new_profile.clicked.connect(self.open_profile_wizard)
+        top_bar.addWidget(self.btn_new_profile)
 
         self.btn_runtime = QPushButton(tr(self.lang, "btn_start_tools"))
         self.btn_runtime.setObjectName("runtimeStartBtn")
@@ -642,6 +650,7 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, QMainWindow):
                 self.profile_cmb.addItem(f"  {p_name} ({en_cnt})", f"custom:{p_name}")
 
         self.profile_cmb.insertSeparator(self.profile_cmb.count())
+        self.profile_cmb.addItem(tr(self.lang, "profile_create_wizard"), "__WIZARD__")
         self.profile_cmb.addItem(tr(self.lang, "profile_save_as"), "__SAVE_AS__")
         self.profile_cmb.addItem(tr(self.lang, "profile_manage"), "__MANAGE__")
 
@@ -655,6 +664,10 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, QMainWindow):
         data = str(self.profile_cmb.itemData(idx) or "")
         if not data or data == "__HEADER__":
             self._rebuild_profile_combo()
+            return
+        if data == "__WIZARD__":
+            self._rebuild_profile_combo()
+            self.open_profile_wizard()
             return
         if data == "__SAVE_AS__":
             self._save_custom_preset()
@@ -978,6 +991,7 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, QMainWindow):
         self._save_state()
         self._retranslate_ui()
         self._rebuild_kind_filter_combo()
+        self._rebuild_tag_filter_combo()
         self._rebuild_project_filter_combo()
         self._rebuild_profile_combo()
         self._rebuild_tray_menu()
@@ -1010,6 +1024,8 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, QMainWindow):
         app_ver = get_current_app_version()
         self.setWindowTitle(tr(self.lang, "app_title", ver=app_ver))
         self.lbl_profile.setText(tr(self.lang, "profile_lbl"))
+        self.btn_new_profile.setText(tr(self.lang, "btn_new_profile"))
+        self.btn_new_profile.setToolTip(tr(self.lang, "tip_new_profile"))
         self._apply_runtime_button_visuals()
         self.btn_diagnostics.setText(tr(self.lang, "btn_diagnostics"))
         self.btn_settings.setText(tr(self.lang, "btn_settings"))
@@ -1366,6 +1382,83 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, QMainWindow):
         dlg = TokenBreakdownDialog(self)
         dlg.exec()
 
+    def open_profile_wizard(self) -> None:
+        dlg = ProfileWizardDialog(self)
+        if dlg.exec() == QDialog.DialogCode.Accepted and dlg.result_name:
+            self.apply_wizard_profile(
+                dlg.result_name,
+                dlg.result_tool_ids,
+                dlg.result_skills,
+                dlg.result_tags,
+            )
+
+    def apply_wizard_profile(
+        self,
+        name: str,
+        enabled_tool_ids: set[str],
+        blender_skills: set[str],
+        selected_tags: list[str] | None = None,
+    ) -> None:
+        """Save a task-wizard profile to custom presets and immediately activate it."""
+        missing_keys = self._missing_required_vault_keys()
+        for t in self.tools:
+            if not getattr(t, "in_workspace", True):
+                continue
+            t.enabled = t.id in enabled_tool_ids
+            if t.enabled and not any(t.clients.values()):
+                t.clients["AGY"] = True
+            if not t.enabled:
+                t.health_state = "off"
+                t.last_ping = tr(self.lang, "st_disabled")
+            elif t.vault_key_required and t.vault_key_name and t.vault_key_name in missing_keys:
+                t.health_state = "warn"
+                t.last_ping = tr(self.lang, "st_missing_key")
+            elif t.port:
+                t.health_state = "idle"
+                t.last_ping = tr(self.lang, "st_scanning")
+            elif t.id == "blender_skills":
+                t.health_state = "ok"
+                t.last_ping = tr(self.lang, "st_active_count", on=len(blender_skills))
+            else:
+                t.health_state = "ok"
+                t.last_ping = tr(self.lang, "st_ready")
+
+        self.active_skills = set(blender_skills)
+        presets = self._get_custom_presets()
+        presets[name] = {
+            "name": name,
+            "saved_at": dt.datetime.now().strftime("%Y-%m-%d %H:%M"),
+            "enabled_count": sum(1 for t in self.tools if t.enabled),
+            "tags": list(selected_tags or []),
+            "active_blender_skills": sorted(self.active_skills),
+            "tools": {
+                t.id: {
+                    "enabled": bool(t.enabled),
+                    "clients": dict(t.clients),
+                    "project_scope": t.project_scope,
+                    "mode_index": int(t.mode_index),
+                    "param_value": t.param_value,
+                    "options": {o.key: bool(o.enabled) for o in t.options},
+                }
+                for t in self.tools
+            },
+        }
+        self.meta["active_profile"] = f"custom:{name}"
+        self.meta["first_run_dismissed"] = True
+        self._refresh_first_run_banner()
+        self._save_state()
+        self._rebuild_profile_combo()
+        self._rebuild_tray_menu()
+
+        en_cnt = sum(1 for t in self.tools if t.enabled)
+        msg = tr(self.lang, "msg_profile_applied", name=name, n=en_cnt)
+        self.logs.add("INFO", tr(self.lang, "log_src_profile"), msg)
+        self._set_config_status(msg)
+        self._refresh_table()
+        self._refresh_plugins_tab()
+        self._refresh_logs_tab()
+        self._sync_live_environment_async(target_tools=list(self.tools))
+
     # --- PERIODIC WATCHERS & HEALTH SCAN ---
     def _on_second_tick(self) -> None:
         self.seconds_left -= 1
@@ -1461,11 +1554,11 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, QMainWindow):
         self._dcc_busy = False
         if cur.get("unity") and not self.last_detected_apps.get("unity"):
             self.set_status(
-                tr(self.lang, "msg_dcc_detected", app="Unity Editor", prof=profile_title("unity_game", self.lang))
+                tr(self.lang, "msg_dcc_detected", app="Unity Editor", prof=profile_title("unity_shader", self.lang))
             )
         elif cur.get("blender") and not self.last_detected_apps.get("blender"):
             self.set_status(
-                tr(self.lang, "msg_dcc_detected", app="Blender", prof=profile_title("asset_3d", self.lang))
+                tr(self.lang, "msg_dcc_detected", app="Blender", prof=profile_title("modeling_3d", self.lang))
             )
         self.last_detected_apps = cur
         self._update_vram_visibility()
@@ -1760,6 +1853,7 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, QMainWindow):
 
         self._retranslate_ui()
         self._rebuild_kind_filter_combo()
+        self._rebuild_tag_filter_combo()
         self._rebuild_project_filter_combo()
         self._rebuild_profile_combo()
         self._rebuild_tray_menu()

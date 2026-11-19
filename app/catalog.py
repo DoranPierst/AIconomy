@@ -51,6 +51,148 @@ AI_CLIENTS: list[tuple[str, str]] = [
 
 TOOL_KINDS: tuple[str, ...] = ("http", "stdio", "skill_pack", "rule", "cli")
 
+BENEFIT_TAG_IDS: tuple[str, ...] = ("token_saver", "free_local")
+
+DOMAIN_TAG_IDS: tuple[str, ...] = (
+    "coding_lsp",
+    "desktop_ui",
+    "git_repo",
+    "unity",
+    "modeling_3d",
+    "style_3d",
+    "shader_gpu",
+    "audio_sfx",
+    "web_browser",
+    "database",
+    "cloud_devops",
+    "docs_search",
+    "design_ui",
+    "security",
+    "testing_qa",
+    "automation",
+)
+
+ALL_TAG_IDS: tuple[str, ...] = BENEFIT_TAG_IDS + DOMAIN_TAG_IDS
+
+BLENDER_SKILL_GROUP_IDS: tuple[str, ...] = (
+    "modeling",
+    "uv_material",
+    "lighting_render",
+    "rig_anim_sim",
+    "horror_mood",
+    "engine_export",
+)
+
+_MODELING_SKILLS = frozenset(
+    {
+        "blender-director",
+        "blender-modeler",
+        "hard-surface",
+        "prop-artist",
+        "character-artist",
+        "character-archetypes",
+        "creature-artist",
+        "environment-artist",
+        "vegetation-artist",
+        "vehicle-artist",
+        "sculpting",
+        "retopology",
+        "geometry-nodes",
+        "procedural-modeling",
+        "archviz",
+        "scene-assembly",
+        "set-dressing",
+    }
+)
+_LIGHTING_RENDER_SKILLS = frozenset({"lighting", "camera-cinematography", "rendering", "compositing"})
+_RIG_ANIM_SIM_SKILLS = frozenset({"rigging", "animation", "cloth-sim", "hair-groom", "physics-sim", "vfx-fx"})
+_HORROR_MOOD_SKILLS = frozenset(
+    {
+        "analog-found-footage-horror",
+        "body-horror-style",
+        "cosmic-eldritch-horror",
+        "folk-horror-style",
+        "horror-style",
+        "indie-horror-aesthetics",
+        "liminal-space-style",
+        "mascot-puppet-horror",
+        "psx-horror-style",
+        "brutalist-mood",
+        "cozy-wholesome-mood",
+        "dark-gritty-mood",
+        "dream-surreal-mood",
+        "dream-weirdcore-style",
+        "apocalypse-worlds",
+        "biome-worlds",
+        "fantasy-worlds",
+        "historical-worlds",
+        "sci-fi-punk-worlds",
+    }
+)
+_ENGINE_EXPORT_SKILLS = frozenset(
+    {
+        "asset-optimization",
+        "collision-proxy",
+        "export-pipeline",
+        "godot-export",
+        "lod-pipeline",
+        "qa-review",
+        "unity-export",
+        "unreal-export",
+    }
+)
+
+
+def is_benefit_tag(tag_id: str) -> bool:
+    return tag_id in BENEFIT_TAG_IDS
+
+
+def tag_label(tag_id: str, lang: str = "en") -> str:
+    return tr(lang, f"tag_{tag_id}")
+
+
+def blender_skill_group(skill_name: str) -> str:
+    if skill_name in _MODELING_SKILLS:
+        return "modeling"
+    if skill_name in _LIGHTING_RENDER_SKILLS:
+        return "lighting_render"
+    if skill_name in _RIG_ANIM_SIM_SKILLS:
+        return "rig_anim_sim"
+    if skill_name in _HORROR_MOOD_SKILLS:
+        return "horror_mood"
+    if skill_name in _ENGINE_EXPORT_SKILLS or skill_name.startswith("genre-"):
+        return "engine_export"
+    return "uv_material"
+
+
+def blender_group_label(group_id: str, lang: str = "en") -> str:
+    return tr(lang, f"skgrp_{group_id}")
+
+
+def recommended_blender_skills_for_tags(selected_tags: set[str]) -> set[str]:
+    """Build a focused subset of Blender skills matching the user's selected task tags."""
+    chosen: set[str] = set()
+    if "modeling_3d" in selected_tags:
+        chosen.update(DEFAULT_ACTIVE_BLENDER_SKILLS)
+    if "style_3d" in selected_tags:
+        chosen.update(
+            {
+                "blender-director",
+                "uv-workflow",
+                "materials",
+                "texture-workflow",
+                "lookdev",
+                "lighting",
+                "stylized-style",
+                "lowpoly-style",
+            }
+        )
+    if "unity" in selected_tags and ("modeling_3d" in selected_tags or "style_3d" in selected_tags):
+        chosen.update({"unity-export", "export-pipeline", "asset-optimization", "collision-proxy", "lod-pipeline"})
+    if "shader_gpu" in selected_tags and ("modeling_3d" in selected_tags or "style_3d" in selected_tags):
+        chosen.update({"materials", "lighting", "rendering", "lookdev"})
+    return chosen if chosen else set(DEFAULT_ACTIVE_BLENDER_SKILLS)
+
 _LEGACY_KIND_MAP: dict[str, str] = {
     "http": "http",
     "http servis": "http",
@@ -158,6 +300,7 @@ class ToolSpec:
     mcp_command: str = ""
     mcp_args: list[str] = field(default_factory=list)
     ai_question_hint: str = ""
+    tags: list[str] = field(default_factory=list)
     options: list[CheckOption] = field(default_factory=list)
     last_ping: str = "Disabled"
     last_latency_ms: int = -1
@@ -189,6 +332,7 @@ def build_default_catalog() -> list[ToolSpec]:
             has_gear=True,
             gear_kind="skills94",
             install_cmd="git clone https://github.com/arjun988/blender-skills.git",
+            tags=["free_local", "modeling_3d", "style_3d"],
         ),
         ToolSpec(
             id="bla",
@@ -209,6 +353,7 @@ def build_default_catalog() -> list[ToolSpec]:
             mcp_server_key="bla-agents",
             mcp_command="npx",
             mcp_args=["-y", "bla-agents", "mcp"],
+            tags=["free_local", "security", "web_browser"],
         ),
         ToolSpec(
             id="caveman",
@@ -228,6 +373,7 @@ def build_default_catalog() -> list[ToolSpec]:
             mode_index=1,
             has_gear=True,
             install_cmd="git clone https://github.com/JuliusBrussee/caveman.git",
+            tags=["token_saver", "free_local", "coding_lsp"],
         ),
         ToolSpec(
             id="serena",
@@ -252,6 +398,7 @@ def build_default_catalog() -> list[ToolSpec]:
             param_help="Local HTTP port for Serena MCP server (default: 9121).",
             install_cmd="uv tool install serena-agent",
             mcp_server_key="serena",
+            tags=["token_saver", "coding_lsp", "desktop_ui"],
             options=[
                 CheckOption(
                     "no_dashboard",
@@ -282,6 +429,7 @@ def build_default_catalog() -> list[ToolSpec]:
             param_help="Local HTTP port matching the MCP for Unity window inside Unity Editor (default: 8080).",
             install_cmd="uv tool install --python 3.12 mcpforunityserver",
             mcp_server_key="unity-mcp",
+            tags=["free_local", "unity", "automation"],
         ),
         ToolSpec(
             id="unity_pipeline",
@@ -301,6 +449,7 @@ def build_default_catalog() -> list[ToolSpec]:
             param_label="Unity Project Path",
             param_value=u_path,
             param_help="Root directory of your Unity project (containing Assets and Packages).",
+            tags=["free_local", "unity", "testing_qa"],
         ),
         ToolSpec(
             id="renderdoc_mcp",
@@ -324,6 +473,7 @@ def build_default_catalog() -> list[ToolSpec]:
             mcp_server_key="renderdoc-mcp",
             mcp_command="uvx",
             mcp_args=["renderdoc-mcp"],
+            tags=["free_local", "shader_gpu", "unity"],
         ),
         ToolSpec(
             id="blender_mcp",
@@ -348,6 +498,7 @@ def build_default_catalog() -> list[ToolSpec]:
             mcp_server_key="blender",
             mcp_command="uvx",
             mcp_args=["blender-mcp"],
+            tags=["free_local", "modeling_3d"],
         ),
         ToolSpec(
             id="trellis",
@@ -369,6 +520,7 @@ def build_default_catalog() -> list[ToolSpec]:
             param_label="TRELLIS Install Folder",
             param_value=t_dir,
             param_help="Local installation directory containing TRELLIS runtime and model weights.",
+            tags=["free_local", "modeling_3d", "shader_gpu"],
         ),
         ToolSpec(
             id="gltf_transform",
@@ -389,6 +541,7 @@ def build_default_catalog() -> list[ToolSpec]:
             mcp_server_key="3d-asset-processing",
             mcp_command="npx",
             mcp_args=["-y", "3d-asset-processing-mcp"],
+            tags=["free_local", "modeling_3d", "unity"],
         ),
         ToolSpec(
             id="elevenlabs_mcp",
@@ -414,6 +567,7 @@ def build_default_catalog() -> list[ToolSpec]:
             mcp_server_key="elevenlabs",
             mcp_command="uvx",
             mcp_args=["elevenlabs-mcp"],
+            tags=["audio_sfx"],
         ),
         ToolSpec(
             id="meshy",
@@ -436,6 +590,7 @@ def build_default_catalog() -> list[ToolSpec]:
             mcp_server_key="meshy",
             mcp_command="uvx",
             mcp_args=["meshy-mcp"],
+            tags=["modeling_3d", "style_3d"],
         ),
         ToolSpec(
             id="context7",
@@ -458,6 +613,7 @@ def build_default_catalog() -> list[ToolSpec]:
             mcp_server_key="context7",
             mcp_command="npx",
             mcp_args=["-y", "@upstash/context7-mcp"],
+            tags=["token_saver", "docs_search", "desktop_ui"],
         ),
         ToolSpec(
             id="chrome_devtools",
@@ -478,6 +634,7 @@ def build_default_catalog() -> list[ToolSpec]:
             mcp_server_key="chrome-devtools",
             mcp_command="npx",
             mcp_args=["-y", "chrome-devtools-mcp@latest"],
+            tags=["free_local", "web_browser", "testing_qa"],
             options=[
                 CheckOption(
                     "headless_mode",
@@ -734,24 +891,29 @@ def describe_blender_skill(skill_name: str, lang: str = "en") -> str:
 
 
 PROFILES: dict[str, dict[str, Any]] = {
-    "unity_game": {
-        "title_key": "prof_unity_game_title",
-        "desc_key": "prof_unity_game_desc",
+    "desktop_coding": {
+        "title_key": "prof_desktop_coding_title",
+        "desc_key": "prof_desktop_coding_desc",
+        "enable": {"serena", "context7", "caveman"},
+    },
+    "unity_shader": {
+        "title_key": "prof_unity_shader_title",
+        "desc_key": "prof_unity_shader_desc",
         "enable": {"unity_mcp", "unity_pipeline", "renderdoc_mcp", "serena", "context7", "caveman"},
     },
-    "asset_3d": {
-        "title_key": "prof_asset_3d_title",
-        "desc_key": "prof_asset_3d_desc",
+    "modeling_3d": {
+        "title_key": "prof_modeling_3d_title",
+        "desc_key": "prof_modeling_3d_desc",
         "enable": {"blender_mcp", "blender_skills", "trellis", "gltf_transform", "elevenlabs_mcp", "caveman"},
     },
-    "web_release": {
-        "title_key": "prof_web_release_title",
-        "desc_key": "prof_web_release_desc",
-        "enable": {"serena", "chrome_devtools", "bla", "context7", "caveman"},
+    "web_security": {
+        "title_key": "prof_web_security_title",
+        "desc_key": "prof_web_security_desc",
+        "enable": {"chrome_devtools", "bla", "serena", "context7", "caveman"},
     },
-    "zero_token": {
-        "title_key": "prof_zero_token_title",
-        "desc_key": "prof_zero_token_desc",
+    "token_saver_only": {
+        "title_key": "prof_token_saver_only_title",
+        "desc_key": "prof_token_saver_only_desc",
         "enable": {"caveman"},
     },
 }

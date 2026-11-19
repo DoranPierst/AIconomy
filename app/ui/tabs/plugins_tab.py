@@ -108,6 +108,7 @@ class PluginsTabMixin:
             new_tool = dlg.added_tool
             self.tools.append(new_tool)
             self._save_state()
+            self._rebuild_tag_filter_combo()
             self._update_tab_titles()
             self._refresh_table()
             self._refresh_plugins_tab()

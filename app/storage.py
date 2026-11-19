@@ -309,6 +309,16 @@ class StateStore:
             if len(ap) == 1:
                 meta["active_profile"] = f"builtin:{ap[0]}"
 
+        _legacy_prof_map = {
+            "builtin:unity_game": "builtin:unity_shader",
+            "builtin:asset_3d": "builtin:modeling_3d",
+            "builtin:web_release": "builtin:web_security",
+            "builtin:zero_token": "builtin:token_saver_only",
+        }
+        cur_ap = str(meta.get("active_profile") or "")
+        if cur_ap in _legacy_prof_map:
+            meta["active_profile"] = _legacy_prof_map[cur_ap]
+
         by_id = {t.id: t for t in tools}
         for tid, tdata in raw.get("tools", {}).items():
             if tid in by_id:
@@ -364,6 +374,7 @@ class StateStore:
                             "ai_question_hint",
                             "How should I optimize this tool's settings for my project?",
                         ),
+                        tags=[str(x) for x in tdata.get("tags", ["automation"]) if x],
                         options=[
                             CheckOption(o["key"], o["label"], o["enabled"], o.get("help_text", ""))
                             for o in tdata.get("custom_options", [])
@@ -409,6 +420,7 @@ class StateStore:
                         "mcp_server_key": t.mcp_server_key,
                         "mcp_command": t.mcp_command,
                         "mcp_args": t.mcp_args,
+                        "tags": list(t.tags),
                         "custom_options": [
                             {"key": o.key, "label": o.label, "enabled": o.enabled, "help_text": o.help_text}
                             for o in t.options
