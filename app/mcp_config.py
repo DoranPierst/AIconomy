@@ -11,6 +11,7 @@ import stat
 import sys
 import tempfile
 import threading
+import tomllib
 from typing import Any
 
 from .catalog import ToolSpec, localized_tool_modes
@@ -601,6 +602,20 @@ def sync_mcp_json_clients(
         return _sync_mcp_json_clients_impl(tools, vault, projects_map, lang=lang, runtime_active=runtime_active)
 
 
+def _repair_glued_toml_headers(toml_text: str) -> str:
+    """Repair any corrupted '[section]key = val' lines missing a newline after the closing bracket."""
+    return re.sub(
+        r"^(\[[^\r\n\]]+\])([ \t]*[A-Za-z0-9_.-]+[ \t]*=)",
+        r"\1\n\2",
+        toml_text,
+        flags=re.MULTILINE,
+    )
+
+
+def _format_toml_key(key: str) -> str:
+    return key if re.fullmatch(r"[A-Za-z0-9_-]+", key) else json.dumps(key)
+
+
 def _strip_marked_codex_blocks(toml_text: str) -> str:
     cleaned = toml_text
     for begin_tag, end_tag in (
@@ -699,7 +714,7 @@ def _sync_mcp_json_clients_impl(
     if codex_cfg.is_file():
         try:
             orig_toml = codex_cfg.read_text(encoding="utf-8-sig")
-            cleaned = _strip_marked_codex_blocks(orig_toml)
+            cleaned = _repair_glued_toml_headers(_strip_marked_codex_blocks(orig_toml))
 
             alias_map: dict[str, ToolSpec] = {}
             for t in tools:
@@ -709,26 +724,32 @@ def _sync_mcp_json_clients_impl(
                         alias_map["unityMCP"] = t
 
             def _sync_existing_codex_section(sec_name: str, should_enable: bool, text_in: str) -> tuple[str, bool]:
-                hdr_pat = re.compile(rf"(^\[mcp_servers\.{re.escape(sec_name)}\]\s*$)", flags=re.MULTILINE)
+                hdr_pat = re.compile(
+                    rf"^\[mcp_servers\.{re.escape(sec_name)}\][ \t]*(?:#[^\r\n]*)?(?:\r?\n|\Z)",
+                    flags=re.MULTILINE,
+                )
                 m = hdr_pat.search(text_in)
                 if not m:
                     return text_in, False
+                header_chunk = m.group(0)
                 start = m.end()
                 next_sec = re.search(r"^\[", text_in[start:], flags=re.MULTILINE)
                 end = start + next_sec.start() if next_sec else len(text_in)
                 body = text_in[start:end]
                 val_str = "true" if should_enable else "false"
-                if re.search(r"^\s*enabled\s*=", body, flags=re.MULTILINE):
+                if re.search(r"^[ \t]*enabled[ \t]*=[ \t]*(?:true|false)", body, flags=re.MULTILINE):
                     body = re.sub(
-                        r"^\s*enabled\s*=\s*(true|false)",
+                        r"^[ \t]*enabled[ \t]*=[ \t]*(?:true|false)",
                         f"enabled = {val_str}",
                         body,
                         count=1,
                         flags=re.MULTILINE,
                     )
                 else:
-                    body = f"\nenabled = {val_str}" + body
-                return text_in[:start] + body + text_in[end:], True
+                    body = f"enabled = {val_str}\n" + body.lstrip("\r\n")
+                if not header_chunk.endswith("\n"):
+                    header_chunk = header_chunk + "\n"
+                return text_in[: m.start()] + header_chunk + body + text_in[end:], True
 
             handled_existing: set[str] = set()
             for sec_key, t_obj in alias_map.items():
@@ -758,23 +779,31 @@ def _sync_mcp_json_clients_impl(
                     if t.id in handled_existing:
                         cdx_added += 1
                         continue
+                    safe_key = _format_toml_key(t.mcp_server_key)
                     if "url" in entry:
-                        cdx_lines.append(f"[mcp_servers.{t.mcp_server_key}]")
+                        cdx_lines.append(f"[mcp_servers.{safe_key}]")
                         cdx_lines.append(f"url = {json.dumps(entry['url'])}")
                         cdx_added += 1
                     else:
                         args_toml = ", ".join(json.dumps(a) for a in entry.get("args", []))
-                        cdx_lines.append(f"[mcp_servers.{t.mcp_server_key}]")
+                        cdx_lines.append(f"[mcp_servers.{safe_key}]")
                         cdx_lines.append(f"command = {json.dumps(entry['command'])}")
                         cdx_lines.append(f"args = [{args_toml}]")
                         env_dict = entry.get("env") or {}
                         if env_dict:
-                            cdx_lines.append(f"[mcp_servers.{t.mcp_server_key}.env]")
+                            cdx_lines.append(f"[mcp_servers.{safe_key}.env]")
                             for ek, ev in env_dict.items():
-                                cdx_lines.append(f"{ek} = {json.dumps(ev)}")
+                                cdx_lines.append(f"{_format_toml_key(ek)} = {json.dumps(ev)}")
                         cdx_added += 1
             cdx_lines.append(CODEX_END_TAG)
-            new_toml = cleaned + "\n\n" + "\n".join(cdx_lines) + "\n"
+            if cdx_added > 0:
+                new_toml = cleaned.rstrip() + "\n\n" + "\n".join(cdx_lines) + "\n"
+            else:
+                new_toml = cleaned.rstrip() + "\n"
+
+            # Mandatory TOML syntax gate: never write invalid config.toml that could break Codex/ChatGPT
+            tomllib.loads(new_toml)
+
             if new_toml != orig_toml:
                 shutil.copyfile(codex_cfg, codex_cfg.with_suffix(".toml.bak"))
                 _atomic_write_text(codex_cfg, new_toml)
