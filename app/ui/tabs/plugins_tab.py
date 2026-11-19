@@ -31,6 +31,7 @@ from ...catalog import (
     tool_kind_label,
 )
 from ...i18n import tr
+from ...oauth import supports_oauth
 from ...plugins import (
     PluginCheckResult,
     check_all_tools_updates_parallel,
@@ -224,7 +225,7 @@ class PluginsTabMixin:
                 continue
             if st_f == "LIBRARY" and in_ws:
                 continue
-            if st_f == "FREE" and bool(t.vault_key_required):
+            if st_f == "FREE" and bool(t.vault_key_required) and not supports_oauth(t.id):
                 continue
             if st_f == "UPDATES" and not (in_ws and t.has_update):
                 continue
@@ -374,20 +375,31 @@ class PluginsTabMixin:
                 ver_html = f"<span style='color:{muted_col}; font-size:11px;'>v{cur_v}</span>"
             title_row.addWidget(QLabel(ver_html))
 
-            if t.vault_key_name:
-                has_secret = self.vault.has_secret(t.vault_key_name)
-                if has_secret:
-                    k_txt = tr(self.lang, "plug_key_ready")
-                    k_col = "#10b981"
-                elif t.vault_key_required:
-                    k_txt = tr(self.lang, "plug_key_req", key=t.vault_key_name)
-                    k_col = "#f59e0b"
-                else:
-                    k_txt = tr(self.lang, "plug_key_opt")
-                    k_col = muted_col
-                k_lbl = QLabel(k_txt)
-                k_lbl.setStyleSheet(f"color: {k_col}; font-size: 10.5px; font-weight: 600;")
-                title_row.addWidget(k_lbl)
+            has_oauth = supports_oauth(t.id)
+            if has_oauth and getattr(t, "auth_mode", "key") == "oauth":
+                oa_lbl = QLabel(tr(self.lang, "plug_oauth_active"))
+                oa_lbl.setStyleSheet("color: #10b981; font-size: 10.5px; font-weight: 700;")
+                title_row.addWidget(oa_lbl)
+            else:
+                if t.vault_key_name:
+                    has_secret = self.vault.has_secret(t.vault_key_name)
+                    if has_secret:
+                        k_txt = tr(self.lang, "plug_key_ready")
+                        k_col = "#10b981"
+                    elif t.vault_key_required:
+                        k_txt = tr(self.lang, "plug_key_req", key=t.vault_key_name)
+                        k_col = "#f59e0b"
+                    else:
+                        k_txt = tr(self.lang, "plug_key_opt")
+                        k_col = muted_col
+                    k_lbl = QLabel(k_txt)
+                    k_lbl.setStyleSheet(f"color: {k_col}; font-size: 10.5px; font-weight: 600;")
+                    title_row.addWidget(k_lbl)
+                if has_oauth:
+                    oa_col = "#0284c7" if is_light else "#38bdf8"
+                    oa_lbl = QLabel(tr(self.lang, "plug_oauth_avail"))
+                    oa_lbl.setStyleSheet(f"color: {oa_col}; font-size: 10.5px; font-weight: 600;")
+                    title_row.addWidget(oa_lbl)
 
             title_row.addStretch()
             info_col.addLayout(title_row)
@@ -758,11 +770,10 @@ class PluginsTabMixin:
             tool_obj.installed = True
             self.add_tool_to_workspace(tool_obj)
             if enable_after:
-                missing_keys = self._missing_required_vault_keys()
                 tool_obj.enabled = True
                 if not any(tool_obj.clients.values()):
                     tool_obj.clients["AGY"] = True
-                if tool_obj.vault_key_required and tool_obj.vault_key_name and tool_obj.vault_key_name in missing_keys:
+                if self._tool_needs_vault_key(tool_obj):
                     tool_obj.health_state = "warn"
                     tool_obj.last_ping = tr(self.lang, "st_missing_key")
                 else:

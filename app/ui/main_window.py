@@ -51,6 +51,7 @@ from ..mcp_config import (
     sync_caveman_on_disk,
     sync_mcp_json_clients,
 )
+from ..oauth import supports_oauth
 from ..processes import (
     detect_running_dcc_apps,
     enforce_tool_runtime_state,
@@ -107,7 +108,7 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, QMainWindow):
         migrate_legacy_data_files(self.data_dir)
 
         self.vault = WindowsDpapiVault(self.data_dir / VAULT_FILENAME)
-        self.logs = LogDatabase(self.data_dir / LOG_DB_FILENAME)
+        self.logs = LogDatabase(self.data_dir / LOG_DB_FILENAME, vault=self.vault)
         self.store = StateStore(self.data_dir / STATE_FILENAME)
 
         self.tools: list[ToolSpec] = build_default_catalog()
@@ -179,7 +180,6 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, QMainWindow):
         self._build_tray()
         self._apply_theme(self.meta.get("theme", "dark"))
         self._retranslate_ui()
-        init_missing_keys = self._missing_required_vault_keys()
         for t in self.tools:
             if not getattr(t, "in_workspace", True):
                 t.enabled = False
@@ -190,7 +190,7 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, QMainWindow):
             if not t.enabled:
                 t.last_ping = tr(self.lang, "st_disabled")
                 t.health_state = "off"
-            elif t.vault_key_required and t.vault_key_name and t.vault_key_name in init_missing_keys:
+            elif self._tool_needs_vault_key(t):
                 t.last_ping = tr(self.lang, "st_missing_key")
                 t.health_state = "warn"
         self._rebuild_project_filter_combo()
@@ -225,14 +225,17 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, QMainWindow):
                 return filtered
         return all_codes
 
+    def _tool_needs_vault_key(self, t: ToolSpec) -> bool:
+        if getattr(t, "auth_mode", "key") == "oauth" and supports_oauth(t.id):
+            return False
+        return bool(t.vault_key_required and t.vault_key_name and not self.vault.has_secret(t.vault_key_name))
+
     def _missing_required_vault_keys(self) -> set[str]:
         return {
             t.vault_key_name
             for t in self.tools
             if getattr(t, "in_workspace", True)
-            and t.vault_key_required
-            and t.vault_key_name
-            and not self.vault.has_secret(t.vault_key_name)
+            and self._tool_needs_vault_key(t)
         }
 
     def _format_scope_display(self, t: ToolSpec) -> str:
@@ -747,7 +750,6 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, QMainWindow):
         for t in self.tools:
             if t.id in target_enable and not getattr(t, "in_workspace", True):
                 t.in_workspace = True
-        missing_keys = self._missing_required_vault_keys()
         for t in self.tools:
             if not getattr(t, "in_workspace", True):
                 t.enabled = False
@@ -756,7 +758,7 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, QMainWindow):
             if not t.enabled:
                 t.health_state = "off"
                 t.last_ping = tr(self.lang, "st_disabled")
-            elif t.vault_key_required and t.vault_key_name and t.vault_key_name in missing_keys:
+            elif self._tool_needs_vault_key(t):
                 t.health_state = "warn"
                 t.last_ping = tr(self.lang, "st_missing_key")
 
@@ -814,6 +816,7 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, QMainWindow):
                 t.id: {
                     "in_workspace": True,
                     "enabled": bool(t.enabled),
+                    "auth_mode": str(getattr(t, "auth_mode", "key")),
                     "clients": dict(t.clients),
                     "project_scope": t.project_scope,
                     "mode_index": int(t.mode_index),
@@ -850,6 +853,8 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, QMainWindow):
                     t.in_workspace = True
                 if "enabled" in saved:
                     t.enabled = bool(saved["enabled"]) and bool(getattr(t, "in_workspace", True))
+                if saved.get("auth_mode") in ("key", "oauth"):
+                    t.auth_mode = str(saved["auth_mode"])
                 if isinstance(saved.get("clients"), dict):
                     for k, v in saved["clients"].items():
                         if k in t.clients:
@@ -870,12 +875,11 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, QMainWindow):
                         if o.key in saved["options"]:
                             o.enabled = bool(saved["options"][o.key])
 
-        missing_keys = self._missing_required_vault_keys()
         for t in self.workspace_tools():
             if not t.enabled:
                 t.health_state = "off"
                 t.last_ping = tr(self.lang, "st_disabled")
-            elif t.vault_key_required and t.vault_key_name and t.vault_key_name in missing_keys:
+            elif self._tool_needs_vault_key(t):
                 t.health_state = "warn"
                 t.last_ping = tr(self.lang, "st_missing_key")
 
@@ -1203,7 +1207,7 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, QMainWindow):
         if not tool.enabled:
             tool.health_state = "off"
             tool.last_ping = tr(self.lang, "st_disabled")
-        elif tool.vault_key_required and tool.vault_key_name and not self.vault.has_secret(tool.vault_key_name):
+        elif self._tool_needs_vault_key(tool):
             tool.health_state = "warn"
             tool.last_ping = tr(self.lang, "st_missing_key")
             if prompt_missing_key and self.isVisible():
@@ -1214,7 +1218,7 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, QMainWindow):
                 )
                 if ans == QMessageBox.StandardButton.Yes:
                     self.open_settings(SettingsDialog.TAB_KEYS, focus_key=tool.vault_key_name)
-                    if self.vault.has_secret(tool.vault_key_name):
+                    if not self._tool_needs_vault_key(tool):
                         tool.health_state = "ok"
                         tool.last_ping = tr(self.lang, "st_ready")
         elif tool.port:
@@ -1343,6 +1347,7 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, QMainWindow):
             tool.clients = dict(default_spec.clients)
             if tool.scope_selectable:
                 tool.project_scope = default_spec.project_scope
+            tool.auth_mode = default_spec.auth_mode
             tool.mode_index = default_spec.mode_index
             tool.param_value = default_spec.param_value
             tool.port = default_spec.port
@@ -1353,6 +1358,7 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, QMainWindow):
             tool.clients = {"AGY": True, "CDX": True, "CLD": False, "CUR": False}
             if tool.scope_selectable:
                 tool.project_scope = "GLOBAL"
+            tool.auth_mode = "key"
             tool.mode_index = 0
             tool.param_value = ""
             for o in tool.options:
@@ -1395,7 +1401,7 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, QMainWindow):
         self._update_tab_titles()
         self._refresh_table()
         self._refresh_plugins_tab()
-        if tool.vault_key_name and not self.vault.has_secret(tool.vault_key_name):
+        if self._tool_needs_vault_key(tool):
             msg = tr(self.lang, "msg_ws_added_key", name=tool.name, key=tool.vault_key_name)
         else:
             msg = tr(self.lang, "msg_ws_added", name=tool.name)
@@ -1462,6 +1468,7 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, QMainWindow):
                 tool.port,
                 tool.param_value,
                 tool.mode_index,
+                getattr(tool, "auth_mode", "key"),
                 tuple(o.enabled for o in tool.options),
             )
             dlg = ToolGearDialog(self, tool, self._format_scope_display(tool))
@@ -1470,13 +1477,22 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, QMainWindow):
                     tool.port,
                     tool.param_value,
                     tool.mode_index,
+                    getattr(tool, "auth_mode", "key"),
                     tuple(o.enabled for o in tool.options),
                 )
                 changed = new_snap != prev_snap
+                if tool.enabled:
+                    if self._tool_needs_vault_key(tool):
+                        tool.health_state = "warn"
+                        tool.last_ping = tr(self.lang, "st_missing_key")
+                    elif tool.health_state == "warn" and not tool.port:
+                        tool.health_state = "ok"
+                        tool.last_ping = tr(self.lang, "st_ready")
                 self._save_state()
                 self.logs.add("INFO", tool.name, tr(self.lang, "log_gear_saved"))
                 self._set_config_status(tr(self.lang, "msg_gear_saved", name=tool.name))
                 self._refresh_table()
+                self._refresh_plugins_tab()
                 self._refresh_logs_tab()
                 self._sync_live_environment_async(
                     target_tools=[tool],
@@ -1525,7 +1541,6 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, QMainWindow):
                         t, self.projects_map, self._latest_live_map, lang=self.lang
                     )
 
-        missing_keys = self._missing_required_vault_keys()
         for t in self.tools:
             if not getattr(t, "in_workspace", True):
                 t.enabled = False
@@ -1536,7 +1551,7 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, QMainWindow):
             if not t.enabled:
                 t.health_state = "off"
                 t.last_ping = tr(self.lang, "st_disabled")
-            elif t.vault_key_required and t.vault_key_name and t.vault_key_name in missing_keys:
+            elif self._tool_needs_vault_key(t):
                 t.health_state = "warn"
                 t.last_ping = tr(self.lang, "st_missing_key")
             elif t.port:
@@ -1561,6 +1576,7 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, QMainWindow):
                 t.id: {
                     "in_workspace": True,
                     "enabled": bool(t.enabled),
+                    "auth_mode": str(getattr(t, "auth_mode", "key")),
                     "clients": dict(t.clients),
                     "project_scope": t.project_scope,
                     "mode_index": int(t.mode_index),

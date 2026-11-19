@@ -825,6 +825,7 @@ def probe_tool_health(
 
     if (
         tool.enabled
+        and getattr(tool, "auth_mode", "key") != "oauth"
         and tool.vault_key_required
         and tool.vault_key_name
         and missing_required_keys is not None

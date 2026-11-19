@@ -7,6 +7,7 @@ from PySide6.QtWidgets import QDialog, QFrame, QHBoxLayout, QLabel, QPushButton,
 
 from ...catalog import ToolSpec, localized_tool_text, tag_label, tool_kind_label
 from ...i18n import tr
+from ...oauth import get_oauth_spec, supports_oauth
 from ..theme import tag_pill_qss
 
 if TYPE_CHECKING:
@@ -103,6 +104,13 @@ class ToolInfoDialog(QDialog):
             key_info = tr(lang, "info_key_opt", key=tool.vault_key_name)
         else:
             key_info = tr(lang, "info_key_none")
+        if supports_oauth(tool.id):
+            ospec = get_oauth_spec(tool.id)
+            prov = ospec.provider_label if ospec else "OAuth"
+            if getattr(tool, "auth_mode", "key") == "oauth":
+                key_info = tr(lang, "info_key_oauth_active", provider=prov)
+            else:
+                key_info = tr(lang, "info_key_oauth_opt", base=key_info, provider=prov)
         t_lay.addWidget(QLabel(f"<b>{tr(lang, 'info_ctx_load')}</b> {tok_info}"))
         t_lay.addWidget(QLabel(f"<b>{tr(lang, 'info_key_lbl')}</b> {key_info}"))
         if tool.install_cmd:

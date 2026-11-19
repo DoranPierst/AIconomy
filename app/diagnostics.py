@@ -14,7 +14,8 @@ import urllib.request
 
 from .catalog import ToolSpec
 from .host_apps import NO_WINDOW
-from .mcp_config import build_effective_stdio_spec
+from .mcp_config import build_effective_stdio_spec, is_tool_credential_ready
+from .security import build_isolated_child_env
 from .storage import WindowsDpapiVault
 from .updater import get_current_app_version
 
@@ -129,21 +130,21 @@ def test_tool_connection_e2e(
                 return True, ms, lbl, str(cli_exe)
             return False, -1, ("TRELLIS kurulumu bulunamadı" if is_tr else "TRELLIS install not found"), str(cli_exe)
 
-    if tool.mcp_command:
-        cmd_bin = shutil.which(f"{tool.mcp_command}.cmd") or shutil.which(tool.mcp_command)
-        if not cmd_bin:
-            lbl = f"Komut bulunamadı: {tool.mcp_command}" if is_tr else f"Command not found: {tool.mcp_command}"
-            return False, -1, lbl, f"'{tool.mcp_command}' is not on PATH."
-        if tool.vault_key_required and tool.vault_key_name and not vault.has_secret(tool.vault_key_name):
-            lbl = f"API anahtarı eksik ({tool.vault_key_name})" if is_tr else f"Missing API key ({tool.vault_key_name})"
-            det = "Ayarlar > API Anahtarları bölümünden ekleyin." if is_tr else "Configure in Settings > API Keys."
+    if tool.mcp_command or getattr(tool, "auth_mode", "key") == "oauth":
+        if not is_tool_credential_ready(tool, vault):
+            lbl = f"Kimlik doğrulama eksik ({tool.vault_key_name or 'OAuth'})" if is_tr else f"Missing credential ({tool.vault_key_name or 'OAuth'})"
+            det = "Ayarlar > API Anahtarları veya OAuth girişi yapın." if is_tr else "Configure in Settings > API Keys or sign in via OAuth."
             return False, -1, lbl, det
 
         spec = build_effective_stdio_spec(tool, vault, wrap_windows_npx=False)
-        eff_args = spec[1] if spec else list(tool.mcp_args)
-        eff_env = spec[2] if spec else {}
-        env = os.environ.copy()
-        env.update(eff_env)
+        if spec is None:
+            return False, -1, ("Yapılandırma eksik" if is_tr else "Configuration missing"), tool.name
+        raw_bin, eff_args, eff_env = spec
+        cmd_bin = shutil.which(f"{raw_bin}.cmd") or shutil.which(raw_bin)
+        if not cmd_bin:
+            lbl = f"Komut bulunamadı: {raw_bin}" if is_tr else f"Command not found: {raw_bin}"
+            return False, -1, lbl, f"'{raw_bin}' is not on PATH."
+        env = build_isolated_child_env(eff_env, allowed_secret_key=tool.vault_key_name)
 
         return _run_stdio_handshake(cmd_bin, eff_args, env, t0, cfg_note, app_ver, lang=lang)
 

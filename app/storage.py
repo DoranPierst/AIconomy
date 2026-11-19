@@ -7,6 +7,7 @@ import ctypes
 import ctypes.wintypes as wintypes
 import datetime as dt
 import json
+import os
 import pathlib
 import shutil
 import sqlite3
@@ -19,6 +20,7 @@ from .catalog import (
     default_projects_map,
     normalize_tool_kind,
 )
+from .security import derive_vault_entropy, redact_secrets
 
 STATE_FILENAME = "aiconomy-state.json"
 LOG_DB_FILENAME = "aiconomy.db"
@@ -52,7 +54,10 @@ class DATA_BLOB(ctypes.Structure):
 
 
 class WindowsDpapiVault:
-    """Windows session-scoped CryptProtectData (DPAPI) encrypted API key vault."""
+    """Windows session-scoped CryptProtectData (DPAPI) encrypted API key vault with optional PBKDF2 PIN entropy."""
+
+    META_KEY = "__vault_meta__"
+    VERIFIER_PLAINTEXT = "AICONOMY_VAULT_OK_V1"
 
     STANDARD_KEYS: list[tuple[str, str]] = [
         ("MESHY_API_KEY", "set_key_meshy"),
@@ -64,17 +69,27 @@ class WindowsDpapiVault:
     def __init__(self, vault_file: pathlib.Path) -> None:
         self.vault_file = vault_file
         self.vault_file.parent.mkdir(parents=True, exist_ok=True)
+        self._entropy: bytes | None = None
 
     @staticmethod
-    def _protect(raw_text: str) -> str:
+    def _make_entropy_blob(entropy: bytes | None) -> tuple[Any, Any]:
+        if not entropy:
+            return None, None
+        ebuf = ctypes.create_string_buffer(entropy, len(entropy))
+        eblob = DATA_BLOB(len(entropy), ctypes.cast(ebuf, ctypes.POINTER(ctypes.c_char)))
+        return ebuf, ctypes.byref(eblob)
+
+    @classmethod
+    def _protect(cls, raw_text: str, entropy: bytes | None = None) -> str:
         data = raw_text.encode("utf-8")
         buf = ctypes.create_string_buffer(data, len(data))
         blob_in = DATA_BLOB(len(data), ctypes.cast(buf, ctypes.POINTER(ctypes.c_char)))
+        _ebuf, entropy_ptr = cls._make_entropy_blob(entropy)
         blob_out = DATA_BLOB()
         ok = ctypes.windll.crypt32.CryptProtectData(
             ctypes.byref(blob_in),
             "AIconomyVault",
-            None,
+            entropy_ptr,
             None,
             None,
             0x01,  # CRYPTPROTECT_UI_FORBIDDEN
@@ -88,16 +103,17 @@ class WindowsDpapiVault:
         finally:
             ctypes.windll.kernel32.LocalFree(blob_out.pbData)
 
-    @staticmethod
-    def _unprotect(cipher_b64: str) -> str:
+    @classmethod
+    def _unprotect(cls, cipher_b64: str, entropy: bytes | None = None) -> str:
         raw = base64.b64decode(cipher_b64.encode("ascii"))
         buf = ctypes.create_string_buffer(raw, len(raw))
         blob_in = DATA_BLOB(len(raw), ctypes.cast(buf, ctypes.POINTER(ctypes.c_char)))
+        _ebuf, entropy_ptr = cls._make_entropy_blob(entropy)
         blob_out = DATA_BLOB()
         ok = ctypes.windll.crypt32.CryptUnprotectData(
             ctypes.byref(blob_in),
             None,
-            None,
+            entropy_ptr,
             None,
             None,
             0x01,
@@ -111,39 +127,152 @@ class WindowsDpapiVault:
         finally:
             ctypes.windll.kernel32.LocalFree(blob_out.pbData)
 
-    def _read_map(self) -> dict[str, str]:
+    def _read_raw_doc(self) -> dict[str, Any]:
         if not self.vault_file.is_file():
             return {}
         try:
-            return json.loads(self.vault_file.read_text(encoding="utf-8"))
+            doc = json.loads(self.vault_file.read_text(encoding="utf-8"))
+            return doc if isinstance(doc, dict) else {}
         except Exception:
             return {}
 
+    def _write_raw_doc(self, doc: dict[str, Any]) -> None:
+        self.vault_file.write_text(json.dumps(doc, indent=2), encoding="utf-8")
+
+    def _read_map(self) -> dict[str, str]:
+        raw = self._read_raw_doc()
+        return {k: v for k, v in raw.items() if not k.startswith("__") and isinstance(v, str)}
+
+    def is_passphrase_enabled(self) -> bool:
+        meta = self._read_raw_doc().get(self.META_KEY)
+        return bool(isinstance(meta, dict) and meta.get("protected"))
+
+    def is_locked(self) -> bool:
+        return self.is_passphrase_enabled() and self._entropy is None
+
+    def lock(self) -> None:
+        self._entropy = None
+
+    def unlock(self, passphrase: str) -> bool:
+        doc = self._read_raw_doc()
+        meta = doc.get(self.META_KEY)
+        if not isinstance(meta, dict) or not meta.get("protected"):
+            self._entropy = None
+            return True
+        if not passphrase:
+            return False
+        try:
+            salt = base64.b64decode(str(meta["salt_b64"]).encode("ascii"))
+            cand = derive_vault_entropy(passphrase, salt)
+            plain = self._unprotect(str(meta["verifier"]), entropy=cand)
+            if plain == self.VERIFIER_PLAINTEXT:
+                self._entropy = cand
+                return True
+        except Exception:
+            return False
+        return False
+
+    def unlock_with_entropy_hex(self, entropy_hex: str) -> bool:
+        """Unlock in-memory using a hex entropy key received over the user-scoped IPC pipe."""
+        doc = self._read_raw_doc()
+        meta = doc.get(self.META_KEY)
+        if not isinstance(meta, dict) or not meta.get("protected"):
+            return True
+        try:
+            cand = bytes.fromhex(entropy_hex.strip())
+            if self._unprotect(str(meta["verifier"]), entropy=cand) == self.VERIFIER_PLAINTEXT:
+                self._entropy = cand
+                return True
+        except Exception:
+            return False
+        return False
+
+    def export_entropy_hex(self) -> str:
+        return self._entropy.hex() if self._entropy else ""
+
+    def set_passphrase(self, new_passphrase: str, current_passphrase: str = "") -> bool:
+        """Enable, change, or clear (when new_passphrase == '') the vault Master Passphrase."""
+        if self.is_locked() and not self.unlock(current_passphrase):
+            return False
+        doc = self._read_raw_doc()
+        secret_map = self._read_map()
+        decrypted: dict[str, str] = {}
+        for k, enc in secret_map.items():
+            try:
+                decrypted[k] = self._unprotect(enc, entropy=self._entropy)
+            except Exception:
+                return False
+
+        clean_new = new_passphrase.strip()
+        new_doc: dict[str, Any] = {}
+        if clean_new:
+            salt = os.urandom(16)
+            new_ent = derive_vault_entropy(clean_new, salt)
+            new_doc[self.META_KEY] = {
+                "protected": True,
+                "salt_b64": base64.b64encode(salt).decode("ascii"),
+                "verifier": self._protect(self.VERIFIER_PLAINTEXT, entropy=new_ent),
+            }
+            for k, plain_val in decrypted.items():
+                if plain_val:
+                    new_doc[k] = self._protect(plain_val, entropy=new_ent)
+            self._entropy = new_ent
+        else:
+            for k, plain_val in decrypted.items():
+                if plain_val:
+                    new_doc[k] = self._protect(plain_val, entropy=None)
+            self._entropy = None
+
+        self._write_raw_doc(new_doc)
+        return True
+
+    def has_key_entry(self, key_name: str) -> bool:
+        """Return True when a cipher entry exists on disk (even while locked)."""
+        return bool(key_name and key_name in self._read_map())
+
     def set_secret(self, key_name: str, secret_value: str) -> None:
-        data = self._read_map()
+        if self.is_locked():
+            raise PermissionError("Vault is locked; unlock with Master Passphrase first.")
+        doc = self._read_raw_doc()
         cleaned = secret_value.strip()
         if not cleaned:
-            data.pop(key_name, None)
+            doc.pop(key_name, None)
         else:
-            data[key_name] = self._protect(cleaned)
-        self.vault_file.write_text(json.dumps(data, indent=2), encoding="utf-8")
+            doc[key_name] = self._protect(cleaned, entropy=self._entropy)
+        self._write_raw_doc(doc)
 
     def get_secret(self, key_name: str) -> str:
-        data = self._read_map()
-        enc = data.get(key_name)
+        if self.is_locked():
+            return ""
+        enc = self._read_map().get(key_name)
         if not enc:
             return ""
         try:
-            return self._unprotect(enc)
+            return self._unprotect(enc, entropy=self._entropy)
         except Exception:
             return ""
 
     def has_secret(self, key_name: str) -> bool:
+        if self.is_locked():
+            return self.has_key_entry(key_name)
         return bool(self.get_secret(key_name))
+
+    def all_unlocked_values(self) -> list[str]:
+        if self.is_locked():
+            return []
+        vals: list[str] = []
+        for k in self._read_map():
+            v = self.get_secret(k)
+            if v:
+                vals.append(v)
+        return vals
 
     def list_masked(self) -> dict[str, str]:
         out: dict[str, str] = {}
         for k in self._read_map():
+            if self.is_locked():
+                out[k] = f"locked{'*' * 10}"
+                continue
             val = self.get_secret(k)
             if val:
                 prefix = val[:4] if len(val) >= 8 else val[:2]
@@ -152,10 +281,11 @@ class WindowsDpapiVault:
 
 
 class LogDatabase:
-    """Persistent SQLite log store for errors, warnings, and operational events."""
+    """Persistent SQLite log store for errors, warnings, and operational events (auto-redacts secrets)."""
 
-    def __init__(self, db_path: pathlib.Path) -> None:
+    def __init__(self, db_path: pathlib.Path, vault: WindowsDpapiVault | None = None) -> None:
         self.db_path = db_path
+        self.vault = vault
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._init_db()
 
@@ -194,10 +324,13 @@ class LogDatabase:
 
     def add(self, level: str, tool: str, summary: str, raw_detail: str = "", port: int | None = None) -> None:
         ts = dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        extra = self.vault.all_unlocked_values() if self.vault is not None else ()
+        safe_summary = redact_secrets(summary, extra_secrets=extra)
+        safe_raw = redact_secrets(raw_detail or summary, extra_secrets=extra)
         with self._connect() as conn, conn:
             conn.execute(
                 "INSERT INTO logs (ts, level, tool, summary, raw_detail, port) VALUES (?, ?, ?, ?, ?, ?)",
-                (ts, level, tool, summary, raw_detail or summary, port),
+                (ts, level, tool, safe_summary, safe_raw, port),
             )
 
     def clear(self) -> None:
@@ -329,6 +462,8 @@ class StateStore:
                     t.installed = bool(tdata["installed"])
                 elif t.in_workspace:
                     t.installed = True
+                if tdata.get("auth_mode") in ("key", "oauth"):
+                    t.auth_mode = str(tdata["auth_mode"])
                 t.enabled = bool(tdata.get("enabled", t.enabled))
                 if not t.in_workspace:
                     t.enabled = False
@@ -379,6 +514,7 @@ class StateStore:
                         vault_key_name=str(tdata.get("vault_key_name", "")),
                         vault_key_required=bool(tdata.get("vault_key_required", False)),
                         vault_key_desc=str(tdata.get("vault_key_desc", "")),
+                        auth_mode=str(tdata.get("auth_mode", "key")),
                         in_workspace=bool(tdata.get("in_workspace", True)),
                         installed=bool(tdata.get("installed", True)),
                         category=str(tdata.get("category", "coding_dev")),
@@ -409,6 +545,7 @@ class StateStore:
                 "version": t.version,
                 "in_workspace": bool(getattr(t, "in_workspace", True)),
                 "installed": bool(getattr(t, "installed", getattr(t, "in_workspace", True))),
+                "auth_mode": str(getattr(t, "auth_mode", "key")),
                 "enabled": bool(t.enabled and getattr(t, "in_workspace", True)),
                 "clients": dict(t.clients),
                 "project_scope": t.project_scope,

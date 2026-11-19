@@ -10,11 +10,18 @@
 """
 from __future__ import annotations
 
+import sys
+
+# Ultra-fast pre-Qt RAM secret bridge for stdio MCP servers (zero GUI overhead, <10ms)
+if len(sys.argv) >= 3 and sys.argv[1] == "--mcp-exec":
+    from app.mcp_bridge import run_mcp_exec_cli
+
+    raise SystemExit(run_mcp_exec_cli(sys.argv[2:]))
+
 import ctypes
 import os
 import pathlib
 import shutil
-import sys
 
 import psutil
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
@@ -122,6 +129,7 @@ def main() -> int:
             _terminate_stale_instances()
 
     server = QLocalServer()
+    server.setSocketOptions(QLocalServer.SocketOption.UserAccessOption)
     QLocalServer.removeServer(SERVER_NAME)
     server.listen(SERVER_NAME)
 
@@ -132,7 +140,15 @@ def main() -> int:
         if conn is None:
             return
         conn.waitForReadyRead(300)
-        conn.readAll()
+        msg = bytes(conn.readAll()).strip()
+        if msg == b"request_entropy":
+            ent = win.vault.export_entropy_hex()
+            reply = f"ENTROPY:{ent}".encode("ascii") if ent else b"LOCKED"
+            conn.write(reply)
+            conn.flush()
+            conn.waitForBytesWritten(300)
+            conn.disconnectFromServer()
+            return
         conn.disconnectFromServer()
         _bring_to_front(win)
 

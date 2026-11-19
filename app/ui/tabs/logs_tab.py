@@ -240,6 +240,7 @@ class LogsTabMixin:
             get_current_app_version(),
             gpu_txt,
             lang=self.lang,
+            extra_secrets=self.vault.all_unlocked_values(),
         )
         QApplication.clipboard().setText(prompt)
         self.log_raw_view.setPlainText(prompt)

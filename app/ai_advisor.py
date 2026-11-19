@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import platform
+from typing import Iterable
 
 from .catalog import ToolSpec, localized_tool_modes, tool_kind_label
+from .security import redact_secrets
 
 
 def build_logs_ai_prompt(
@@ -12,6 +14,7 @@ def build_logs_ai_prompt(
     app_version: str,
     gpu_status: str = "",
     lang: str = "en",
+    extra_secrets: Iterable[str] = (),
 ) -> str:
     """Combine selected logs, affected tool versions, and system metadata into an AI troubleshooting prompt."""
     is_tr = lang == "tr"
@@ -122,4 +125,4 @@ def build_logs_ai_prompt(
                 "2) Provide step-by-step commands or config fixes to resolve it.",
             ]
         )
-    return "\n".join(lines)
+    return redact_secrets("\n".join(lines), extra_secrets=extra_secrets)

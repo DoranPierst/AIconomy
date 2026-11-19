@@ -25,6 +25,7 @@ from ...catalog import (
     localized_tool_text,
 )
 from ...i18n import tr
+from ...oauth import check_cli_oauth_ready, get_oauth_spec, launch_browser_oauth_flow, supports_oauth
 from ..widgets import create_option_help_badge
 
 if TYPE_CHECKING:
@@ -121,6 +122,51 @@ class ToolGearDialog(QDialog):
         else:
             self.param_inp = None
 
+        self.auth_cmb: QComboBox | None = None
+        self._oauth_status_lbl: QLabel | None = None
+        self._oauth_btn: QPushButton | None = None
+        self._oauth_spec = get_oauth_spec(tool.id) if supports_oauth(tool.id) else None
+        if self._oauth_spec is not None:
+            a_card = QFrame()
+            a_card.setObjectName("card")
+            a_outer = QVBoxLayout(a_card)
+            a_outer.setContentsMargins(12, 8, 12, 8)
+            a_outer.setSpacing(6)
+
+            a_top = QHBoxLayout()
+            a_top.setSpacing(8)
+            a_top.addWidget(QLabel(f"<b>{tr(self.lang, 'gear_auth_lbl')}</b>"))
+            self.auth_cmb = QComboBox()
+            if tool.vault_key_name:
+                self.auth_cmb.addItem(tr(self.lang, "gear_auth_mode_key"), "key")
+            self.auth_cmb.addItem(
+                tr(self.lang, "gear_auth_mode_oauth", provider=self._oauth_spec.provider_label),
+                "oauth",
+            )
+            cur_auth = getattr(tool, "auth_mode", "key")
+            if not tool.vault_key_name:
+                cur_auth = "oauth"
+            idx_a = self.auth_cmb.findData(cur_auth)
+            self.auth_cmb.setCurrentIndex(max(0, idx_a))
+            self.auth_cmb.setMinimumWidth(240)
+            self.auth_cmb.currentIndexChanged.connect(lambda _idx: self._refresh_auth_ui())
+            a_top.addWidget(self.auth_cmb)
+            a_top.addStretch()
+
+            self._oauth_btn = QPushButton(tr(self.lang, "gear_oauth_btn"))
+            self._oauth_btn.setObjectName("primaryBtn")
+            self._oauth_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            self._oauth_btn.clicked.connect(self._handle_oauth_login)
+            a_top.addWidget(self._oauth_btn)
+            a_outer.addLayout(a_top)
+
+            self._oauth_status_lbl = QLabel("")
+            self._oauth_status_lbl.setWordWrap(True)
+            self._oauth_status_lbl.setStyleSheet("font-size: 11px;")
+            a_outer.addWidget(self._oauth_status_lbl)
+            lay.addWidget(a_card)
+
+        self._vault_card: QFrame | None = None
         self._key_status_lbl: QLabel | None = None
         if tool.vault_key_name:
             v_card = QFrame()
@@ -133,7 +179,11 @@ class ToolGearDialog(QDialog):
             btn_set_key.clicked.connect(self._open_api_keys)
             v_lay.addWidget(btn_set_key)
             lay.addWidget(v_card)
+            self._vault_card = v_card
             self._refresh_key_status()
+
+        if self._oauth_spec is not None:
+            self._refresh_auth_ui()
 
         self.opt_checks: dict[str, QCheckBox] = {}
         if tool.options:
@@ -207,6 +257,49 @@ class ToolGearDialog(QDialog):
         bot.addWidget(btn_save)
         lay.addLayout(bot)
 
+    def _selected_auth_mode(self) -> str:
+        if self.auth_cmb is not None:
+            return str(self.auth_cmb.currentData() or "key")
+        return getattr(self.tool, "auth_mode", "key")
+
+    def _refresh_auth_ui(self) -> None:
+        is_oauth = self._selected_auth_mode() == "oauth" and self._oauth_spec is not None
+        if self._vault_card is not None:
+            self._vault_card.setVisible(not is_oauth)
+        if self._oauth_btn is not None:
+            self._oauth_btn.setVisible(is_oauth)
+        if self._oauth_status_lbl is not None:
+            self._oauth_status_lbl.setVisible(is_oauth)
+            if is_oauth and self._oauth_spec is not None:
+                if self._oauth_spec.kind == "remote_mcp":
+                    txt = tr(self.lang, "gear_oauth_remote_ready")
+                    col = "#10b981"
+                else:
+                    cli_ok = (
+                        check_cli_oauth_ready(self.tool.id)
+                        if getattr(self.main_win, "sync_live_environment", True)
+                        else False
+                    )
+                    if cli_ok:
+                        txt = tr(self.lang, "gear_oauth_cli_ok", provider=self._oauth_spec.provider_label)
+                        col = "#10b981"
+                    else:
+                        txt = tr(self.lang, "gear_oauth_cli_missing")
+                        col = "#f59e0b"
+                self._oauth_status_lbl.setText(f"<span style='color:{col}; font-weight:600;'>{txt}</span>")
+
+    def _handle_oauth_login(self) -> None:
+        if not getattr(self.main_win, "sync_live_environment", True):
+            return
+        ok, msg = launch_browser_oauth_flow(self.tool.id, lang=self.lang)
+        self.main_win.logs.add("INFO" if ok else "WARN", self.tool.name, msg)
+        self.main_win.set_status(msg)
+        self.main_win._refresh_logs_tab()
+        if self._oauth_status_lbl is not None:
+            col = "#10b981" if ok else "#ef4444"
+            self._oauth_status_lbl.setText(f"<span style='color:{col}; font-weight:600;'>{msg}</span>")
+            self._oauth_status_lbl.show()
+
     def _refresh_key_status(self) -> None:
         if self._key_status_lbl is None:
             return
@@ -247,6 +340,10 @@ class ToolGearDialog(QDialog):
         self.reset_requested = True
         default_spec = get_default_tool_spec(self.tool.id)
         if default_spec is not None:
+            if self.auth_cmb is not None:
+                def_auth = default_spec.auth_mode if default_spec.vault_key_name else "oauth"
+                idx_a = self.auth_cmb.findData(def_auth)
+                self.auth_cmb.setCurrentIndex(max(0, idx_a))
             if self.param_inp is not None:
                 self.param_inp.setText(default_spec.param_value)
             if self.mode_cmb is not None and default_spec.modes:
@@ -255,6 +352,8 @@ class ToolGearDialog(QDialog):
             for key, cb in self.opt_checks.items():
                 cb.setChecked(def_opts.get(key, False))
         else:
+            if self.auth_cmb is not None:
+                self.auth_cmb.setCurrentIndex(0)
             if self.param_inp is not None:
                 self.param_inp.setText("")
             if self.mode_cmb is not None:
@@ -264,6 +363,8 @@ class ToolGearDialog(QDialog):
         self._show_option_help(tr(self.lang, "btn_reset_defaults"), tr(self.lang, "gear_reset_loaded"))
 
     def _save(self) -> None:
+        if self.auth_cmb is not None:
+            self.tool.auth_mode = self._selected_auth_mode()
         if self.param_inp is not None:
             self.tool.param_value = self.param_inp.text().strip()
             if self.tool.id in ("serena", "unity_mcp", "blender_mcp") and self.tool.param_value.isdigit():

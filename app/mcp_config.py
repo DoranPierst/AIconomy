@@ -8,11 +8,13 @@ import pathlib
 import re
 import shutil
 import stat
+import sys
 import tempfile
 import threading
 from typing import Any
 
 from .catalog import ToolSpec, localized_tool_modes
+from .oauth import check_cli_oauth_ready, get_oauth_spec, resolve_cli_oauth_token, supports_oauth
 from .storage import WindowsDpapiVault
 
 _CONFIG_LOCK = threading.Lock()
@@ -265,15 +267,55 @@ def _is_http_mcp_tool(t: ToolSpec) -> bool:
     return bool(t.port and t.id in ("serena", "unity_mcp"))
 
 
+def is_tool_credential_ready(t: ToolSpec, vault: WindowsDpapiVault) -> bool:
+    """Return True when the tool's active auth_mode ('oauth' or 'key') has usable credentials."""
+    if getattr(t, "auth_mode", "key") == "oauth" and supports_oauth(t.id):
+        ospec = get_oauth_spec(t.id)
+        if ospec and ospec.kind == "remote_mcp":
+            return True
+        if ospec and ospec.kind == "cli_login":
+            return check_cli_oauth_ready(t.id)
+    if t.vault_key_required and t.vault_key_name:
+        return vault.has_secret(t.vault_key_name)
+    return True
+
+
+def build_mcp_exec_launcher_entry(t: ToolSpec, vault: WindowsDpapiVault) -> dict[str, Any]:
+    """Build a zero-plaintext --mcp-exec config entry so secrets never touch disk JSON/TOML files."""
+    data_dir_str = str(vault.vault_file.resolve().parent)
+    exe_str = str(pathlib.Path(sys.executable).resolve())
+    if getattr(sys, "frozen", False):
+        return {
+            "command": exe_str,
+            "args": ["--mcp-exec", t.id, "--data-dir", data_dir_str],
+        }
+    main_py = str(pathlib.Path(__file__).resolve().parent.parent / "main.py")
+    return {
+        "command": exe_str,
+        "args": [main_py, "--mcp-exec", t.id, "--data-dir", data_dir_str],
+    }
+
+
 def build_effective_stdio_spec(
     t: ToolSpec,
     vault: WindowsDpapiVault,
     wrap_windows_npx: bool = True,
 ) -> tuple[str, list[str], dict[str, str]] | None:
-    """Resolve effective (command, args, env) for a stdio MCP tool, or None when blocked by a missing required key."""
+    """Resolve effective in-RAM (command, args, env) for a stdio MCP tool, or None when credentials are missing."""
+    is_oauth = getattr(t, "auth_mode", "key") == "oauth" and supports_oauth(t.id)
+    ospec = get_oauth_spec(t.id) if is_oauth else None
+
+    if ospec is not None and ospec.kind == "remote_mcp":
+        cmd = "npx"
+        args = ["-y", "mcp-remote", ospec.remote_mcp_url]
+        if wrap_windows_npx and os.name == "nt":
+            cmd = "cmd"
+            args = ["/c", "npx", *args]
+        return cmd, args, {}
+
     if not t.mcp_command:
         return None
-    if t.vault_key_required and t.vault_key_name and not vault.has_secret(t.vault_key_name):
+    if not is_oauth and t.vault_key_required and t.vault_key_name and not vault.has_secret(t.vault_key_name):
         return None
 
     args = list(t.mcp_args)
@@ -285,7 +327,14 @@ def build_effective_stdio_spec(
             args.append("--isolated")
 
     env: dict[str, str] = {}
-    if t.vault_key_name:
+    if is_oauth and ospec is not None and ospec.kind == "cli_login":
+        if ospec.token_args and t.vault_key_name:
+            cli_tok = resolve_cli_oauth_token(t.id)
+            if not cli_tok and t.vault_key_required:
+                return None
+            if cli_tok:
+                env[t.vault_key_name] = cli_tok
+    elif t.vault_key_name:
         secret = vault.get_secret(t.vault_key_name)
         if secret:
             if t.id == "context7" and "--api-key" not in args:
@@ -320,8 +369,27 @@ def build_effective_stdio_spec(
 
 
 def _build_mcp_entry(t: ToolSpec, vault: WindowsDpapiVault) -> dict[str, Any] | None:
+    """Build a disk-safe MCP client config entry with ZERO plaintext API keys."""
     if _is_http_mcp_tool(t):
         return {"url": f"http://127.0.0.1:{t.port}/mcp"}
+    if not is_tool_credential_ready(t, vault):
+        return None
+
+    is_oauth = getattr(t, "auth_mode", "key") == "oauth" and supports_oauth(t.id)
+    ospec = get_oauth_spec(t.id) if is_oauth else None
+
+    if is_oauth and ospec is not None:
+        if ospec.kind == "remote_mcp":
+            if os.name == "nt":
+                return {"command": "cmd", "args": ["/c", "npx", "-y", "mcp-remote", ospec.remote_mcp_url]}
+            return {"command": "npx", "args": ["-y", "mcp-remote", ospec.remote_mcp_url]}
+        if ospec.token_args:
+            return build_mcp_exec_launcher_entry(t, vault)
+
+    # Whenever a tool uses a stored vault secret, route through --mcp-exec so NO secret touches disk!
+    if not is_oauth and t.vault_key_name and vault.has_key_entry(t.vault_key_name):
+        return build_mcp_exec_launcher_entry(t, vault)
+
     spec = build_effective_stdio_spec(t, vault, wrap_windows_npx=True)
     if spec is None:
         return None
@@ -505,11 +573,7 @@ def _sync_mcp_json_clients_impl(
 
             handled_existing: set[str] = set()
             for sec_key, t_obj in alias_map.items():
-                has_req_key = not (
-                    t_obj.vault_key_required
-                    and t_obj.vault_key_name
-                    and not vault.has_secret(t_obj.vault_key_name)
-                )
+                has_req_key = is_tool_credential_ready(t_obj, vault)
                 want_cdx = bool(
                     getattr(t_obj, "in_workspace", True)
                     and t_obj.enabled

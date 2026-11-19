@@ -380,6 +380,7 @@ class ToolSpec:
     vault_key_name: str = ""
     vault_key_required: bool = False
     vault_key_desc: str = ""
+    auth_mode: str = "key"  # key | oauth
     in_workspace: bool = True
     installed: bool = True
     category: str = "coding_dev"
@@ -758,7 +759,13 @@ def build_default_catalog() -> list[ToolSpec]:
             ],
         ),
     ]
-    return starter_tools + build_library_catalog()
+    from .oauth import supports_oauth
+
+    all_tools = starter_tools + build_library_catalog()
+    for t in all_tools:
+        if supports_oauth(t.id):
+            t.has_gear = True
+    return all_tools
 
 
 def get_default_tool_spec(tool_id: str) -> ToolSpec | None:

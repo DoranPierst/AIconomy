@@ -158,7 +158,10 @@ def compute_token_breakdown(
 
         active_clients = [c for c, _ in AI_CLIENTS if t.clients.get(c, False)]
         has_missing_key = bool(
-            t.vault_key_required and t.vault_key_name and t.vault_key_name in missing_keys
+            getattr(t, "auth_mode", "key") != "oauth"
+            and t.vault_key_required
+            and t.vault_key_name
+            and t.vault_key_name in missing_keys
         )
         is_installed = is_tool_installed_for_tokens(
             t, projects_map, home_dir=home_dir, which_cache=which_cache, which_fn=which_fn

@@ -229,7 +229,7 @@ class SettingsDialog(QDialog):
         lay.addWidget(desc)
 
         warn_card = QFrame()
-        warn_card.setObjectName("bannerWarn")
+        warn_card.setObjectName("bannerInfo")
         wl = QVBoxLayout(warn_card)
         wl.setContentsMargins(12, 8, 12, 8)
         warn_lbl = QLabel(tr(self.lang, "set_vault_warn"))
@@ -237,6 +237,39 @@ class SettingsDialog(QDialog):
         warn_lbl.setStyleSheet("font-size: 11px;")
         wl.addWidget(warn_lbl)
         lay.addWidget(warn_card)
+
+        pin_card = QFrame()
+        pin_card.setObjectName("card")
+        pin_lay = QHBoxLayout(pin_card)
+        pin_lay.setContentsMargins(12, 8, 12, 8)
+        pin_lay.setSpacing(8)
+
+        pin_info = QVBoxLayout()
+        pin_info.setSpacing(2)
+        pin_info.addWidget(QLabel(f"<b>{tr(self.lang, 'set_pin_hdr')}</b>"))
+        self.pin_status_lbl = QLabel("")
+        self.pin_status_lbl.setWordWrap(True)
+        self.pin_status_lbl.setStyleSheet("font-size: 11px;")
+        pin_info.addWidget(self.pin_status_lbl)
+        pin_lay.addLayout(pin_info, stretch=1)
+
+        self.btn_pin_set = QPushButton(tr(self.lang, "set_pin_btn_set"))
+        self.btn_pin_set.clicked.connect(self._prompt_set_or_change_pin)
+        pin_lay.addWidget(self.btn_pin_set)
+
+        self.btn_pin_unlock = QPushButton(tr(self.lang, "set_pin_btn_unlock"))
+        self.btn_pin_unlock.setObjectName("primaryBtn")
+        self.btn_pin_unlock.clicked.connect(self._prompt_unlock_pin)
+        pin_lay.addWidget(self.btn_pin_unlock)
+
+        self.btn_pin_lock = QPushButton(tr(self.lang, "set_pin_btn_lock"))
+        self.btn_pin_lock.clicked.connect(self._lock_vault_now)
+        pin_lay.addWidget(self.btn_pin_lock)
+
+        self.btn_pin_remove = QPushButton(tr(self.lang, "set_pin_btn_remove"))
+        self.btn_pin_remove.clicked.connect(self._prompt_remove_pin)
+        pin_lay.addWidget(self.btn_pin_remove)
+        lay.addWidget(pin_card)
 
         self.keys_scroll = QScrollArea()
         self.keys_scroll.setWidgetResizable(True)
@@ -250,6 +283,7 @@ class SettingsDialog(QDialog):
         self.keys_scroll.setWidget(keys_host)
 
         self.vault_inputs: dict[str, QLineEdit] = {}
+        self.vault_eye_btns: dict[str, QPushButton] = {}
         self.vault_save_btns: dict[str, QPushButton] = {}
         for key_name, desc_txt in self._collect_vault_key_rows():
             card = QFrame()
@@ -265,9 +299,8 @@ class SettingsDialog(QDialog):
             info.setWordWrap(True)
             r.addWidget(info)
 
-            inp = QLineEdit(self.main_win.vault.get_secret(key_name))
+            inp = QLineEdit()
             inp.setEchoMode(QLineEdit.EchoMode.Password)
-            inp.setPlaceholderText(tr(self.lang, "set_key_ph"))
             self.vault_inputs[key_name] = inp
             r.addWidget(inp, stretch=1)
 
@@ -280,6 +313,7 @@ class SettingsDialog(QDialog):
                     b.setText(tr(self.lang, "set_key_hide") if checked else tr(self.lang, "set_key_show")),
                 )
             )
+            self.vault_eye_btns[key_name] = btn_eye
             r.addWidget(btn_eye)
 
             btn_save = QPushButton(tr(self.lang, "set_key_save"))
@@ -292,9 +326,130 @@ class SettingsDialog(QDialog):
 
         keys_lay.addStretch()
         lay.addWidget(self.keys_scroll, stretch=1)
+        self._refresh_pin_and_key_rows()
         self.tabs.addTab(w, tr(self.lang, "settings_tab_keys"))
 
+    def _refresh_pin_and_key_rows(self) -> None:
+        vault = self.main_win.vault
+        pin_on = vault.is_passphrase_enabled()
+        locked = vault.is_locked()
+
+        if not pin_on:
+            self.pin_status_lbl.setText(f"<span style='color:#94a3b8;'>{tr(self.lang, 'set_pin_status_off')}</span>")
+            self.btn_pin_set.setText(tr(self.lang, "set_pin_btn_set"))
+            self.btn_pin_set.show()
+            self.btn_pin_unlock.hide()
+            self.btn_pin_lock.hide()
+            self.btn_pin_remove.hide()
+        elif locked:
+            self.pin_status_lbl.setText(
+                f"<span style='color:#f59e0b; font-weight:600;'>{tr(self.lang, 'set_pin_status_locked')}</span>"
+            )
+            self.btn_pin_set.hide()
+            self.btn_pin_unlock.show()
+            self.btn_pin_lock.hide()
+            self.btn_pin_remove.hide()
+        else:
+            self.pin_status_lbl.setText(
+                f"<span style='color:#10b981; font-weight:600;'>{tr(self.lang, 'set_pin_status_unlocked')}</span>"
+            )
+            self.btn_pin_set.setText(tr(self.lang, "set_pin_btn_change"))
+            self.btn_pin_set.show()
+            self.btn_pin_unlock.hide()
+            self.btn_pin_lock.show()
+            self.btn_pin_remove.show()
+
+        ph = tr(self.lang, "set_key_locked_ph" if locked else "set_key_ph")
+        for k_name, inp in self.vault_inputs.items():
+            inp.setEnabled(not locked)
+            inp.setPlaceholderText(ph)
+            if locked:
+                inp.setText("")
+                inp.setEchoMode(QLineEdit.EchoMode.Password)
+            else:
+                inp.setText(vault.get_secret(k_name))
+            eye = self.vault_eye_btns.get(k_name)
+            if eye is not None:
+                if locked and eye.isChecked():
+                    eye.setChecked(False)
+                eye.setEnabled(not locked)
+            s_btn = self.vault_save_btns.get(k_name)
+            if s_btn is not None:
+                s_btn.setEnabled(not locked)
+
+    def _prompt_unlock_pin(self) -> bool:
+        pwd, ok = QInputDialog.getText(
+            self,
+            tr(self.lang, "set_pin_dlg_unlock_title"),
+            tr(self.lang, "set_pin_dlg_unlock_prompt"),
+            QLineEdit.EchoMode.Password,
+        )
+        if not ok or not pwd:
+            return False
+        if not self.main_win.vault.unlock(pwd):
+            QMessageBox.warning(self, tr(self.lang, "set_pin_dlg_unlock_title"), tr(self.lang, "set_pin_err_wrong"))
+            return False
+        msg = tr(self.lang, "msg_pin_unlocked")
+        self.main_win.logs.add("INFO", tr(self.lang, "settings_tab_keys"), msg)
+        self.main_win.set_status(msg)
+        self.main_win._refresh_logs_tab()
+        self._refresh_pin_and_key_rows()
+        return True
+
+    def _prompt_set_or_change_pin(self) -> None:
+        if self.main_win.vault.is_locked() and not self._prompt_unlock_pin():
+            return
+        pwd1, ok1 = QInputDialog.getText(
+            self,
+            tr(self.lang, "set_pin_dlg_set_title"),
+            tr(self.lang, "set_pin_dlg_set_prompt"),
+            QLineEdit.EchoMode.Password,
+        )
+        if not ok1:
+            return
+        if len(pwd1.strip()) < 4:
+            QMessageBox.warning(self, tr(self.lang, "set_pin_dlg_set_title"), tr(self.lang, "set_pin_err_short"))
+            return
+        pwd2, ok2 = QInputDialog.getText(
+            self,
+            tr(self.lang, "set_pin_dlg_set_title"),
+            tr(self.lang, "set_pin_dlg_confirm_prompt"),
+            QLineEdit.EchoMode.Password,
+        )
+        if not ok2:
+            return
+        if pwd1 != pwd2:
+            QMessageBox.warning(self, tr(self.lang, "set_pin_dlg_set_title"), tr(self.lang, "set_pin_err_mismatch"))
+            return
+        if self.main_win.vault.set_passphrase(pwd1):
+            msg = tr(self.lang, "msg_pin_enabled")
+            self.main_win.logs.add("INFO", tr(self.lang, "settings_tab_keys"), msg)
+            self.main_win.set_status(msg)
+            self.main_win._refresh_logs_tab()
+            self._refresh_pin_and_key_rows()
+
+    def _lock_vault_now(self) -> None:
+        self.main_win.vault.lock()
+        msg = tr(self.lang, "msg_pin_locked")
+        self.main_win.logs.add("INFO", tr(self.lang, "settings_tab_keys"), msg)
+        self.main_win.set_status(msg)
+        self.main_win._refresh_logs_tab()
+        self._refresh_pin_and_key_rows()
+
+    def _prompt_remove_pin(self) -> None:
+        if self.main_win.vault.is_locked() and not self._prompt_unlock_pin():
+            return
+        if self.main_win.vault.set_passphrase(""):
+            msg = tr(self.lang, "msg_pin_removed")
+            self.main_win.logs.add("INFO", tr(self.lang, "settings_tab_keys"), msg)
+            self.main_win.set_status(msg)
+            self.main_win._refresh_logs_tab()
+            self._refresh_pin_and_key_rows()
+
     def _save_key(self, key_name: str) -> None:
+        if self.main_win.vault.is_locked():
+            if not self._prompt_unlock_pin():
+                return
         val = self.vault_inputs[key_name].text().strip()
         self.main_win.vault.set_secret(key_name, val)
         if val:
