@@ -43,6 +43,7 @@ from ..mcp_config import (
     detect_installed_ai_clients,
     sync_blender_skills_on_disk,
     sync_caveman_on_disk,
+    sync_custom_skill_tools_on_disk,
     sync_mcp_json_clients,
 )
 from ..oauth import supports_oauth
@@ -820,6 +821,7 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, ProfilesMixin, Tr
                 cv_tool = next((x for x in tools_snap if x.id == "caveman"), None)
                 if cv_tool:
                     sync_caveman_on_disk(cv_tool, lang=lang_snap)
+                sync_custom_skill_tools_on_disk(tools_snap, lang=lang_snap)
                 sync_mcp_json_clients(tools_snap, self.vault, proj_snap, lang=lang_snap)
                 eff_lang = self.lang
                 live_map = scan_live_process_locations(lang=eff_lang)

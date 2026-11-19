@@ -867,12 +867,32 @@ def resolve_disk_location(
 
     if tool.id == "caveman":
         active_md = pathlib.Path.home() / ".agents" / "skills" / "caveman" / "SKILL.md"
+        agy_md = pathlib.Path.home() / ".gemini" / "config" / "skills" / "caveman" / "SKILL.md"
         disabled_md = pathlib.Path.home() / ".agents" / "skills_disabled" / "caveman" / "SKILL.md"
         if active_md.is_file():
+            if agy_md.is_file():
+                return (
+                    f"Dosya: {active_md}  |  AGY: {agy_md}"
+                    if is_tr
+                    else f"File: {active_md}  |  AGY: {agy_md}"
+                )
             return f"Dosya: {active_md}" if is_tr else f"File: {active_md}"
         if disabled_md.is_file():
             return f"Devre dışı kural: {disabled_md}" if is_tr else f"Disabled rule: {disabled_md}"
         return "Global kural" if is_tr else "Global rule"
+
+    if (
+        tool.id not in ("blender_skills", "caveman")
+        and not tool.mcp_server_key
+        and (tool.kind in ("skill_pack", "rule") or (tool.install_cmd or "").strip().startswith("git clone "))
+    ):
+        act_dir = pathlib.Path.home() / ".agents" / "skills" / tool.id
+        dis_dir = pathlib.Path.home() / ".agents" / "skills_disabled" / tool.id
+        if act_dir.is_dir():
+            return f"Skill klasörü: {act_dir}" if is_tr else f"Skills folder: {act_dir}"
+        if dis_dir.is_dir():
+            return f"Devre dışı skill: {dis_dir}" if is_tr else f"Disabled skills: {dis_dir}"
+        return "Skill (kurulu değil)" if is_tr else "Skill (not installed)"
 
     if tool.scope_selectable and tool.project_scope != "GLOBAL" and tool.project_scope in projects_map:
         return (
@@ -997,5 +1017,18 @@ def probe_tool_health(
 
     if not tool.enabled:
         return False, "off", tr(lang, "st_disabled"), -1, loc_detail, loc_detail
+
+    if (
+        tool.id not in ("blender_skills", "caveman")
+        and not tool.mcp_server_key
+        and (tool.kind in ("skill_pack", "rule") or (tool.install_cmd or "").strip().startswith("git clone "))
+    ):
+        act_dir = pathlib.Path.home() / ".agents" / "skills" / tool.id
+        dis_dir = pathlib.Path.home() / ".agents" / "skills_disabled" / tool.id
+        if act_dir.is_dir():
+            return True, "ok", tr(lang, "st_ready"), 1, str(act_dir), loc_detail
+        if dis_dir.is_dir():
+            return True, "idle", tr(lang, "st_ready"), 1, str(dis_dir), loc_detail
+        return False, "warn", tr(lang, "st_not_installed"), -1, str(act_dir), loc_detail
 
     return True, "ok", tr(lang, "st_ready"), 2, tool.mcp_command or tool.install_cmd or "stdio", loc_detail

@@ -162,10 +162,15 @@ def test_tool_connection_e2e(
 
     if tool.id == "caveman":
         skill_md = pathlib.Path.home() / ".agents" / "skills" / "caveman" / "SKILL.md"
-        ok = skill_md.is_file()
+        agy_md = pathlib.Path.home() / ".gemini" / "config" / "skills" / "caveman" / "SKILL.md"
+        ok = skill_md.is_file() and (not tool.clients.get("AGY", True) or agy_md.is_file())
         ms = max(1, int((time.perf_counter() - t0) * 1000))
+        if skill_md.is_file() and tool.clients.get("AGY", True) and not agy_md.is_file():
+            lbl = "AGY skill senkronu eksik" if is_tr else "AGY skill mirror missing"
+            return False, ms, lbl, f"{skill_md} -> {agy_md}"
         lbl = ("SKILL.md doğrulandı" if ok else "SKILL.md eksik") if is_tr else ("SKILL.md verified" if ok else "SKILL.md missing")
-        return ok, ms, lbl, str(skill_md)
+        det = f"{skill_md} | AGY: {agy_md}" if agy_md.is_file() else str(skill_md)
+        return ok, ms, lbl, det
 
     if tool.id == "unity_pipeline":
         target_proj = projects_map.get(tool.project_scope, tool.param_value)

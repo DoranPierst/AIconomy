@@ -198,6 +198,19 @@ class PluginsTabMixin:
         dlg = AddRepoDialog(self)
         if dlg.exec() == QDialog.DialogCode.Accepted and dlg.added_tool is not None:
             new_tool = dlg.added_tool
+            needs_git_clone = (new_tool.install_cmd or "").strip().startswith("git clone ")
+            if needs_git_clone and self.sync_live_environment:
+                new_tool.installed = False
+                new_tool.in_workspace = False
+                self.tools.append(new_tool)
+                self._save_state()
+                self._rebuild_tag_filter_combo()
+                self._rebuild_plugin_filter_combos()
+                self._update_tab_titles()
+                self._refresh_plugins_tab()
+                self._run_library_install([new_tool], enable_after=False)
+                self.set_status(tr(self.lang, "msg_repo_added", name=new_tool.name))
+                return
             self.tools.append(new_tool)
             self._save_state()
             self._rebuild_tag_filter_combo()
@@ -785,6 +798,8 @@ class PluginsTabMixin:
                 else:
                     tool_obj.health_state = "ok"
                     tool_obj.last_ping = tr(self.lang, "st_ready")
+                self._sync_live_environment_async(target_tools=[tool_obj])
+            elif tool_obj.id in ("caveman", "blender_skills") or tool_obj.kind in ("skill_pack", "rule"):
                 self._sync_live_environment_async(target_tools=[tool_obj])
             self.logs.add(
                 "INFO",

@@ -16,7 +16,7 @@ from typing import Any
 
 from .catalog import ToolSpec
 from .host_apps import NO_WINDOW
-from .mcp_config import _dedupe_yaml_frontmatter_keys, _force_rmtree
+from .mcp_config import _dedupe_yaml_frontmatter_keys, _force_rmtree, _remove_agy_skill_mirrors
 from .updater import get_current_app_version, parse_semver, resolve_github_latest_release_web
 
 NPM_PACKAGE_MAP: dict[str, str] = {
@@ -521,7 +521,9 @@ def update_single_tool(
             return True, tool.version, msg, msg
 
         if tool.id == "caveman":
-            cav_dir = pathlib.Path.home() / ".agents" / "skills" / "caveman"
+            active_dir = pathlib.Path.home() / ".agents" / "skills" / "caveman"
+            disabled_dir = pathlib.Path.home() / ".agents" / "skills_disabled" / "caveman"
+            cav_dir = active_dir if active_dir.is_dir() else (disabled_dir if disabled_dir.is_dir() else active_dir)
             if (cav_dir / ".git").is_dir():
                 cmd = ["git", "-C", str(cav_dir), "pull", "--ff-only"]
                 proc = subprocess.run(cmd, capture_output=True, text=True, timeout=30, creationflags=NO_WINDOW)
@@ -534,7 +536,74 @@ def update_single_tool(
             if (cav_dir / "SKILL.md").is_file():
                 msg = "Yerel SKILL.md doğrulandı." if is_tr else "Local SKILL.md verified."
                 return True, tool.version, msg, str(cav_dir / "SKILL.md")
-            return True, tool.version, ("Caveman kuralı hazır." if is_tr else "Caveman rule ready."), str(cav_dir)
+            if not install_if_missing:
+                msg = (
+                    "Caveman henüz indirilmedi."
+                    if is_tr
+                    else "Caveman is not installed on disk yet."
+                )
+                return True, tool.version, msg, str(cav_dir)
+
+            # Brand-new PC install: fetch official SKILL.md via HTTPS (no Git required), fallback to git clone
+            raw_url = "https://raw.githubusercontent.com/JuliusBrussee/caveman/main/skills/caveman/SKILL.md"
+            try:
+                req = urllib.request.Request(raw_url, headers={"User-Agent": ua})
+                with urllib.request.urlopen(req, timeout=15) as resp:
+                    skill_txt = resp.read().decode("utf-8", errors="replace")
+                if "name:" in skill_txt and len(skill_txt.strip()) > 60:
+                    active_dir.mkdir(parents=True, exist_ok=True)
+                    clean_md = _dedupe_yaml_frontmatter_keys(skill_txt)
+                    (active_dir / "SKILL.md").write_text(clean_md, encoding="utf-8")
+                    msg = (
+                        f"Caveman kuralı indirildi ve kuruldu: {active_dir}"
+                        if is_tr
+                        else f"Downloaded and installed Caveman rule: {active_dir}"
+                    )
+                    return True, tool.version, msg, raw_url
+            except Exception as dl_exc:
+                dl_err = str(dl_exc)
+            else:
+                dl_err = "Unexpected SKILL.md payload"
+
+            git_exe = shutil.which("git.exe") or shutil.which("git")
+            if not git_exe:
+                err_msg = (
+                    f"Caveman indirilemedi ({dl_err}) ve Git bulunamadı."
+                    if is_tr
+                    else f"Failed to download Caveman ({dl_err}) and Git was not found."
+                )
+                return False, "", err_msg, raw_url
+
+            tmp_cav = pathlib.Path(tempfile.mkdtemp(prefix="aiconomy_cav_"))
+            try:
+                clone_dst = tmp_cav / "repo"
+                cmd = [git_exe, "clone", "--depth", "1", "https://github.com/JuliusBrussee/caveman.git", str(clone_dst)]
+                proc = subprocess.run(cmd, capture_output=True, text=True, timeout=60, creationflags=NO_WINDOW)
+                raw = _fmt_cmd_raw(cmd, proc, is_tr)
+                if proc.returncode != 0:
+                    err_first = (proc.stderr.strip() or proc.stdout.strip() or "git clone error").splitlines()[0]
+                    return False, "", f"git clone: {err_first}", raw
+                src_md = clone_dst / "skills" / "caveman" / "SKILL.md"
+                if not src_md.is_file():
+                    src_md = clone_dst / "SKILL.md"
+                if not src_md.is_file():
+                    return (
+                        False,
+                        "",
+                        "Caveman deposunda SKILL.md bulunamadı." if is_tr else "SKILL.md not found in Caveman repository.",
+                        raw,
+                    )
+                active_dir.mkdir(parents=True, exist_ok=True)
+                clean_md = _dedupe_yaml_frontmatter_keys(src_md.read_text(encoding="utf-8", errors="replace"))
+                (active_dir / "SKILL.md").write_text(clean_md, encoding="utf-8")
+                msg = (
+                    f"Caveman kuralı Git üzerinden kuruldu: {active_dir}"
+                    if is_tr
+                    else f"Installed Caveman rule via Git: {active_dir}"
+                )
+                return True, tool.version, msg, raw
+            finally:
+                _force_rmtree(tmp_cav)
 
         if tool.id in UV_TOOL_MAP:
             pkg = UV_TOOL_MAP[tool.id]
@@ -834,7 +903,12 @@ def install_library_tool(
                     cmd_text,
                 )
             dest_dir = pathlib.Path.home() / ".agents" / "skills" / tool.id
+            disabled_dir = pathlib.Path.home() / ".agents" / "skills_disabled" / tool.id
             dest_dir.parent.mkdir(parents=True, exist_ok=True)
+            if not dest_dir.exists() and disabled_dir.is_dir():
+                shutil.move(str(disabled_dir), str(dest_dir))
+            elif disabled_dir.exists():
+                _force_rmtree(disabled_dir)
             if (dest_dir / ".git").is_dir():
                 cmd = [git_exe, "-C", str(dest_dir), "pull", "--ff-only"]
             else:
@@ -925,6 +999,7 @@ def uninstall_library_tool(tool: ToolSpec, lang: str = "en") -> tuple[bool, str,
                 p = pathlib.Path.home() / ".agents" / sub / "caveman"
                 if p.exists():
                     _force_rmtree(p)
+            _remove_agy_skill_mirrors(pathlib.Path.home() / ".gemini" / "config" / "skills", "caveman")
             msg = "Caveman kuralı diskten kaldırıldı." if is_tr else "Uninstalled Caveman rule from disk."
             return True, msg, str(pathlib.Path.home() / ".agents")
 
@@ -992,9 +1067,12 @@ def uninstall_library_tool(tool: ToolSpec, lang: str = "en") -> tuple[bool, str,
             return False, f"uv ({clean_pkg}): {err_line}", raw
 
         if cmd_text.startswith("git clone "):
+            for sub in ("skills", "skills_disabled"):
+                p = pathlib.Path.home() / ".agents" / sub / tool.id
+                if p.exists():
+                    _force_rmtree(p)
+            _remove_agy_skill_mirrors(pathlib.Path.home() / ".gemini" / "config" / "skills", tool.id)
             dest_dir = pathlib.Path.home() / ".agents" / "skills" / tool.id
-            if dest_dir.exists():
-                _force_rmtree(dest_dir)
             msg = f"Skill klasörü silindi: {dest_dir}" if is_tr else f"Removed skill folder: {dest_dir}"
             return True, msg, str(dest_dir)
 

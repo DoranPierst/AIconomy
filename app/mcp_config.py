@@ -101,18 +101,98 @@ def _atomic_write_text(path: pathlib.Path, text: str) -> None:
         raise
 
 
+_AGY_SKILL_MARKER = ".aiconomy_managed"
+
+
+def _sanitize_skill_folder_name(raw_name: str) -> str:
+    clean = re.sub(r"[^A-Za-z0-9._-]+", "_", (raw_name or "").strip()).strip("._-")
+    return clean or "skill"
+
+
+def _remove_agy_skill_mirrors(agy_skills_root: pathlib.Path, mirror_prefix: str) -> None:
+    """Remove AIconomy-managed Antigravity skill mirror folders for ``mirror_prefix``."""
+    if not agy_skills_root.is_dir():
+        return
+    prefix_clean = _sanitize_skill_folder_name(mirror_prefix)
+    direct = agy_skills_root / prefix_clean
+    if direct.is_dir() and ((direct / _AGY_SKILL_MARKER).is_file() or prefix_clean == "caveman"):
+        _force_rmtree(direct)
+    for child in list(agy_skills_root.iterdir()):
+        if not child.is_dir():
+            continue
+        if child.name.startswith(f"{prefix_clean}__") and (child / _AGY_SKILL_MARKER).is_file():
+            _force_rmtree(child)
+
+
+def _copy_single_skill_to_agy(src_dir: pathlib.Path, dst_dir: pathlib.Path) -> None:
+    if dst_dir.exists():
+        _force_rmtree(dst_dir)
+    dst_dir.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(
+        src_dir,
+        dst_dir,
+        ignore=shutil.ignore_patterns(".git", "__pycache__", ".DS_Store"),
+    )
+    dst_skill_md = dst_dir / "SKILL.md"
+    if dst_skill_md.is_file():
+        raw_md = dst_skill_md.read_text(encoding="utf-8", errors="replace")
+        fixed_md = _dedupe_yaml_frontmatter_keys(raw_md)
+        if fixed_md != raw_md:
+            _atomic_write_text(dst_skill_md, fixed_md)
+    _atomic_write_text(dst_dir / _AGY_SKILL_MARKER, "managed-by-aiconomy\n")
+
+
+def _mirror_skill_dir_to_agy(
+    src_dir: pathlib.Path,
+    agy_skills_root: pathlib.Path,
+    mirror_prefix: str,
+) -> int:
+    """Mirror one or more SKILL.md folders from ``src_dir`` into Antigravity's global skills directory."""
+    _remove_agy_skill_mirrors(agy_skills_root, mirror_prefix)
+    if not src_dir.is_dir():
+        return 0
+    prefix_clean = _sanitize_skill_folder_name(mirror_prefix)
+    if (src_dir / "SKILL.md").is_file():
+        _copy_single_skill_to_agy(src_dir, agy_skills_root / prefix_clean)
+        return 1
+
+    copied = 0
+    seen_names: set[str] = set()
+    for skill_md in sorted(src_dir.rglob("SKILL.md")):
+        if ".git" in skill_md.parts:
+            continue
+        skill_dir = skill_md.parent
+        sub_name = _sanitize_skill_folder_name(skill_dir.name)
+        target_name = f"{prefix_clean}__{sub_name}"
+        if target_name in seen_names:
+            continue
+        seen_names.add(target_name)
+        _copy_single_skill_to_agy(skill_dir, agy_skills_root / target_name)
+        copied += 1
+    return copied
+
+
 def sync_caveman_on_disk(
     caveman_tool: ToolSpec,
     agents_root: pathlib.Path | None = None,
+    agy_skills_root: pathlib.Path | None = None,
     lang: str = "en",
 ) -> tuple[bool, str]:
-    """Enable/disable Caveman on disk and stamp the selected Lite/Full/Ultra directive into SKILL.md."""
+    """Enable/disable Caveman on disk, stamp Lite/Full/Ultra directive, and mirror to Antigravity when AGY is enabled."""
     is_tr = lang == "tr"
     root = agents_root or (pathlib.Path.home() / ".agents")
+    if agy_skills_root is not None:
+        agy_root = agy_skills_root
+    elif agents_root is not None:
+        agy_root = agents_root / "_agy_skills"
+    else:
+        agy_root = pathlib.Path.home() / ".gemini" / "config" / "skills"
+
     active_dir = root / "skills" / "caveman"
     disabled_dir = root / "skills_disabled" / "caveman"
 
     if not active_dir.is_dir() and not disabled_dir.is_dir():
+        _remove_agy_skill_mirrors(agy_root, "caveman")
         msg = (
             "Caveman kuralı diske kurulu değil."
             if is_tr
@@ -126,6 +206,7 @@ def sync_caveman_on_disk(
             if disabled_dir.exists():
                 _force_rmtree(disabled_dir)
             shutil.move(str(active_dir), str(disabled_dir))
+        _remove_agy_skill_mirrors(agy_root, "caveman")
         msg = (
             "Caveman disk üzerinde devre dışı bırakıldı."
             if is_tr
@@ -140,7 +221,7 @@ def sync_caveman_on_disk(
     m_idx = max(0, min(int(caveman_tool.mode_index), 2))
     skill_md = active_dir / "SKILL.md"
     if skill_md.is_file():
-        orig_txt = skill_md.read_text(encoding="utf-8")
+        orig_txt = skill_md.read_text(encoding="utf-8", errors="replace")
         cleaned = re.sub(
             rf"\n*{re.escape(CAVEMAN_BEGIN_TAG)}.*?{re.escape(CAVEMAN_END_TAG)}\s*",
             "",
@@ -152,6 +233,11 @@ def sync_caveman_on_disk(
         if new_txt != orig_txt:
             _atomic_write_text(skill_md, new_txt)
 
+    if caveman_tool.clients.get("AGY", True):
+        _mirror_skill_dir_to_agy(active_dir, agy_root, "caveman")
+    else:
+        _remove_agy_skill_mirrors(agy_root, "caveman")
+
     modes = localized_tool_modes(caveman_tool, lang)
     mode_lbl = modes[m_idx] if m_idx < len(modes) else "Full (-65%)"
     msg = (
@@ -160,6 +246,64 @@ def sync_caveman_on_disk(
         else f"Caveman enabled ({mode_lbl})."
     )
     return True, msg
+
+
+def sync_custom_skill_tools_on_disk(
+    tools: list[ToolSpec],
+    agents_root: pathlib.Path | None = None,
+    agy_skills_root: pathlib.Path | None = None,
+    lang: str = "en",
+) -> list[str]:
+    """Sync Git-cloned custom skill packs / rules between ~/.agents/skills and Antigravity's ~/.gemini/config/skills."""
+    is_tr = lang == "tr"
+    root = agents_root or (pathlib.Path.home() / ".agents")
+    if agy_skills_root is not None:
+        agy_root = agy_skills_root
+    elif agents_root is not None:
+        agy_root = agents_root / "_agy_skills"
+    else:
+        agy_root = pathlib.Path.home() / ".gemini" / "config" / "skills"
+
+    messages: list[str] = []
+    for t in tools:
+        if t.id in ("blender_skills", "caveman"):
+            continue
+        is_skill_tool = (
+            t.kind in ("skill_pack", "rule")
+            or (t.install_cmd or "").strip().startswith("git clone ")
+        )
+        if not is_skill_tool or t.mcp_server_key:
+            continue
+
+        active_dir = root / "skills" / t.id
+        disabled_dir = root / "skills_disabled" / t.id
+        if not active_dir.is_dir() and not disabled_dir.is_dir():
+            _remove_agy_skill_mirrors(agy_root, t.id)
+            continue
+
+        want_on = bool(getattr(t, "in_workspace", True) and t.enabled)
+        if not want_on:
+            if active_dir.is_dir():
+                disabled_dir.parent.mkdir(parents=True, exist_ok=True)
+                if disabled_dir.exists():
+                    _force_rmtree(disabled_dir)
+                shutil.move(str(active_dir), str(disabled_dir))
+            _remove_agy_skill_mirrors(agy_root, t.id)
+            messages.append(f"{t.name}: {'devre dışı' if is_tr else 'disabled'}")
+            continue
+
+        if not active_dir.is_dir() and disabled_dir.is_dir():
+            active_dir.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(disabled_dir), str(active_dir))
+
+        if t.clients.get("AGY", False):
+            mirrored = _mirror_skill_dir_to_agy(active_dir, agy_root, t.id)
+            messages.append(
+                f"{t.name}: AGY ({mirrored} skill)" if is_tr else f"{t.name}: AGY ({mirrored} skill(s))"
+            )
+        else:
+            _remove_agy_skill_mirrors(agy_root, t.id)
+    return messages
 
 
 def detect_installed_ai_clients(home_dir: pathlib.Path | None = None) -> set[str]:
