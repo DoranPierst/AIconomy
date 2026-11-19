@@ -13,7 +13,7 @@ Major feature, UX, and catalog release introducing passive runtime control, a cu
 
 ### Token Analytics, Priority Tags & Task Profile Wizard
 - **Clickable Token Usage Breakdown:** Clicking the footer token badge opens an interactive breakdown dialog showing per-client 200K context load (`AGY`, `CDX`, `CLD`, `CUR`), aligned percentage share bars, **Token Saver** vs **Capability Schema** roles, and instant inline toggles.
-- **Priority-Ordered 18-Color Capability Tags:** Every tool's tags are ordered strictly by core capability (e.g. `3D Modeling` first on Blender, `Unity` first on Unity MCP, `Shader & GPU` first on RenderDoc, `Coding & LSP` first on Serena, `Token Saver` first on Caveman), with 18 distinct semantic colors where **only each tool's #1 primary tag shines**.
+- **Priority-Ordered 18-Color Capability Tags:** Every tool's tags are ordered strictly by core capability (e.g. `3D Modeling` first on Blender, `Unity` first on Unity MCP, `Shader & GPU` first on RenderDoc, `Coding & LSP` first on Serena, `Token Saver` first on Caveman), with 18 distinct muted semantic colors that **glow only when selected from the top profile, tag filter, or profile wizard**.
 - **`+ Create Profile` Task Wizard & Refreshed Profiles:** Select what you are working on by tag to auto-filter matching tools (from your workspace or all 100 library tools), preview live schema token impact, and save/apply custom profiles in one click, alongside 5 refreshed built-in profiles and 6 Blender 94-skill subgroups.
 
 ### Curated 100-Tool Library & Dynamic DPAPI Vault

@@ -960,46 +960,46 @@ def _mix_hex(base_hex: str, tint_hex: str, ratio: float) -> str:
     return f"#{r:02x}{g:02x}{bl:02x}"
 
 
-def _tag_visual_tokens(tag_id: str, is_primary: bool, is_light: bool) -> tuple[str, str, str, str, str, int]:
+def _tag_visual_tokens(tag_id: str, is_highlighted: bool, is_light: bool) -> tuple[str, str, str, str, str, int]:
     acc_d, txt_d, acc_l, txt_l = TAG_COLOR_ANCHORS.get(
         tag_id, ("#3b82f6", "#93c5fd", "#2563eb", "#1e40af")
     )
     if is_light:
-        if is_primary:
-            bg = _mix_hex("#ffffff", acc_l, 0.16)
+        if is_highlighted:
+            bg = _mix_hex("#ffffff", acc_l, 0.17)
             border = acc_l
             fg = txt_l
-            hover_bg = _mix_hex("#ffffff", acc_l, 0.25)
+            hover_bg = _mix_hex("#ffffff", acc_l, 0.26)
             hover_border = txt_l
             weight = 700
         else:
-            bg = _mix_hex("#f8fafc", acc_l, 0.05)
-            border = _mix_hex("#cbd5e1", acc_l, 0.30)
-            fg = _mix_hex("#64748b", txt_l, 0.48)
-            hover_bg = _mix_hex("#f1f5f9", acc_l, 0.13)
-            hover_border = _mix_hex("#94a3b8", acc_l, 0.60)
+            bg = _mix_hex("#f8fafc", acc_l, 0.03)
+            border = _mix_hex("#dbe2ec", acc_l, 0.16)
+            fg = _mix_hex("#64748b", txt_l, 0.25)
+            hover_bg = _mix_hex("#f1f5f9", acc_l, 0.12)
+            hover_border = _mix_hex("#94a3b8", acc_l, 0.50)
             weight = 500
     else:
-        if is_primary:
-            bg = _mix_hex("#0b1017", acc_d, 0.27)
+        if is_highlighted:
+            bg = _mix_hex("#0b1017", acc_d, 0.28)
             border = acc_d
             fg = txt_d
             hover_bg = _mix_hex("#0b1017", acc_d, 0.38)
             hover_border = txt_d
             weight = 700
         else:
-            bg = _mix_hex("#101722", acc_d, 0.06)
-            border = _mix_hex("#1e293b", acc_d, 0.28)
-            fg = _mix_hex("#7c8ca1", txt_d, 0.44)
-            hover_bg = _mix_hex("#141e2d", acc_d, 0.16)
-            hover_border = _mix_hex("#334155", acc_d, 0.65)
+            bg = _mix_hex("#0f1621", acc_d, 0.035)
+            border = _mix_hex("#1b2535", acc_d, 0.16)
+            fg = _mix_hex("#69798f", txt_d, 0.25)
+            hover_bg = _mix_hex("#141e2d", acc_d, 0.15)
+            hover_border = _mix_hex("#334155", acc_d, 0.58)
             weight = 500
     return bg, border, fg, hover_bg, hover_border, weight
 
 
-def tag_button_qss(tag_id: str, is_primary: bool, is_light: bool) -> str:
-    """Return clickable QPushButton QSS where every tag has its own hue, but only primary (1st) tags shine."""
-    bg, border, fg, h_bg, h_border, weight = _tag_visual_tokens(tag_id, is_primary, is_light)
+def tag_button_qss(tag_id: str, is_highlighted: bool = False, is_light: bool = False) -> str:
+    """Return clickable QPushButton QSS: soft/muted hue by default, glowing only when selected from top."""
+    bg, border, fg, h_bg, h_border, weight = _tag_visual_tokens(tag_id, is_highlighted, is_light)
     return (
         f"QPushButton {{ background-color: {bg}; border: 1px solid {border}; border-radius: 3px; "
         f"color: {fg}; padding: 0px 6px; font-size: 10px; font-weight: {weight}; }}"
@@ -1007,41 +1007,65 @@ def tag_button_qss(tag_id: str, is_primary: bool, is_light: bool) -> str:
     )
 
 
-def tag_pill_qss(tag_id: str, is_primary: bool, is_light: bool) -> str:
-    """Return non-clickable QLabel QSS matching tag_button_qss (primary glows, secondary stays muted)."""
-    bg, border, fg, _h_bg, _h_border, weight = _tag_visual_tokens(tag_id, is_primary, is_light)
+def tag_pill_qss(tag_id: str, is_highlighted: bool = False, is_light: bool = False) -> str:
+    """Return non-clickable QLabel QSS: soft/muted hue by default, glowing only when selected from top."""
+    bg, border, fg, _h_bg, _h_border, weight = _tag_visual_tokens(tag_id, is_highlighted, is_light)
     return (
         f"background-color: {bg}; border: 1px solid {border}; border-radius: 3px; "
         f"color: {fg}; padding: 0px 6px; font-size: 10px; font-weight: {weight};"
     )
 
 
+def active_tag_combo_qss(tag_id: str, is_light: bool = False) -> str:
+    """Highlight the top tag filter QComboBox in the selected tag's signature color when filtered."""
+    if not tag_id or tag_id == "ALL" or tag_id not in TAG_COLOR_ANCHORS:
+        return ""
+    bg, border, fg, _h_bg, _h_border, _w = _tag_visual_tokens(tag_id, True, is_light)
+    url = _resolve_asset_url("chevron_light.png" if is_light else "chevron_dark.png")
+    popup_bg = "#ffffff" if is_light else "#111822"
+    popup_fg = "#0f172a" if is_light else "#e6edf3"
+    popup_bd = "#cbd5e1" if is_light else "#263549"
+    sel_bg = "#dbeafe" if is_light else "#1e3a5f"
+    sel_fg = "#0f172a" if is_light else "#f8fafc"
+    return (
+        f"QComboBox {{ background-color: {bg}; border: 1px solid {border}; border-radius: 6px; "
+        f"padding: 5px 9px; color: {fg}; font-weight: 700; }}"
+        f"QComboBox::drop-down {{ subcontrol-origin: padding; subcontrol-position: top right; width: 24px; border: none; }}"
+        f"QComboBox::down-arrow {{ image: url({url}); width: 12px; height: 12px; margin-right: 4px; }}"
+        f"QComboBox QAbstractItemView {{ background-color: {popup_bg}; border: 1px solid {popup_bd}; "
+        f"color: {popup_fg}; selection-background-color: {sel_bg}; selection-color: {sel_fg}; "
+        f"font-weight: 500; outline: none; }}"
+    )
+
+
 def wizard_chip_qss(tag_id: str, is_light: bool, is_benefit: bool = False) -> str:
-    """Return checkable QPushButton QSS for ProfileWizardDialog tag chips with per-tag signature colors."""
+    """Return checkable QPushButton QSS for ProfileWizardDialog: calm muted idle, glowing when checked."""
     acc_d, txt_d, acc_l, txt_l = TAG_COLOR_ANCHORS.get(
         tag_id, ("#3b82f6", "#93c5fd", "#2563eb", "#1e40af")
     )
     pad = "5px 14px" if is_benefit else "5px 9px"
     if is_light:
-        idle_bg = _mix_hex("#ffffff", acc_l, 0.06)
-        idle_bd = _mix_hex("#cbd5e1", acc_l, 0.36)
-        idle_fg = _mix_hex("#334155", txt_l, 0.55)
-        hov_bg = _mix_hex("#f8fafc", acc_l, 0.14)
+        idle_bg = _mix_hex("#f8fafc", acc_l, 0.035)
+        idle_bd = _mix_hex("#dbe2ec", acc_l, 0.18)
+        idle_fg = _mix_hex("#64748b", txt_l, 0.26)
+        hov_bg = _mix_hex("#f1f5f9", acc_l, 0.12)
+        hov_fg = _mix_hex("#334155", txt_l, 0.65)
         chk_bg = _mix_hex("#ffffff", acc_l, 0.20)
         chk_bd = acc_l
         chk_fg = txt_l
     else:
-        idle_bg = _mix_hex("#111824", acc_d, 0.08)
-        idle_bd = _mix_hex("#223044", acc_d, 0.35)
-        idle_fg = _mix_hex("#94a3b8", txt_d, 0.50)
-        hov_bg = _mix_hex("#141e2d", acc_d, 0.18)
+        idle_bg = _mix_hex("#101722", acc_d, 0.04)
+        idle_bd = _mix_hex("#1e293b", acc_d, 0.18)
+        idle_fg = _mix_hex("#7b8ba1", txt_d, 0.26)
+        hov_bg = _mix_hex("#141e2d", acc_d, 0.15)
+        hov_fg = _mix_hex("#cbd5e1", txt_d, 0.65)
         chk_bg = _mix_hex("#0b1017", acc_d, 0.32)
         chk_bd = acc_d
         chk_fg = txt_d
     return (
         f"QPushButton {{ background-color: {idle_bg}; border: 1px solid {idle_bd}; border-radius: 6px; "
-        f"color: {idle_fg}; padding: {pad}; font-size: 11px; font-weight: 600; }}"
-        f"QPushButton:hover {{ background-color: {hov_bg}; border-color: {chk_bd}; }}"
+        f"color: {idle_fg}; padding: {pad}; font-size: 11px; font-weight: 500; }}"
+        f"QPushButton:hover {{ background-color: {hov_bg}; border-color: {chk_bd}; color: {hov_fg}; }}"
         f"QPushButton:checked {{ background-color: {chk_bg}; border: 1px solid {chk_bd}; "
         f"color: {chk_fg}; font-weight: 700; }}"
     )

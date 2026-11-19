@@ -40,12 +40,24 @@ class ToolInfoDialog(QDialog):
 
         if tool.tags:
             is_light = parent.meta.get("theme", "dark") == "light"
+            cur_tab = parent.tabs.currentIndex() if hasattr(parent, "tabs") else 0
+            if cur_tab == 1 and hasattr(parent, "plug_tag_cmb"):
+                flt_tag = str(parent.plug_tag_cmb.currentData() or "ALL")
+                hi_tags = {flt_tag} if flt_tag != "ALL" else set()
+            else:
+                flt_tag = str(parent.tag_cmb.currentData() or "ALL") if hasattr(parent, "tag_cmb") else "ALL"
+                if flt_tag != "ALL":
+                    hi_tags = {flt_tag}
+                elif tool.enabled and hasattr(parent, "get_active_profile_tags"):
+                    hi_tags = parent.get_active_profile_tags()
+                else:
+                    hi_tags = set()
             tags_row = QHBoxLayout()
             tags_row.setSpacing(6)
-            for tg_idx, tg in enumerate(tool.tags):
+            for tg in tool.tags:
                 pill = QLabel(tag_label(tg, lang))
                 pill.setFixedHeight(18)
-                pill.setStyleSheet(tag_pill_qss(tg, is_primary=(tg_idx == 0), is_light=is_light))
+                pill.setStyleSheet(tag_pill_qss(tg, is_highlighted=(tg in hi_tags), is_light=is_light))
                 tags_row.addWidget(pill)
             tags_row.addStretch()
             lay.addLayout(tags_row)

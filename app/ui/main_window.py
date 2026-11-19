@@ -631,6 +631,19 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, QMainWindow):
             self.meta["custom_presets"] = raw
         return raw
 
+    def get_active_profile_tags(self) -> set[str]:
+        """Return the canonical tag IDs associated with the currently selected top profile, if any."""
+        cur_active = str(self.meta.get("active_profile", "") or "")
+        if cur_active.startswith("builtin:"):
+            p_key = cur_active.split(":", 1)[1]
+            return {str(x) for x in PROFILES.get(p_key, {}).get("tags", [])}
+        if cur_active.startswith("custom:"):
+            p_name = cur_active.split(":", 1)[1]
+            pdata = self._get_custom_presets().get(p_name, {})
+            if isinstance(pdata, dict) and isinstance(pdata.get("tags"), list):
+                return {str(x) for x in pdata["tags"]}
+        return set()
+
     def _add_combo_header(self, cmb: QComboBox, title: str) -> None:
         model = cmb.model()
         if isinstance(model, QStandardItemModel):
@@ -1164,14 +1177,16 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, QMainWindow):
                 if cv_tool:
                     sync_caveman_on_disk(cv_tool, lang=lang_snap)
                 sync_mcp_json_clients(tools_snap, self.vault, proj_snap, lang=lang_snap)
-                live_map = scan_live_process_locations(lang=lang_snap)
+                eff_lang = self.lang
+                live_map = scan_live_process_locations(lang=eff_lang)
                 out = []
                 for x in ws_snap:
                     ok, h_state, ping_str, ms, detail, loc_detail = probe_tool_health(
-                        x, len(skills_snap), proj_snap, live_map, lang=lang_snap, missing_required_keys=missing_keys
+                        x, len(skills_snap), proj_snap, live_map, lang=eff_lang, missing_required_keys=missing_keys
                     )
                     out.append((x.id, ok, h_state, ping_str, ms, detail, loc_detail))
-            safe_emit(self.bridge.health_done, out, live_map, True)
+            if self.lang == eff_lang:
+                safe_emit(self.bridge.health_done, out, live_map, True)
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -1580,14 +1595,16 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, QMainWindow):
 
         def worker() -> None:
             try:
-                live_map = scan_live_process_locations(lang=lang_snap)
+                eff_lang = self.lang
+                live_map = scan_live_process_locations(lang=eff_lang)
                 out = []
                 for t in snap_tools:
                     ok, h_state, ping_str, ms, detail, loc_detail = probe_tool_health(
-                        t, sk_cnt, proj_snap, live_map, lang=lang_snap, missing_required_keys=missing_keys
+                        t, sk_cnt, proj_snap, live_map, lang=eff_lang, missing_required_keys=missing_keys
                     )
                     out.append((t.id, ok, h_state, ping_str, ms, detail, loc_detail))
-                safe_emit(self.bridge.health_done, out, live_map, True)
+                if self.lang == eff_lang:
+                    safe_emit(self.bridge.health_done, out, live_map, True)
             finally:
                 self._live_watch_busy = False
 
@@ -1662,8 +1679,10 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, QMainWindow):
     def run_health_scan(self) -> None:
         self.seconds_left = 30
         if self._health_busy:
+            self._health_pending = True
             return
         self._health_busy = True
+        self._health_pending = False
         self.set_status(tr(self.lang, "msg_scanning"))
         snap_tools = copy.deepcopy(self.workspace_tools())
         sk_cnt = len(self.active_skills)
@@ -1683,7 +1702,11 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, QMainWindow):
                     out.append((t.id, ok, h_state, ping_str, ms, detail, loc_detail))
             finally:
                 self._health_busy = False
-            safe_emit(self.bridge.health_done, out, live_map, False)
+            if self.lang == lang_snap:
+                safe_emit(self.bridge.health_done, out, live_map, False)
+            else:
+                self._health_pending = True
+                safe_emit(self.bridge.health_done, [], None, True)
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -1693,6 +1716,11 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, QMainWindow):
         live_map: dict[str, str] | None = None,
         silent: bool = False,
     ) -> None:
+        if getattr(self, "_health_pending", False) and not self._health_busy:
+            self._health_pending = False
+            QTimer.singleShot(20, self.run_health_scan)
+            if not results:
+                return
         if isinstance(live_map, dict):
             self._latest_live_map = live_map
         by_id = {t.id: t for t in self.tools}

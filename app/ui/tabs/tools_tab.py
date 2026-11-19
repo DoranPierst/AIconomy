@@ -42,7 +42,7 @@ from ...processes import probe_tool_health, scan_live_process_locations
 from ...tokens import compute_token_breakdown, fmt_tokens
 from ..dialogs.tool_info import ToolInfoDialog
 from ..icons import icon_color, make_icon
-from ..theme import tag_button_qss
+from ..theme import active_tag_combo_qss, tag_button_qss
 from ..widgets import AiMatrixHeaderView, HoverTableWidget, StatusBadgeWidget, ToggleSwitch
 
 
@@ -310,6 +310,8 @@ class ToolsTabMixin:
         tf = str(self.tag_cmb.currentData() or "ALL")
         pf = self.proj_filter_cmb.currentData() or "ALL"
         is_light = self.meta.get("theme", "dark") == "light"
+        self.tag_cmb.setStyleSheet(active_tag_combo_qss(tf, is_light=is_light))
+        profile_tags = self.get_active_profile_tags()
 
         vis_codes = self.get_visible_client_codes()
         ai_col_w = self.ai_header.refresh_visible_clients(vis_codes)
@@ -442,10 +444,11 @@ class ToolsTabMixin:
                 tg_l = QHBoxLayout()
                 tg_l.setContentsMargins(0, 0, 0, 0)
                 tg_l.setSpacing(5)
-                for tg_idx, tg in enumerate(t.tags[:3]):
+                for tg in t.tags[:3]:
                     tg_txt = tag_label(tg, self.lang)
+                    is_hi = (tg == tf) if tf != "ALL" else bool(t.enabled and tg in profile_tags)
                     tg_btn = QPushButton(tg_txt.replace("&", "&&"))
-                    tg_btn.setStyleSheet(tag_button_qss(tg, is_primary=(tg_idx == 0), is_light=is_light))
+                    tg_btn.setStyleSheet(tag_button_qss(tg, is_highlighted=is_hi, is_light=is_light))
                     tg_btn.setFixedHeight(16)
                     tg_btn.setCursor(Qt.CursorShape.PointingHandCursor)
                     tg_btn.setToolTip(tr(self.lang, "tag_filter_tip", tag=tg_txt))

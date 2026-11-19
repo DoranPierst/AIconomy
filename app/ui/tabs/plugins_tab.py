@@ -36,7 +36,7 @@ from ...tokens import fmt_tokens
 from ...updater import parse_semver
 from ..dialogs.add_repo import AddRepoDialog
 from ..dialogs.tool_info import ToolInfoDialog
-from ..theme import tag_button_qss
+from ..theme import active_tag_combo_qss, tag_button_qss
 from ..workers import safe_emit
 
 
@@ -269,6 +269,8 @@ class PluginsTabMixin:
         filtered = self._filtered_plugin_tools()
         is_light = self.meta.get("theme", "dark") == "light"
         muted_col = "#64748b" if is_light else "#94a3b8"
+        tag_f = str(self.plug_tag_cmb.currentData() or "ALL")
+        self.plug_tag_cmb.setStyleSheet(active_tag_combo_qss(tag_f, is_light=is_light))
 
         if not self.checking_plugins_busy:
             base_txt = tr(
@@ -388,10 +390,11 @@ class PluginsTabMixin:
                 tg_row = QHBoxLayout()
                 tg_row.setContentsMargins(0, 0, 0, 0)
                 tg_row.setSpacing(5)
-                for tg_idx, tg in enumerate(t.tags[:3]):
+                for tg in t.tags[:3]:
                     tg_txt = tag_label(tg, self.lang)
+                    is_hi = tag_f != "ALL" and tg == tag_f
                     tg_btn = QPushButton(tg_txt.replace("&", "&&"))
-                    tg_btn.setStyleSheet(tag_button_qss(tg, is_primary=(tg_idx == 0), is_light=is_light))
+                    tg_btn.setStyleSheet(tag_button_qss(tg, is_highlighted=is_hi, is_light=is_light))
                     tg_btn.setFixedHeight(16)
                     tg_btn.setCursor(Qt.CursorShape.PointingHandCursor)
                     tg_btn.setToolTip(tr(self.lang, "tag_filter_tip", tag=tg_txt))

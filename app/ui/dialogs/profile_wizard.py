@@ -393,10 +393,10 @@ class ProfileWizardDialog(QDialog):
                     )
                     top_r.addWidget(lib_pill)
 
-                for tg_idx, tg in enumerate(t.tags):
+                for tg in t.tags:
                     t_pill = QLabel(tag_label(tg, self.lang))
                     t_pill.setFixedHeight(16)
-                    t_pill.setStyleSheet(tag_pill_qss(tg, is_primary=(tg_idx == 0), is_light=is_light))
+                    t_pill.setStyleSheet(tag_pill_qss(tg, is_highlighted=(tg in sel_set), is_light=is_light))
                     top_r.addWidget(t_pill)
 
                 if t.id == "blender_skills":

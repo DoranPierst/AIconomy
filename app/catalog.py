@@ -945,26 +945,31 @@ PROFILES: dict[str, dict[str, Any]] = {
         "title_key": "prof_desktop_coding_title",
         "desc_key": "prof_desktop_coding_desc",
         "enable": {"serena", "context7", "caveman"},
+        "tags": ["coding_lsp", "desktop_ui"],
     },
     "unity_shader": {
         "title_key": "prof_unity_shader_title",
         "desc_key": "prof_unity_shader_desc",
         "enable": {"unity_mcp", "unity_pipeline", "renderdoc_mcp", "serena", "context7", "caveman"},
+        "tags": ["unity", "shader_gpu"],
     },
     "modeling_3d": {
         "title_key": "prof_modeling_3d_title",
         "desc_key": "prof_modeling_3d_desc",
         "enable": {"blender_mcp", "blender_skills", "trellis", "gltf_transform", "elevenlabs_mcp", "caveman"},
+        "tags": ["modeling_3d", "style_3d"],
     },
     "web_security": {
         "title_key": "prof_web_security_title",
         "desc_key": "prof_web_security_desc",
         "enable": {"chrome_devtools", "bla", "serena", "context7", "caveman"},
+        "tags": ["web_browser", "security"],
     },
     "token_saver_only": {
         "title_key": "prof_token_saver_only_title",
         "desc_key": "prof_token_saver_only_desc",
         "enable": {"caveman"},
+        "tags": ["token_saver"],
     },
 }
 
