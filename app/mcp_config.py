@@ -202,7 +202,18 @@ def sync_caveman_on_disk(
         )
         return False, msg
 
-    if not (runtime_active and getattr(caveman_tool, "in_workspace", True) and caveman_tool.enabled):
+    want_base = bool(runtime_active and getattr(caveman_tool, "in_workspace", True) and caveman_tool.enabled)
+    want_agy = bool(want_base and caveman_tool.clients.get("AGY", False))
+    want_agents = bool(
+        want_base
+        and (
+            caveman_tool.clients.get("CDX", False)
+            or caveman_tool.clients.get("CLD", False)
+            or caveman_tool.clients.get("CUR", False)
+        )
+    )
+
+    if not want_agy and not want_agents:
         if active_dir.is_dir():
             disabled_dir.parent.mkdir(parents=True, exist_ok=True)
             if disabled_dir.exists():
@@ -216,12 +227,23 @@ def sync_caveman_on_disk(
         )
         return True, msg
 
-    if not active_dir.is_dir() and disabled_dir.is_dir():
-        active_dir.parent.mkdir(parents=True, exist_ok=True)
-        shutil.move(str(disabled_dir), str(active_dir))
+    # Position master copy according to whether Codex/Claude/Cursor (~/.agents/skills) is enabled
+    if want_agents:
+        if not active_dir.is_dir() and disabled_dir.is_dir():
+            active_dir.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(disabled_dir), str(active_dir))
+        master_dir = active_dir
+    else:
+        # AGY-only mode: keep ~/.agents/skills/caveman absent so Codex/Claude/Cursor do NOT see it
+        if active_dir.is_dir():
+            disabled_dir.parent.mkdir(parents=True, exist_ok=True)
+            if disabled_dir.exists():
+                _force_rmtree(disabled_dir)
+            shutil.move(str(active_dir), str(disabled_dir))
+        master_dir = disabled_dir
 
     m_idx = max(0, min(int(caveman_tool.mode_index), 2))
-    skill_md = active_dir / "SKILL.md"
+    skill_md = master_dir / "SKILL.md"
     if skill_md.is_file():
         orig_txt = skill_md.read_text(encoding="utf-8", errors="replace")
         cleaned = re.sub(
@@ -235,8 +257,8 @@ def sync_caveman_on_disk(
         if new_txt != orig_txt:
             _atomic_write_text(skill_md, new_txt)
 
-    if caveman_tool.clients.get("AGY", True):
-        _mirror_skill_dir_to_agy(active_dir, agy_root, "caveman")
+    if want_agy:
+        _mirror_skill_dir_to_agy(master_dir, agy_root, "caveman")
     else:
         _remove_agy_skill_mirrors(agy_root, "caveman")
 
@@ -285,7 +307,12 @@ def sync_custom_skill_tools_on_disk(
             continue
 
         want_on = bool(runtime_active and getattr(t, "in_workspace", True) and t.enabled)
-        if not want_on:
+        want_agy = bool(want_on and t.clients.get("AGY", False))
+        want_agents = bool(
+            want_on
+            and (t.clients.get("CDX", False) or t.clients.get("CLD", False) or t.clients.get("CUR", False))
+        )
+        if not want_agy and not want_agents:
             if active_dir.is_dir():
                 disabled_dir.parent.mkdir(parents=True, exist_ok=True)
                 if disabled_dir.exists():
@@ -295,12 +322,21 @@ def sync_custom_skill_tools_on_disk(
             messages.append(f"{t.name}: {'devre dışı' if is_tr else 'disabled'}")
             continue
 
-        if not active_dir.is_dir() and disabled_dir.is_dir():
-            active_dir.parent.mkdir(parents=True, exist_ok=True)
-            shutil.move(str(disabled_dir), str(active_dir))
+        if want_agents:
+            if not active_dir.is_dir() and disabled_dir.is_dir():
+                active_dir.parent.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(disabled_dir), str(active_dir))
+            master_dir = active_dir
+        else:
+            if active_dir.is_dir():
+                disabled_dir.parent.mkdir(parents=True, exist_ok=True)
+                if disabled_dir.exists():
+                    _force_rmtree(disabled_dir)
+                shutil.move(str(active_dir), str(disabled_dir))
+            master_dir = disabled_dir
 
-        if t.clients.get("AGY", False):
-            mirrored = _mirror_skill_dir_to_agy(active_dir, agy_root, t.id)
+        if want_agy:
+            mirrored = _mirror_skill_dir_to_agy(master_dir, agy_root, t.id)
             messages.append(
                 f"{t.name}: AGY ({mirrored} skill)" if is_tr else f"{t.name}: AGY ({mirrored} skill(s))"
             )

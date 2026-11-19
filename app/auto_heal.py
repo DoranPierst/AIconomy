@@ -423,15 +423,19 @@ def detect_background_heal_plans(
             active_md = home / ".agents" / "skills" / "caveman" / "SKILL.md"
             disabled_md = home / ".agents" / "skills_disabled" / "caveman" / "SKILL.md"
             agy_md = home / ".gemini" / "config" / "skills" / "caveman" / "SKILL.md"
-            needs_mirror = bool(t.clients.get("AGY", True) and not agy_md.is_file())
-            if (not active_md.is_file() and disabled_md.is_file()) or (active_md.is_file() and needs_mirror):
+            has_any_copy = active_md.is_file() or disabled_md.is_file()
+            want_agy = bool(t.clients.get("AGY", False))
+            want_agents = bool(t.clients.get("CDX", False) or t.clients.get("CLD", False) or t.clients.get("CUR", False))
+            agy_drift = (want_agy and not agy_md.is_file()) or (not want_agy and agy_md.is_file())
+            agents_drift = (want_agents and not active_md.is_file()) or (not want_agents and active_md.is_file())
+            if has_any_copy and (agy_drift or agents_drift):
                 _add(
                     HealPlan(
                         action_id="sync_skills_mirror",
                         tool_id=t.id,
                         tool_name=t.name,
                         label="Skill Senkronla" if is_tr else "Sync Skills",
-                        detail="Reconcile Caveman skill and Antigravity mirror",
+                        detail="Reconcile Caveman skill and per-client isolation",
                         safe_auto=True,
                     )
                 )

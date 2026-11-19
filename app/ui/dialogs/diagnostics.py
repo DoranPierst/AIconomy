@@ -1,12 +1,14 @@
-"""Unified Diagnostics dialog: E2E connection tests, status scan, report copy, and stuck port cleanup."""
+"""Unified Diagnostics dialog: per-client & global E2E MCP tests, dry-run when stopped, reports, and port cleanup."""
 from __future__ import annotations
 
 import copy
 import threading
 from typing import TYPE_CHECKING
 
+from PySide6.QtCore import QTimer
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
+    QComboBox,
     QDialog,
     QFrame,
     QHBoxLayout,
@@ -19,7 +21,8 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
-from ...diagnostics import test_tool_connection_e2e
+from ...catalog import AI_CLIENTS
+from ...diagnostics import inspect_client_config_file, test_tool_for_client_e2e
 from ...i18n import tr
 from ..workers import WorkerBridge, safe_emit
 
@@ -28,7 +31,7 @@ if TYPE_CHECKING:
 
 
 class DiagnosticsDialog(QDialog):
-    """Run live E2E MCP handshakes, copy status reports, and release stuck local ports."""
+    """Run live or dry-run E2E MCP handshakes globally or per AI client (AGY/CDX/CLD/CUR), copy reports, free ports."""
 
     def __init__(self, parent: "MainWindow") -> None:
         super().__init__(parent)
@@ -38,10 +41,11 @@ class DiagnosticsDialog(QDialog):
         self._running = False
         self._bridge = WorkerBridge()
         self._bridge.conn_test_row.connect(self._on_row_result)
+        self._bridge.conn_test_cfg.connect(self._on_client_cfg_status)
         self._bridge.conn_test_done.connect(self._on_all_done)
 
         self.setWindowTitle(tr(self.lang, "diag_title"))
-        self.resize(860, 580)
+        self.resize(900, 610)
 
         lay = QVBoxLayout(self)
         lay.setSpacing(10)
@@ -51,9 +55,23 @@ class DiagnosticsDialog(QDialog):
         lay.addWidget(info)
 
         top_actions = QHBoxLayout()
+        top_actions.setSpacing(6)
+
+        lbl_target = QLabel(tr(self.lang, "diag_target_lbl"))
+        lbl_target.setStyleSheet("font-weight: 600;")
+        top_actions.addWidget(lbl_target)
+
+        self.client_cmb = QComboBox()
+        self.client_cmb.setMinimumWidth(165)
+        self.client_cmb.addItem(tr(self.lang, "diag_target_all"), "ALL")
+        for code, full_name in AI_CLIENTS:
+            self.client_cmb.addItem(f"{full_name} ({code})", code)
+        self.client_cmb.currentIndexChanged.connect(lambda _idx: self.start_tests(force_dry_run=True))
+        top_actions.addWidget(self.client_cmb)
+
         self.btn_retest = QPushButton(tr(self.lang, "diag_btn_retest"))
         self.btn_retest.setObjectName("primaryBtn")
-        self.btn_retest.clicked.connect(self.start_tests)
+        self.btn_retest.clicked.connect(lambda: self.start_tests(force_dry_run=True))
         top_actions.addWidget(self.btn_retest)
 
         self.btn_start_now = QPushButton(tr(self.lang, "diag_btn_start_now"))
@@ -76,6 +94,12 @@ class DiagnosticsDialog(QDialog):
         btn_copy_all.clicked.connect(lambda: self.main_win.copy_tools_status_report(enabled_only=False))
         top_actions.addWidget(btn_copy_all)
         lay.addLayout(top_actions)
+
+        self.client_cfg_lbl = QLabel("")
+        self.client_cfg_lbl.setWordWrap(True)
+        self.client_cfg_lbl.setStyleSheet("padding: 6px 10px; border-radius: 6px; font-weight: 600;")
+        self.client_cfg_lbl.hide()
+        lay.addWidget(self.client_cfg_lbl)
 
         self.tbl = QTableWidget(len(self.tools), 4, self)
         self.tbl.setAlternatingRowColors(True)
@@ -103,7 +127,7 @@ class DiagnosticsDialog(QDialog):
         self.detail_box.setPlaceholderText(tr(self.lang, "diag_raw_ph"))
         lay.addWidget(self.detail_box)
 
-        # Stuck port release bar (moved from Logs tab per audit)
+        # Stuck port release bar
         port_card = QFrame()
         port_card.setObjectName("card")
         pl = QHBoxLayout(port_card)
@@ -130,11 +154,12 @@ class DiagnosticsDialog(QDialog):
         self._raw_details: list[str] = [""] * len(self.tools)
         self._ok_count = 0
         self._fail_count = 0
-        self.start_tests()
+        self.start_tests(force_dry_run=False)
+
+    def _selected_client_code(self) -> str:
+        return str(self.client_cmb.currentData() or "ALL")
 
     def _handle_start_and_retest(self) -> None:
-        from PySide6.QtCore import QTimer
-
         if self.main_win._runtime_state == "stopped":
             self.main_win.start_all_tools()
             self.btn_start_now.setEnabled(False)
@@ -145,7 +170,7 @@ class DiagnosticsDialog(QDialog):
                     return
                 if self.main_win._runtime_state == "running":
                     self.btn_start_now.setEnabled(True)
-                    self.start_tests()
+                    self.start_tests(force_dry_run=False)
                 elif self.main_win._runtime_state == "starting":
                     QTimer.singleShot(350, _poll_ready)
                 else:
@@ -153,9 +178,9 @@ class DiagnosticsDialog(QDialog):
 
             QTimer.singleShot(350, _poll_ready)
         elif self.main_win._runtime_state == "running":
-            self.start_tests()
+            self.start_tests(force_dry_run=False)
 
-    def start_tests(self) -> None:
+    def start_tests(self, force_dry_run: bool = False) -> None:
         if self._running:
             return
         self.tools = [copy.deepcopy(t) for t in self.main_win.tools if getattr(t, "in_workspace", True) and t.enabled]
@@ -166,16 +191,22 @@ class DiagnosticsDialog(QDialog):
         self.btn_retest.setEnabled(False)
         self._raw_details = [""] * len(self.tools)
 
+        is_rt_running = self.main_win._runtime_state == "running"
+        target_client = self._selected_client_code()
+        self.btn_retest.setText(tr(self.lang, "diag_btn_retest" if is_rt_running else "diag_btn_dryrun"))
+
         if not self.tools:
             self.btn_start_now.hide()
+            self.client_cfg_lbl.hide()
             self.summary_lbl.setText(tr(self.lang, "diag_no_enabled"))
             self._running = False
             self.btn_retest.setEnabled(True)
             return
 
-        if self.main_win._runtime_state != "running":
+        if not is_rt_running and not force_dry_run:
             self.btn_start_now.show()
             self.btn_start_now.setEnabled(self.main_win._runtime_state == "stopped")
+            self.client_cfg_lbl.hide()
             stopped_lbl = tr(self.lang, "st_stopped_standby")
             stopped_det = tr(self.lang, "diag_stopped_row")
             for r, t in enumerate(self.tools):
@@ -191,7 +222,14 @@ class DiagnosticsDialog(QDialog):
             self.btn_retest.setEnabled(True)
             return
 
-        self.btn_start_now.hide()
+        if is_rt_running:
+            self.btn_start_now.hide()
+        else:
+            self.btn_start_now.show()
+            self.btn_start_now.setEnabled(self.main_win._runtime_state == "stopped")
+
+        if target_client == "ALL":
+            self.client_cfg_lbl.hide()
 
         self.summary_lbl.setText(tr(self.lang, "diag_running", n=len(self.tools)))
         for r, t in enumerate(self.tools):
@@ -204,26 +242,61 @@ class DiagnosticsDialog(QDialog):
         proj = dict(self.main_win.projects_map)
         sk = len(self.main_win.active_skills)
         lang = self.lang
+        rt_active = bool(is_rt_running)
+        client_snap = target_client
 
         def worker() -> None:
             from ...diagnostics import measure_tool_schema_tokens
             from ...tokens import schema_cache_key
 
+            if client_snap != "ALL":
+                parse_ok, cfg_msg, _act, _dis, _cpath = inspect_client_config_file(
+                    client_snap, projects_map=proj, lang=lang
+                )
+                banner_txt = f"[{client_snap}] {cfg_msg}"
+                if parse_ok and rt_active:
+                    banner_txt = f"{banner_txt}  —  {tr(lang, 'diag_client_reload_hint')}"
+                safe_emit(self._bridge.conn_test_cfg, parse_ok, banner_txt)
+
             measured: dict[str, int] = {}
             for idx, t in enumerate(snap):
-                ok, ms, msg, raw = test_tool_connection_e2e(t, self.main_win.vault, proj, sk, lang=lang)
-                safe_emit(self._bridge.conn_test_row, idx, ok, ms, msg, raw)
-                if ok and t.id in ("serena", "unity_mcp"):
+                ok, ms, msg, raw, badge = test_tool_for_client_e2e(
+                    t,
+                    client_snap,
+                    self.main_win.vault,
+                    proj,
+                    sk,
+                    runtime_active=rt_active,
+                    lang=lang,
+                )
+                safe_emit(self._bridge.conn_test_row, idx, ok, ms, msg, raw, badge)
+                if ok and rt_active and client_snap == "ALL" and t.id in ("serena", "unity_mcp"):
                     tok_val = measure_tool_schema_tokens(t, self.main_win.vault)
                     if isinstance(tok_val, int) and tok_val > 0:
                         measured[schema_cache_key(t)] = tok_val
             if measured:
                 safe_emit(self.main_win.bridge.schema_measure_done, measured, len(measured))
-            safe_emit(self._bridge.conn_test_done)
+            safe_emit(self._bridge.conn_test_done, not rt_active)
 
         threading.Thread(target=worker, daemon=True).start()
 
-    def _on_row_result(self, row: int, ok: bool, ms: int, msg: str, raw: str) -> None:
+    def _on_client_cfg_status(self, parse_ok: bool, msg: str) -> None:
+        self.client_cfg_lbl.setText(msg)
+        if parse_ok:
+            self.client_cfg_lbl.setStyleSheet(
+                "padding: 6px 10px; border-radius: 6px; font-weight: 600; "
+                "background: rgba(16, 185, 129, 0.14); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.35);"
+            )
+        else:
+            self.client_cfg_lbl.setStyleSheet(
+                "padding: 6px 10px; border-radius: 6px; font-weight: 600; "
+                "background: rgba(239, 68, 68, 0.14); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.4);"
+            )
+            self.main_win.logs.add("ERR", self._selected_client_code(), msg, msg)
+            self.main_win._refresh_logs_tab()
+        self.client_cfg_lbl.show()
+
+    def _on_row_result(self, row: int, ok: bool, ms: int, msg: str, raw: str, badge_state: str) -> None:
         if row < 0 or row >= len(self.tools):
             return
         self._raw_details[row] = raw
@@ -240,17 +313,27 @@ class DiagnosticsDialog(QDialog):
                 t_obj.port,
             )
             self.main_win._refresh_logs_tab()
-        st_item = QTableWidgetItem(tr(self.lang, "diag_pass" if ok else "diag_fail"))
-        st_item.setForeground(QColor("#22c55e" if ok else "#ef4444"))
+
+        badge_map = {
+            "pass": (tr(self.lang, "diag_pass"), "#22c55e"),
+            "ready_stopped": (tr(self.lang, "diag_st_ready_stopped"), "#38bdf8"),
+            "stopped": (tr(self.lang, "st_stopped_standby"), "#f59e0b"),
+            "off_client": (tr(self.lang, "diag_st_off_client"), "#94a3b8"),
+            "fail": (tr(self.lang, "diag_fail"), "#ef4444"),
+        }
+        st_lbl, st_col = badge_map.get(badge_state, (tr(self.lang, "diag_pass" if ok else "diag_fail"), "#22c55e" if ok else "#ef4444"))
+        st_item = QTableWidgetItem(st_lbl)
+        st_item.setForeground(QColor(st_col))
         self.tbl.setItem(row, 1, st_item)
         self.tbl.setItem(row, 2, QTableWidgetItem(f"{ms}ms" if ms >= 0 else "—"))
         self.tbl.setItem(row, 3, QTableWidgetItem(msg))
 
-    def _on_all_done(self) -> None:
+    def _on_all_done(self, was_dry_run: bool) -> None:
         self._running = False
         self.btn_retest.setEnabled(True)
+        key = "diag_done_stopped" if was_dry_run else "diag_done"
         self.summary_lbl.setText(
-            tr(self.lang, "diag_done", ok=self._ok_count, fail=self._fail_count, tot=len(self.tools))
+            tr(self.lang, key, ok=self._ok_count, fail=self._fail_count, tot=len(self.tools))
         )
 
     def _on_row_selected(self) -> None:

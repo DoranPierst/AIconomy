@@ -9,6 +9,8 @@ import socket
 import subprocess
 import threading
 import time
+import tomllib
+from typing import Any
 import urllib.error
 import urllib.request
 
@@ -163,14 +165,19 @@ def test_tool_connection_e2e(
     if tool.id == "caveman":
         skill_md = pathlib.Path.home() / ".agents" / "skills" / "caveman" / "SKILL.md"
         agy_md = pathlib.Path.home() / ".gemini" / "config" / "skills" / "caveman" / "SKILL.md"
-        ok = skill_md.is_file() and (not tool.clients.get("AGY", True) or agy_md.is_file())
+        want_agy = bool(tool.clients.get("AGY", False))
+        want_agents = bool(tool.clients.get("CDX", False) or tool.clients.get("CLD", False) or tool.clients.get("CUR", False))
         ms = max(1, int((time.perf_counter() - t0) * 1000))
-        if skill_md.is_file() and tool.clients.get("AGY", True) and not agy_md.is_file():
+        if want_agy and not agy_md.is_file():
             lbl = "AGY skill senkronu eksik" if is_tr else "AGY skill mirror missing"
             return False, ms, lbl, f"{skill_md} -> {agy_md}"
+        if want_agents and not skill_md.is_file():
+            lbl = "SKILL.md eksik (~/.agents/skills)" if is_tr else "SKILL.md missing (~/.agents/skills)"
+            return False, ms, lbl, str(skill_md)
+        ok = (want_agy and agy_md.is_file()) or (want_agents and skill_md.is_file())
         lbl = ("SKILL.md doğrulandı" if ok else "SKILL.md eksik") if is_tr else ("SKILL.md verified" if ok else "SKILL.md missing")
-        det = f"{skill_md} | AGY: {agy_md}" if agy_md.is_file() else str(skill_md)
-        return ok, ms, lbl, det
+        parts = [p for p, cond in ((str(skill_md), skill_md.is_file()), (f"AGY: {agy_md}", agy_md.is_file())) if cond]
+        return ok, ms, lbl, " | ".join(parts) or str(skill_md)
 
     if tool.id == "unity_pipeline":
         target_proj = projects_map.get(tool.project_scope, tool.param_value)
@@ -431,3 +438,455 @@ def measure_tool_schema_tokens(
             except Exception:
                 pass
     return None
+
+
+def inspect_client_config_file(
+    client_code: str,
+    projects_map: dict[str, str] | None = None,
+    lang: str = "en",
+) -> tuple[bool, str, dict[str, dict[str, Any]], set[str], pathlib.Path]:
+    """Parse a real AI client's config file and return (parse_ok, summary_msg, active_servers, disabled_keys, path)."""
+    is_tr = lang == "tr"
+    home = pathlib.Path.home()
+    code = (client_code or "AGY").upper()
+
+    if code == "CDX":
+        cfg_path = home / ".codex" / "config.toml"
+        if not cfg_path.is_file():
+            msg = (
+                f"Codex config.toml bulunamadı ({cfg_path})"
+                if is_tr
+                else f"Codex config.toml not found ({cfg_path})"
+            )
+            return True, msg, {}, set(), cfg_path
+        try:
+            raw = cfg_path.read_text(encoding="utf-8-sig")
+            data = tomllib.loads(raw) if raw.strip() else {}
+        except Exception as exc:
+            msg = (
+                f"TOML sözdizimi hatası ({cfg_path.name}): {exc}"
+                if is_tr
+                else f"TOML syntax error ({cfg_path.name}): {exc}"
+            )
+            return False, msg, {}, set(), cfg_path
+        all_srv = data.get("mcp_servers") if isinstance(data.get("mcp_servers"), dict) else {}
+        active: dict[str, dict[str, Any]] = {}
+        disabled: set[str] = set()
+        for k, v in all_srv.items():
+            if not isinstance(v, dict):
+                continue
+            if v.get("enabled") is False:
+                disabled.add(str(k))
+            else:
+                active[str(k)] = v
+        msg = (
+            f"TOML geçerli: {len(active)} aktif MCP ({cfg_path})"
+            if is_tr
+            else f"Valid TOML: {len(active)} active MCP(s) ({cfg_path})"
+        )
+        return True, msg, active, disabled, cfg_path
+
+    cfg_map = {
+        "AGY": home / ".gemini" / "config" / "mcp_config.json",
+        "CLD": home / ".claude.json",
+        "CUR": home / ".cursor" / "mcp.json",
+    }
+    cfg_path = cfg_map.get(code, cfg_map["AGY"])
+    active = {}
+    if cfg_path.is_file():
+        try:
+            raw = cfg_path.read_text(encoding="utf-8-sig")
+            data = json.loads(raw) if raw.strip() else {}
+            if not isinstance(data, dict):
+                raise ValueError("JSON root must be an object")
+        except Exception as exc:
+            msg = (
+                f"JSON sözdizimi hatası ({cfg_path.name}): {exc}"
+                if is_tr
+                else f"JSON syntax error ({cfg_path.name}): {exc}"
+            )
+            return False, msg, {}, set(), cfg_path
+        srv = data.get("mcpServers") if isinstance(data.get("mcpServers"), dict) else {}
+        for k, v in srv.items():
+            if isinstance(v, dict):
+                active[str(k)] = v
+
+    # Also merge project-scoped .mcp.json / .cursor/mcp.json for CLD / CUR
+    if code in ("CLD", "CUR") and projects_map:
+        rel_name = ".mcp.json" if code == "CLD" else ".cursor/mcp.json"
+        for proj_dir_s in projects_map.values():
+            p_cfg = pathlib.Path(proj_dir_s) / rel_name
+            if not p_cfg.is_file():
+                continue
+            try:
+                p_data = json.loads(p_cfg.read_text(encoding="utf-8-sig") or "{}")
+                p_srv = p_data.get("mcpServers") if isinstance(p_data, dict) and isinstance(p_data.get("mcpServers"), dict) else {}
+                for k, v in p_srv.items():
+                    if isinstance(v, dict):
+                        active[str(k)] = v
+            except Exception as exc:
+                msg = (
+                    f"Proje JSON hatası ({p_cfg}): {exc}"
+                    if is_tr
+                    else f"Project JSON error ({p_cfg}): {exc}"
+                )
+                return False, msg, active, set(), p_cfg
+
+    if not cfg_path.is_file() and not active:
+        msg = (
+            f"{code} config dosyası henüz yok ({cfg_path})"
+            if is_tr
+            else f"{code} config file not created yet ({cfg_path})"
+        )
+        return True, msg, {}, set(), cfg_path
+
+    msg = (
+        f"JSON geçerli: {len(active)} MCP ({cfg_path})"
+        if is_tr
+        else f"Valid JSON: {len(active)} MCP(s) ({cfg_path})"
+    )
+    return True, msg, active, set(), cfg_path
+
+
+def _run_http_mcp_init(
+    url: str,
+    t0: float,
+    cfg_note: str,
+    app_ver: str = "1.0.0",
+    lang: str = "en",
+) -> tuple[bool, int, str, str]:
+    is_tr = lang == "tr"
+    payload = json.dumps(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {},
+                "clientInfo": {"name": "aiconomy-diagnostics", "version": app_ver},
+            },
+        }
+    ).encode("utf-8")
+    req = urllib.request.Request(
+        url,
+        data=payload,
+        method="POST",
+        headers={
+            "Content-Type": "application/json",
+            "Accept": "application/json, text/event-stream",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=3.5) as resp:
+            body = resp.read(2048).decode("utf-8", errors="replace")
+            ms = max(1, int((time.perf_counter() - t0) * 1000))
+            if "result" in body or "serverInfo" in body or resp.status == 200:
+                return True, ms, f"MCP Initialize OK ({ms}ms){cfg_note}", f"POST {url} -> HTTP {resp.status}\n{body[:400]}"
+            return False, ms, f"HTTP {resp.status}", body[:400]
+    except urllib.error.HTTPError as exc:
+        ms = max(1, int((time.perf_counter() - t0) * 1000))
+        err_b = exc.read(512).decode("utf-8", errors="replace")
+        if exc.code in (400, 405, 406):
+            lbl = (
+                f"HTTP sunucu aktif ({ms}ms, HTTP {exc.code}){cfg_note}"
+                if is_tr
+                else f"HTTP server reachable ({ms}ms, HTTP {exc.code}){cfg_note}"
+            )
+            return True, ms, lbl, f"{url}: {err_b}"
+        return False, -1, f"HTTP {exc.code}", err_b
+    except Exception as exc:
+        lbl = f"Bağlantı yok ({url})" if is_tr else f"No connection ({url})"
+        return False, -1, lbl, f"{url}: {exc}"
+
+
+def _test_config_entry_live(
+    entry: dict[str, Any],
+    t0: float,
+    cfg_note: str,
+    app_ver: str,
+    lang: str = "en",
+) -> tuple[bool, int, str, str]:
+    """Execute the exact HTTP URL or stdio command+args+env stored in a client's config file."""
+    is_tr = lang == "tr"
+    url = str(entry.get("url") or entry.get("serverUrl") or "").strip()
+    if url:
+        return _run_http_mcp_init(url, t0, cfg_note, app_ver=app_ver, lang=lang)
+
+    raw_cmd = str(entry.get("command") or "").strip()
+    raw_args = [str(a) for a in (entry.get("args") or [])]
+    raw_env = entry.get("env") if isinstance(entry.get("env"), dict) else {}
+    if not raw_cmd:
+        return (
+            False,
+            -1,
+            "Config girdisinde komut/URL eksik" if is_tr else "Config entry missing command/URL",
+            json.dumps(entry, ensure_ascii=False),
+        )
+    cmd_bin = raw_cmd if pathlib.Path(raw_cmd).is_file() else (shutil.which(f"{raw_cmd}.cmd") or shutil.which(raw_cmd))
+    if not cmd_bin:
+        lbl = f"Komut bulunamadı: {raw_cmd}" if is_tr else f"Command not found: {raw_cmd}"
+        return False, -1, lbl, f"command={raw_cmd!r}, args={raw_args!r}"
+
+    env = dict(os.environ)
+    for k, v in raw_env.items():
+        env[str(k)] = str(v)
+    return _run_stdio_handshake(cmd_bin, raw_args, env, t0, cfg_note, app_ver=app_ver, lang=lang)
+
+
+def _check_dry_run_readiness(
+    tool: ToolSpec,
+    vault: WindowsDpapiVault,
+    projects_map: dict[str, str],
+    active_skills_count: int,
+    lang: str = "en",
+) -> tuple[bool, int, str, str, str]:
+    """Run an honest readiness dry-run while tools are stopped (never pretends HTTP servers are running)."""
+    is_tr = lang == "tr"
+    t0 = time.perf_counter()
+    app_ver = get_current_app_version()
+
+    if tool.id in ("serena", "unity_mcp") and tool.port:
+        port = int(tool.port)
+        local_bin = pathlib.Path.home() / ".local" / "bin"
+        if tool.id == "serena":
+            found = (local_bin / "serena.exe").is_file() or bool(shutil.which("serena"))
+            bin_lbl = str(local_bin / "serena.exe")
+        else:
+            found = (
+                (local_bin / "mcp-for-unity.exe").is_file()
+                or (local_bin / "unity-mcp.exe").is_file()
+                or bool(shutil.which("mcp-for-unity") or shutil.which("unity-mcp") or shutil.which("uvx"))
+            )
+            bin_lbl = str(local_bin / "mcp-for-unity.exe")
+        ms = max(1, int((time.perf_counter() - t0) * 1000))
+        if found:
+            lbl = (
+                f"Durduruldu — başlatılmaya hazır (:{port} kapalı)"
+                if is_tr
+                else f"Stopped — binary ready (:{port} closed)"
+            )
+            return True, ms, lbl, f"Binary OK ({bin_lbl}); HTTP :{port} stopped as expected.", "ready_stopped"
+        lbl = (
+            "Kurulu değil (ikili bulunamadı)" if is_tr else "Not installed (executable missing)"
+        )
+        return False, -1, lbl, f"Missing executable: {bin_lbl}", "fail"
+
+    if tool.id == "blender_mcp":
+        port = int(tool.port or 9876)
+        ms = max(1, int((time.perf_counter() - t0) * 1000))
+        has_uvx = bool(shutil.which("uvx") or shutil.which("blender-mcp"))
+        if not has_uvx:
+            return False, -1, ("uvx / blender-mcp bulunamadı" if is_tr else "uvx / blender-mcp not found"), "PATH check failed", "fail"
+        lbl = (
+            f"Durduruldu — köprü hazır (:{port})" if is_tr else f"Stopped — bridge ready (:{port})"
+        )
+        return True, ms, lbl, f"Blender bridge binary verified; tools currently stopped.", "ready_stopped"
+
+    if tool.id == "caveman":
+        home = pathlib.Path.home()
+        act_md = home / ".agents" / "skills" / "caveman" / "SKILL.md"
+        dis_md = home / ".agents" / "skills_disabled" / "caveman" / "SKILL.md"
+        ms = max(1, int((time.perf_counter() - t0) * 1000))
+        if act_md.is_file() or dis_md.is_file():
+            src = act_md if act_md.is_file() else dis_md
+            lbl = "Durduruldu — SKILL.md diskte hazır" if is_tr else "Stopped — SKILL.md ready on disk"
+            return True, ms, lbl, str(src), "ready_stopped"
+        return False, -1, ("SKILL.md eksik (kurulu değil)" if is_tr else "SKILL.md missing (not installed)"), str(act_md), "fail"
+
+    if tool.id == "blender_skills":
+        plugin_dir = pathlib.Path.home() / ".gemini" / "config" / "plugins" / "blender-skills"
+        ok = (plugin_dir / "skills").is_dir() or (plugin_dir / "skills_disabled").is_dir()
+        ms = max(1, int((time.perf_counter() - t0) * 1000))
+        if ok:
+            lbl = (
+                f"Durduruldu — {active_skills_count}/94 skill diskte hazır"
+                if is_tr
+                else f"Stopped — {active_skills_count}/94 skills ready on disk"
+            )
+            return True, ms, lbl, str(plugin_dir), "ready_stopped"
+        return False, -1, ("Blender Skills kurulu değil" if is_tr else "Blender Skills not installed"), str(plugin_dir), "fail"
+
+    if tool.mcp_command or getattr(tool, "auth_mode", "key") == "oauth":
+        if not is_tool_credential_ready(tool, vault):
+            lbl = (
+                f"Kimlik doğrulama eksik ({tool.vault_key_name or 'OAuth'})"
+                if is_tr
+                else f"Missing credential ({tool.vault_key_name or 'OAuth'})"
+            )
+            return False, -1, lbl, "Configure API key or OAuth first.", "fail"
+        spec = build_effective_stdio_spec(tool, vault, wrap_windows_npx=False)
+        if spec is None:
+            return False, -1, ("Yapılandırma eksik" if is_tr else "Configuration missing"), tool.name, "fail"
+        raw_bin, eff_args, eff_env = spec
+        cmd_bin = shutil.which(f"{raw_bin}.cmd") or shutil.which(raw_bin)
+        if not cmd_bin:
+            lbl = f"Komut bulunamadı: {raw_bin}" if is_tr else f"Command not found: {raw_bin}"
+            return False, -1, lbl, f"'{raw_bin}' is not on PATH.", "fail"
+        env = build_isolated_child_env(eff_env, allowed_secret_key=tool.vault_key_name)
+        ok, ms, msg, raw = _run_stdio_handshake(cmd_bin, eff_args, env, t0, "", app_ver=app_ver, lang=lang)
+        if ok:
+            dry_lbl = f"Ön kontrol OK ({ms}ms — durduruldu)" if is_tr else f"Dry-run OK ({ms}ms — stopped)"
+            return True, ms, dry_lbl, raw, "ready_stopped"
+        return False, ms, msg, raw, "fail"
+
+    ok, ms, msg, raw = test_tool_connection_e2e(tool, vault, projects_map, active_skills_count, lang=lang)
+    return ok, ms, (f"{msg} (durduruldu)" if (ok and is_tr) else (f"{msg} (stopped)" if ok else msg)), raw, (
+        "ready_stopped" if ok else "fail"
+    )
+
+
+def test_tool_for_client_e2e(
+    tool: ToolSpec,
+    client_code: str,
+    vault: WindowsDpapiVault,
+    projects_map: dict[str, str],
+    active_skills_count: int = 0,
+    runtime_active: bool = True,
+    lang: str = "en",
+) -> tuple[bool, int, str, str, str]:
+    """Run live or dry-run diagnostics either globally ('ALL') or strictly against one client ('AGY'/'CDX'/'CLD'/'CUR').
+
+    Returns (ok, latency_ms, short_summary, technical_detail, badge_state).
+    ``badge_state`` is one of: 'pass', 'ready_stopped', 'stopped', 'off_client', 'fail'.
+    """
+    is_tr = lang == "tr"
+    code = (client_code or "ALL").upper()
+    t0 = time.perf_counter()
+    app_ver = get_current_app_version()
+
+    if code == "ALL":
+        if not runtime_active:
+            return _check_dry_run_readiness(tool, vault, projects_map, active_skills_count, lang=lang)
+        ok, ms, msg, raw = test_tool_connection_e2e(tool, vault, projects_map, active_skills_count, lang=lang)
+        return ok, ms, msg, raw, ("pass" if ok else "fail")
+
+    # Per-client verification (AGY / CDX / CLD / CUR)
+    parse_ok, cfg_msg, active_servers, disabled_keys, cfg_path = inspect_client_config_file(
+        code, projects_map=projects_map, lang=lang
+    )
+    if not parse_ok:
+        return False, -1, cfg_msg, f"File: {cfg_path}\n{cfg_msg}", "fail"
+
+    client_allowed = bool(tool.clients.get(code, False))
+    home = pathlib.Path.home()
+
+    # Skill / Rule per-client checks
+    if tool.id == "caveman":
+        target_md = (
+            home / ".gemini" / "config" / "skills" / "caveman" / "SKILL.md"
+            if code == "AGY"
+            else home / ".agents" / "skills" / "caveman" / "SKILL.md"
+        )
+        exists_for_client = target_md.is_file()
+        ms = max(1, int((time.perf_counter() - t0) * 1000))
+        if not client_allowed:
+            if exists_for_client:
+                lbl = (
+                    f"Sızıntı: {code} kapalı ama SKILL.md hâlâ aktif!"
+                    if is_tr
+                    else f"Leak: {code} disabled but SKILL.md is still active!"
+                )
+                return False, ms, lbl, str(target_md), "fail"
+            lbl = (
+                f"{code} için kapalı (doğrulandı)" if is_tr else f"Disabled for {code} (verified)"
+            )
+            return True, ms, lbl, f"Verified absent: {target_md}", "off_client"
+        if not runtime_active:
+            if exists_for_client:
+                lbl = (
+                    f"Uyarı: Durduruldu ama {code} SKILL.md hâlâ aktif"
+                    if is_tr
+                    else f"Warning: Stopped but {code} SKILL.md still active"
+                )
+                return False, ms, lbl, str(target_md), "fail"
+            return _check_dry_run_readiness(tool, vault, projects_map, active_skills_count, lang=lang)
+        if exists_for_client:
+            lbl = (
+                f"{code} SKILL.md doğrulandı" if is_tr else f"{code} SKILL.md verified"
+            )
+            return True, ms, lbl, str(target_md), "pass"
+        lbl = (
+            f"{code} skill dizininde eksik!" if is_tr else f"Missing in {code} skills directory!"
+        )
+        return False, -1, lbl, f"Expected: {target_md}", "fail"
+
+    if tool.id == "blender_skills":
+        ms = max(1, int((time.perf_counter() - t0) * 1000))
+        if not client_allowed:
+            lbl = f"{code} için kapalı" if is_tr else f"Disabled for {code}"
+            return True, ms, lbl, str(cfg_path), "off_client"
+        if not runtime_active:
+            return _check_dry_run_readiness(tool, vault, projects_map, active_skills_count, lang=lang)
+        plugin_skills = home / ".gemini" / "config" / "plugins" / "blender-skills" / "skills"
+        has_active = plugin_skills.is_dir() and any(d.is_dir() and d.name != "references" for d in plugin_skills.iterdir())
+        if has_active:
+            lbl = (
+                f"{code} için {active_skills_count}/94 skill aktif"
+                if is_tr
+                else f"{active_skills_count}/94 skills active for {code}"
+            )
+            return True, ms, lbl, str(plugin_skills), "pass"
+        return False, -1, ("Aktif Blender skill bulunamadı" if is_tr else "No active Blender skills found"), str(plugin_skills), "fail"
+
+    # CLI-only tools (no MCP server key)
+    if not tool.mcp_server_key:
+        if not client_allowed:
+            return True, 1, (f"{code} için kapalı" if is_tr else f"Disabled for {code}"), tool.name, "off_client"
+        if not runtime_active:
+            return _check_dry_run_readiness(tool, vault, projects_map, active_skills_count, lang=lang)
+        ok, ms, msg, raw = test_tool_connection_e2e(tool, vault, projects_map, active_skills_count, lang=lang)
+        return ok, ms, msg, raw, ("pass" if ok else "fail")
+
+    # MCP tool per-client check (AGY / CDX / CLD / CUR)
+    lookup_keys = [tool.mcp_server_key]
+    if tool.id == "unity_mcp" and "unityMCP" not in lookup_keys:
+        lookup_keys.append("unityMCP")
+
+    found_key = next((k for k in lookup_keys if k in active_servers), "")
+    is_disabled_in_cfg = any(k in disabled_keys for k in lookup_keys)
+    ms_now = max(1, int((time.perf_counter() - t0) * 1000))
+
+    if not client_allowed:
+        if found_key:
+            lbl = (
+                f"Sızıntı: {code} kapalı ama {cfg_path.name} içinde hâlâ kayıtlı!"
+                if is_tr
+                else f"Leak: {code} disabled but still registered in {cfg_path.name}!"
+            )
+            return False, ms_now, lbl, f"{cfg_path}\nentry={active_servers[found_key]}", "fail"
+        lbl = f"{code} için kapalı (config temiz)" if is_tr else f"Disabled for {code} (config clean)"
+        return True, ms_now, lbl, f"{cfg_path}: not registered", "off_client"
+
+    if not runtime_active:
+        if found_key:
+            lbl = (
+                f"Uyarı: Durduruldu ama {cfg_path.name} içinde hâlâ aktif!"
+                if is_tr
+                else f"Warning: Stopped but still active in {cfg_path.name}!"
+            )
+            return False, ms_now, lbl, f"{cfg_path}\nentry={active_servers[found_key]}", "fail"
+        ok_d, ms_d, msg_d, raw_d, st_d = _check_dry_run_readiness(tool, vault, projects_map, active_skills_count, lang=lang)
+        note_clean = f" | {code} config temiz" if is_tr else f" | {code} config paused"
+        return ok_d, ms_d, f"{msg_d}{note_clean}", f"{cfg_path}\n{raw_d}", st_d
+
+    # Running & client allowed: entry MUST exist in client's actual config file!
+    if not found_key:
+        if is_disabled_in_cfg:
+            lbl = (
+                f"{cfg_path.name} içinde enabled = false!"
+                if is_tr
+                else f"Marked enabled = false in {cfg_path.name}!"
+            )
+        else:
+            lbl = (
+                f"{code} config dosyasında ({cfg_path.name}) kayıtlı değil!"
+                if is_tr
+                else f"Not registered in {code} config ({cfg_path.name})!"
+            )
+        return False, -1, lbl, f"Checked {cfg_path} for keys {lookup_keys}", "fail"
+
+    entry = active_servers[found_key]
+    cfg_note = f" | {code} config OK ({found_key})"
+    ok_l, ms_l, msg_l, raw_l = _test_config_entry_live(entry, t0, cfg_note, app_ver=app_ver, lang=lang)
+    return ok_l, ms_l, msg_l, f"Config: {cfg_path} [{found_key}]\n{raw_l}", ("pass" if ok_l else "fail")

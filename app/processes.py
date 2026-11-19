@@ -904,13 +904,11 @@ def resolve_disk_location(
         active_md = pathlib.Path.home() / ".agents" / "skills" / "caveman" / "SKILL.md"
         agy_md = pathlib.Path.home() / ".gemini" / "config" / "skills" / "caveman" / "SKILL.md"
         disabled_md = pathlib.Path.home() / ".agents" / "skills_disabled" / "caveman" / "SKILL.md"
+        if active_md.is_file() and agy_md.is_file():
+            return f"Dosya: {active_md}  |  AGY: {agy_md}" if is_tr else f"File: {active_md}  |  AGY: {agy_md}"
+        if agy_md.is_file():
+            return f"AGY: {agy_md}"
         if active_md.is_file():
-            if agy_md.is_file():
-                return (
-                    f"Dosya: {active_md}  |  AGY: {agy_md}"
-                    if is_tr
-                    else f"File: {active_md}  |  AGY: {agy_md}"
-                )
             return f"Dosya: {active_md}" if is_tr else f"File: {active_md}"
         if disabled_md.is_file():
             return f"Devre dışı kural: {disabled_md}" if is_tr else f"Disabled rule: {disabled_md}"
@@ -987,14 +985,20 @@ def probe_tool_health(
         if not tool.enabled:
             return False, "off", tr(lang, "st_disabled"), -1, loc_detail, loc_detail
         active_md = pathlib.Path.home() / ".agents" / "skills" / "caveman" / "SKILL.md"
+        agy_md = pathlib.Path.home() / ".gemini" / "config" / "skills" / "caveman" / "SKILL.md"
         disabled_md = pathlib.Path.home() / ".agents" / "skills_disabled" / "caveman" / "SKILL.md"
         modes = localized_tool_modes(tool, lang)
         mode_short = modes[min(tool.mode_index, len(modes) - 1)].split()[0] if modes else ""
         label = f"{tr(lang, 'st_ready')} ({mode_short})" if mode_short else tr(lang, "st_ready")
-        if active_md.is_file():
-            return True, "ok", label, 1, str(active_md), loc_detail
-        if disabled_md.is_file():
-            return True, "idle", label, 1, str(disabled_md), loc_detail
+        want_agy = bool(tool.clients.get("AGY", False))
+        want_agents = bool(tool.clients.get("CDX", False) or tool.clients.get("CLD", False) or tool.clients.get("CUR", False))
+        if (want_agy and agy_md.is_file() and (not want_agents or active_md.is_file())) or (
+            want_agents and not want_agy and active_md.is_file()
+        ):
+            src_str = str(agy_md if (want_agy and agy_md.is_file()) else active_md)
+            return True, "ok", label, 1, src_str, loc_detail
+        if active_md.is_file() or disabled_md.is_file():
+            return True, "idle", label, 1, str(active_md if active_md.is_file() else disabled_md), loc_detail
         return False, "warn", tr(lang, "st_not_installed"), -1, str(active_md), loc_detail
 
     if tool.id == "blender_mcp":
