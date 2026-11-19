@@ -900,7 +900,19 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, ProfilesMixin, Tr
                 if cv_tool:
                     sync_caveman_on_disk(cv_tool, lang=lang_snap, runtime_active=allow_start_flag)
                 sync_custom_skill_tools_on_disk(tools_snap, lang=lang_snap, runtime_active=allow_start_flag)
-                sync_mcp_json_clients(tools_snap, self.vault, proj_snap, lang=lang_snap, runtime_active=allow_start_flag)
+                removed_keys = {
+                    x.mcp_server_key
+                    for x in tools_snap
+                    if x.id in stop_ids and x.mcp_server_key and not getattr(x, "in_workspace", True)
+                }
+                sync_mcp_json_clients(
+                    tools_snap,
+                    self.vault,
+                    proj_snap,
+                    lang=lang_snap,
+                    runtime_active=allow_start_flag,
+                    extra_managed_keys=removed_keys,
+                )
                 eff_lang = self.lang
                 live_map = scan_live_process_locations(lang=eff_lang)
                 out = []

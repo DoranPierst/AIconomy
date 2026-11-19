@@ -564,7 +564,7 @@ def _rewrite_mcp_json(
     data: dict[str, Any] = {}
     if cfg_path.is_file():
         try:
-            raw_txt = cfg_path.read_text(encoding="utf-8")
+            raw_txt = cfg_path.read_text(encoding="utf-8-sig")
             data = json.loads(raw_txt) if raw_txt.strip() else {}
         except Exception as exc:
             return False, (f"okuma hatası ({exc})" if is_tr else f"read error ({exc})")
@@ -584,9 +584,11 @@ def _rewrite_mcp_json(
 
     if data == original:
         return False, ""
+    serialized = json.dumps(data, ensure_ascii=False, indent=2)
+    json.loads(serialized)  # Mandatory syntax gate before disk write
     if cfg_path.is_file():
         shutil.copyfile(cfg_path, cfg_path.with_suffix(cfg_path.suffix + ".bak"))
-    _atomic_write_text(cfg_path, json.dumps(data, ensure_ascii=False, indent=2))
+    _atomic_write_text(cfg_path, serialized)
     return True, ""
 
 
@@ -596,10 +598,18 @@ def sync_mcp_json_clients(
     projects_map: dict[str, str] | None = None,
     lang: str = "en",
     runtime_active: bool = True,
+    extra_managed_keys: set[str] | None = None,
 ) -> list[str]:
     """Synchronize all AI client config files under a single lock to avoid concurrent writes."""
     with _CONFIG_LOCK:
-        return _sync_mcp_json_clients_impl(tools, vault, projects_map, lang=lang, runtime_active=runtime_active)
+        return _sync_mcp_json_clients_impl(
+            tools,
+            vault,
+            projects_map,
+            lang=lang,
+            runtime_active=runtime_active,
+            extra_managed_keys=extra_managed_keys,
+        )
 
 
 def _repair_glued_toml_headers(toml_text: str) -> str:
@@ -637,6 +647,7 @@ def _sync_mcp_json_clients_impl(
     projects_map: dict[str, str] | None = None,
     lang: str = "en",
     runtime_active: bool = True,
+    extra_managed_keys: set[str] | None = None,
 ) -> list[str]:
     """Write global and project-scoped MCP client configs with .bak backups."""
     is_tr = lang == "tr"
@@ -648,7 +659,13 @@ def _sync_mcp_json_clients_impl(
         "CUR": pathlib.Path.home() / ".cursor" / "mcp.json",
     }
     messages: list[str] = []
-    managed_keys = {t.mcp_server_key for t in tools if t.mcp_server_key} | {"unityMCP"}
+    # Only touch keys of tools actually added to the user's AIconomy workspace (never wipe user's unrelated MCPs!)
+    ws_tools = [t for t in tools if getattr(t, "in_workspace", True)]
+    managed_keys = {t.mcp_server_key for t in ws_tools if t.mcp_server_key}
+    if any(t.id == "unity_mcp" for t in ws_tools):
+        managed_keys.add("unityMCP")
+    if extra_managed_keys:
+        managed_keys.update(k for k in extra_managed_keys if k)
 
     for code, cfg_path in client_paths.items():
         wanted: dict[str, dict[str, Any]] = {}
@@ -715,9 +732,11 @@ def _sync_mcp_json_clients_impl(
         try:
             orig_toml = codex_cfg.read_text(encoding="utf-8-sig")
             cleaned = _repair_glued_toml_headers(_strip_marked_codex_blocks(orig_toml))
+            # Verify base TOML is parseable before modifying anything (never corrupt an unreadable file)
+            base_parsed = tomllib.loads(cleaned) if cleaned.strip() else {}
 
             alias_map: dict[str, ToolSpec] = {}
-            for t in tools:
+            for t in ws_tools:
                 if t.mcp_server_key:
                     alias_map[t.mcp_server_key] = t
                     if t.id == "unity_mcp":
@@ -725,7 +744,7 @@ def _sync_mcp_json_clients_impl(
 
             def _sync_existing_codex_section(sec_name: str, should_enable: bool, text_in: str) -> tuple[str, bool]:
                 hdr_pat = re.compile(
-                    rf"^\[mcp_servers\.{re.escape(sec_name)}\][ \t]*(?:#[^\r\n]*)?(?:\r?\n|\Z)",
+                    rf'^\[mcp_servers\.(?:"{re.escape(sec_name)}"|\'{re.escape(sec_name)}\'|{re.escape(sec_name)})\][ \t]*(?:#[^\r\n]*)?(?:\r?\n|\Z)',
                     flags=re.MULTILINE,
                 )
                 m = hdr_pat.search(text_in)
@@ -765,18 +784,17 @@ def _sync_mcp_json_clients_impl(
                 if found_sec:
                     handled_existing.add(t_obj.id)
 
+            existing_codex_servers = set((base_parsed.get("mcp_servers") or {}).keys())
             cdx_lines: list[str] = [CODEX_BEGIN_TAG]
             cdx_added = 0
             if runtime_active:
-                for t in tools:
-                    if not t.mcp_server_key or not (
-                        getattr(t, "in_workspace", True) and t.enabled and t.clients.get("CDX", False)
-                    ):
+                for t in ws_tools:
+                    if not t.mcp_server_key or not (t.enabled and t.clients.get("CDX", False)):
                         continue
                     entry = _build_mcp_entry(t, vault)
                     if entry is None:
                         continue
-                    if t.id in handled_existing:
+                    if t.id in handled_existing or t.mcp_server_key in existing_codex_servers:
                         cdx_added += 1
                         continue
                     safe_key = _format_toml_key(t.mcp_server_key)
