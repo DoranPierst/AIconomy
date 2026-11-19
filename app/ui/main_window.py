@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ..auto_heal import HealPlan, detect_background_heal_plans, execute_background_heal_plan
 from ..catalog import (
     AI_CLIENTS,
     DEFAULT_ACTIVE_BLENDER_SKILLS,
@@ -135,8 +136,10 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, ProfilesMixin, Tr
         self.bridge.lib_install_all_done.connect(self._on_lib_install_all_done)
         self.bridge.lib_uninstall_done.connect(self._on_lib_uninstall_done)
         self.bridge.schema_measure_done.connect(self._on_bg_schema_measure_done)
+        self.bridge.auto_heal_done.connect(self._on_auto_heal_done)
         self._installing_tool_ids: set[str] = set()
         self._uninstalling_tool_ids: set[str] = set()
+        self._heal_busy = False
 
         self.runtime_started = False
         self._runtime_state = "probing"  # probing | stopped | starting | running | stopping
@@ -750,6 +753,8 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, ProfilesMixin, Tr
         self.btn_log_all.setText(tr(self.lang, "log_sel_all"))
         self.btn_log_err.setText(tr(self.lang, "log_sel_issues"))
         self.btn_log_clr.setText(tr(self.lang, "log_sel_clear"))
+        if hasattr(self, "btn_log_fix"):
+            self.btn_log_fix.setText(tr(self.lang, "log_btn_fix"))
         self.log_raw_view.setPlaceholderText(tr(self.lang, "log_raw_ph"))
         self._update_log_headers()
         self._update_log_selection_ui()
@@ -1441,18 +1446,8 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, ProfilesMixin, Tr
                 t.last_ping = ping_str
                 t.last_latency_ms = ms
                 t.live_location_detail = loc_detail
+                now_mono = time.monotonic()
                 if t.enabled and t.port and not ok and tid != "trellis":
-                    now_mono = time.monotonic()
-                    if (
-                        tid in ("serena", "unity_mcp")
-                        and self.sync_live_environment
-                        and self.runtime_started
-                        and self._runtime_state == "running"
-                    ):
-                        if now_mono - self._auto_heal_cooldown.get(tid, 0.0) > 45.0:
-                            self._auto_heal_cooldown[tid] = now_mono
-                            self._auto_heal_tool_async(t)
-                            continue
                     if not silent and now_mono - self._last_warn_time.get(tid, 0.0) > 300.0:
                         self._last_warn_time[tid] = now_mono
                         self.logs.add(
@@ -1462,6 +1457,31 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, ProfilesMixin, Tr
                             detail,
                             t.port,
                         )
+                elif t.enabled and h_state in ("warn", "error") and not silent:
+                    if now_mono - self._last_warn_time.get(tid, 0.0) > 300.0:
+                        self._last_warn_time[tid] = now_mono
+                        self.logs.add(
+                            "WARN",
+                            t.name,
+                            tr(self.lang, "log_issue_detected", status=ping_str),
+                            detail,
+                            t.port,
+                        )
+
+        if self.sync_live_environment:
+            bg_plans = detect_background_heal_plans(
+                self.tools,
+                self._latest_live_map,
+                results,
+                runtime_running=bool(self.runtime_started and self._runtime_state == "running"),
+                lang=self.lang,
+            )
+            now_h = time.monotonic()
+            for plan in bg_plans:
+                cool_key = f"{plan.action_id}:{plan.tool_id}:{plan.port}"
+                if now_h - self._auto_heal_cooldown.get(cool_key, 0.0) > 60.0:
+                    self._auto_heal_cooldown[cool_key] = now_h
+                    self._run_log_auto_heal(plan, auto_triggered=True)
 
         self._update_vram_visibility()
         if silent:
@@ -1522,6 +1542,66 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, ProfilesMixin, Tr
         self.set_status(msg)
         self._refresh_logs_tab()
         QTimer.singleShot(2500, self.run_health_scan)
+
+    def _run_log_auto_heal(self, plan: HealPlan, auto_triggered: bool = False) -> None:
+        """Execute an Auto-Heal plan from either a Logs 'Fix Issue' button or background health monitoring."""
+        if plan.action_id == "unlock_vault_pin":
+            self.open_settings(SettingsDialog.TAB_KEYS)
+            return
+        if plan.action_id == "configure_vault_key":
+            tool = next((t for t in self.tools if t.id == plan.tool_id), None)
+            if tool is not None and supports_oauth(tool.id) and tool.has_gear:
+                self.open_gear(tool)
+            else:
+                self.open_settings(SettingsDialog.TAB_KEYS, focus_key=plan.vault_key_name)
+            return
+        if plan.action_id == "refresh_plugin_updates":
+            self.run_plugin_update_check(manual=True)
+            return
+
+        if self._heal_busy:
+            return
+        self._heal_busy = True
+        if not auto_triggered:
+            self.set_status(tr(self.lang, "msg_heal_running", label=plan.label))
+
+        tools_snap = copy.deepcopy(self.tools)
+        skills_snap = set(self.active_skills)
+        proj_snap = dict(self.projects_map)
+        lang_snap = self.lang
+
+        def worker() -> None:
+            ok, summary, raw = False, "", ""
+            try:
+                with self._sync_lock:
+                    ok, summary, raw = execute_background_heal_plan(
+                        plan,
+                        tools_snap,
+                        skills_snap,
+                        proj_snap,
+                        self.vault,
+                        lang=lang_snap,
+                    )
+            finally:
+                safe_emit(self.bridge.auto_heal_done, ok, plan.tool_name or tr(lang_snap, "log_src_heal"), summary, raw)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_auto_heal_done(self, ok: bool, tool_name: str, summary: str, raw_detail: str) -> None:
+        self._heal_busy = False
+        msg_key = "msg_heal_ok" if ok else "msg_heal_fail"
+        status_msg = tr(self.lang, msg_key, tool=tool_name, msg=summary)
+        self.logs.add(
+            "INFO" if ok else "WARN",
+            tool_name or tr(self.lang, "log_src_heal"),
+            tr(self.lang, "log_auto_heal", note=f" ({summary})") if ok else status_msg,
+            raw_detail or summary,
+        )
+        self.set_status(status_msg)
+        self._refresh_table()
+        self._refresh_plugins_tab()
+        self._refresh_logs_tab()
+        QTimer.singleShot(1200, self.run_health_scan)
 
     def _auto_heal_tool_async(self, tool: ToolSpec) -> None:
         tool_snap = copy.deepcopy(tool)

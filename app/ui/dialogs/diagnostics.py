@@ -181,6 +181,15 @@ class DiagnosticsDialog(QDialog):
             self._ok_count += 1
         else:
             self._fail_count += 1
+            t_obj = self.tools[row]
+            self.main_win.logs.add(
+                "WARN",
+                t_obj.name,
+                tr(self.lang, "log_diag_fail", msg=msg),
+                raw or msg,
+                t_obj.port,
+            )
+            self.main_win._refresh_logs_tab()
         st_item = QTableWidgetItem(tr(self.lang, "diag_pass" if ok else "diag_fail"))
         st_item.setForeground(QColor("#22c55e" if ok else "#ef4444"))
         self.tbl.setItem(row, 1, st_item)

@@ -35,3 +35,4 @@ class WorkerBridge(QObject):
     lib_install_all_done = Signal(int, int)  # (ok_cnt, fail_cnt)
     lib_uninstall_done = Signal(str, bool, str, str)  # (tool_id, ok, msg, raw_log)
     schema_measure_done = Signal(object, int)  # (measured_dict, count)
+    auto_heal_done = Signal(bool, str, str, str)  # (ok, tool_name, summary, raw_detail)

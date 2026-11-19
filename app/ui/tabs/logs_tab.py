@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
 )
 
 from ...ai_advisor import build_logs_ai_prompt
+from ...auto_heal import HealPlan, classify_log_for_auto_heal
 from ...i18n import tr
 from ...updater import get_current_app_version
 from ..widgets import HoverTableWidget
@@ -33,6 +34,8 @@ class LogsTabMixin:
 
     def _init_logs_tab(self) -> None:
         self._current_logs: list[dict] = []
+        self._log_heal_plans: dict[int, HealPlan] = {}
+        self._selected_heal_plan: HealPlan | None = None
         tab = QWidget()
         lay = QVBoxLayout(tab)
         lay.setContentsMargins(10, 10, 10, 10)
@@ -60,7 +63,7 @@ class LogsTabMixin:
         top.addWidget(self.btn_log_wipe)
         lay.addLayout(top)
 
-        self.log_table = HoverTableWidget(0, 5, self)
+        self.log_table = HoverTableWidget(0, 6, self)
         self.log_table.setAlternatingRowColors(True)
         self.log_table.verticalHeader().setVisible(False)
         self.log_table.setShowGrid(False)
@@ -76,6 +79,7 @@ class LogsTabMixin:
         lh.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
         lh.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
         lh.setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)
+        lh.setSectionResizeMode(5, QHeaderView.ResizeMode.ResizeToContents)
 
         self.log_master_cb = QCheckBox(lh.viewport())
         self.log_master_cb.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -107,6 +111,13 @@ class LogsTabMixin:
 
         log_act_bar.addStretch()
 
+        self.btn_log_fix = QPushButton(tr(self.lang, "log_btn_fix"))
+        self.btn_log_fix.setObjectName("successBtn")
+        self.btn_log_fix.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_log_fix.hide()
+        self.btn_log_fix.clicked.connect(self._on_selected_log_fix_clicked)
+        log_act_bar.addWidget(self.btn_log_fix)
+
         self.btn_copy_logs_ai = QPushButton(tr(self.lang, "log_copy_ai", n=0))
         self.btn_copy_logs_ai.setObjectName("primaryBtn")
         self.btn_copy_logs_ai.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -130,6 +141,7 @@ class LogsTabMixin:
                 tr(self.lang, "log_col_level"),
                 tr(self.lang, "log_col_tool"),
                 tr(self.lang, "log_col_summary"),
+                tr(self.lang, "log_col_action"),
             ]
         )
 
@@ -138,10 +150,14 @@ class LogsTabMixin:
         q = self.log_search_inp.text()
         self._current_logs = self.logs.query(level=lvl, search=q)
         self.log_row_checks.clear()
+        self._log_heal_plans.clear()
+        self._selected_heal_plan = None
+        if hasattr(self, "btn_log_fix"):
+            self.btn_log_fix.hide()
         self.log_table.setRowCount(0)
         self.log_table.setRowCount(len(self._current_logs))
         for i, row in enumerate(self._current_logs):
-            self.log_table.setRowHeight(i, 32)
+            self.log_table.setRowHeight(i, 34)
             log_id = int(row["id"])
 
             cb_w = QWidget()
@@ -165,6 +181,26 @@ class LogsTabMixin:
                     elif row["level"] == "WARN":
                         item.setForeground(QColor("#f59e0b"))
                 self.log_table.setItem(i, col_i, item)
+
+            plan = classify_log_for_auto_heal(row, self.tools, self.vault, lang=self.lang)
+            if plan is not None:
+                self._log_heal_plans[log_id] = plan
+                act_w = QWidget()
+                act_w.setObjectName("cellBox")
+                act_l = QHBoxLayout(act_w)
+                act_l.setContentsMargins(4, 2, 6, 2)
+                fix_btn = QPushButton(tr(self.lang, "log_btn_fix"))
+                fix_btn.setObjectName("successBtn")
+                fix_btn.setFixedHeight(24)
+                fix_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+                fix_btn.setToolTip(f"{plan.label}\n{plan.detail}")
+                fix_btn.clicked.connect(lambda _=False, p=plan: self._run_log_auto_heal(p))
+                act_l.addWidget(fix_btn)
+                self.log_table.setCellWidget(i, 5, act_w)
+            else:
+                blank = QTableWidgetItem("")
+                blank.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
+                self.log_table.setItem(i, 5, blank)
         self._update_tab_titles()
         self._update_log_selection_ui()
 
@@ -233,7 +269,7 @@ class LogsTabMixin:
         selected_entries = [e for e in all_recent if int(e["id"]) in self.checked_log_ids]
         selected_entries.sort(key=lambda x: int(x["id"]))
 
-        gpu_txt = self.vram_lbl.text() if hasattr(self, "vram_lbl") and self.vram_lbl.isVisible() else ""
+        gpu_txt = self.vram_lbl.text().strip() if hasattr(self, "vram_lbl") else ""
         prompt = build_logs_ai_prompt(
             selected_entries,
             self.tools,
@@ -269,11 +305,27 @@ class LogsTabMixin:
         self.log_raw_view.clear()
         self.set_status(tr(self.lang, "msg_logs_cleared"))
 
+    def _on_selected_log_fix_clicked(self) -> None:
+        if self._selected_heal_plan is not None:
+            self._run_log_auto_heal(self._selected_heal_plan)
+
     def _on_log_row_selected(self) -> None:
         idxs = self.log_table.selectionModel().selectedRows()
         if not idxs:
+            self._selected_heal_plan = None
+            if hasattr(self, "btn_log_fix"):
+                self.btn_log_fix.hide()
             return
         r = idxs[0].row()
         if 0 <= r < len(self._current_logs):
             entry = self._current_logs[r]
             self.log_raw_view.setPlainText(f"[{entry['ts']}] [{entry['level']}] {entry['tool']}\n{entry['raw_detail']}")
+            plan = self._log_heal_plans.get(int(entry["id"]))
+            self._selected_heal_plan = plan
+            if hasattr(self, "btn_log_fix"):
+                if plan is not None:
+                    self.btn_log_fix.setText(tr(self.lang, "log_btn_fix_with", label=plan.label))
+                    self.btn_log_fix.setToolTip(plan.detail)
+                    self.btn_log_fix.show()
+                else:
+                    self.btn_log_fix.hide()
