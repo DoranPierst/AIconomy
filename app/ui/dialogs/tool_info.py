@@ -72,11 +72,12 @@ class ToolInfoDialog(QDialog):
         else:
             tok_info = tr(lang, "info_tok_std", tok=tool.schema_tokens)
 
-        key_info = (
-            tr(lang, "info_key_req", key=tool.vault_key_name)
-            if tool.vault_key_name
-            else tr(lang, "info_key_none")
-        )
+        if tool.vault_key_name and tool.vault_key_required:
+            key_info = tr(lang, "info_key_req", key=tool.vault_key_name)
+        elif tool.vault_key_name:
+            key_info = tr(lang, "info_key_opt", key=tool.vault_key_name)
+        else:
+            key_info = tr(lang, "info_key_none")
         t_lay.addWidget(QLabel(f"<b>{tr(lang, 'info_ctx_load')}</b> {tok_info}"))
         t_lay.addWidget(QLabel(f"<b>{tr(lang, 'info_key_lbl')}</b> {key_info}"))
         if tool.install_cmd:

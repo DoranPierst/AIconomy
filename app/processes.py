@@ -570,6 +570,7 @@ def enforce_tool_runtime_state(
     projects_map: dict[str, str],
     allow_stop: bool = True,
     allow_start: bool = True,
+    restart_if_running: bool = False,
     lang: str = "en",
 ) -> str:
     """Align managed background bridge processes with a tool's enabled state."""
@@ -619,6 +620,14 @@ def enforce_tool_runtime_state(
             return f" ({', '.join(killed)} {'durduruldu' if is_tr else 'stopped'})" if killed else ""
         if not allow_start:
             return ""
+        if restart_if_running:
+            _terminate_all(
+                _find_managed_processes(
+                    {"mcp-for-unity.exe", "unity-mcp.exe"},
+                    host_keywords=("mcp-for-unity", "mcpforunityserver", "unity-mcp"),
+                ),
+                "Unity MCP",
+            )
         owner_pid, _owner_name = find_port_owner(port)
         if not owner_pid:
             local_bin = pathlib.Path.home() / ".local" / "bin"
@@ -668,10 +677,20 @@ def enforce_tool_runtime_state(
             return f" ({', '.join(killed)} {'durduruldu' if is_tr else 'stopped'})" if killed else ""
         if not allow_start:
             return ""
+        if restart_if_running:
+            _terminate_all(
+                _find_managed_processes(
+                    {"serena.exe", "serena-agent.exe"},
+                    host_keywords=("serena",),
+                    require_all=("start-mcp-server",),
+                ),
+                "Serena",
+            )
         owner_pid, _ = find_port_owner(port)
         if not owner_pid:
             serena_exe = pathlib.Path.home() / ".local" / "bin" / "serena.exe"
             if serena_exe.is_file():
+                serena_mode = "editing" if int(tool.mode_index) == 1 else "planning"
                 cmd = [
                     str(serena_exe),
                     "start-mcp-server",
@@ -681,6 +700,10 @@ def enforce_tool_runtime_state(
                     "127.0.0.1",
                     "--port",
                     str(port),
+                    "--mode",
+                    serena_mode,
+                    "--mode",
+                    "no-onboarding",
                 ]
                 proj_dir = projects_map.get(tool.project_scope, "")
                 if tool.project_scope != "GLOBAL" and proj_dir and pathlib.Path(proj_dir).is_dir():
@@ -753,7 +776,7 @@ def resolve_disk_location(
         b_exe = _find_blender_exe()
         if b_exe:
             return f"Kurulu: {b_exe}" if is_tr else f"Installed: {b_exe}"
-        return "Blender (:9876)"
+        return f"Blender (:{int(tool.port or 9876)})"
 
     if tool.id == "trellis":
         if "trellis" in live_map:
@@ -768,9 +791,12 @@ def resolve_disk_location(
         return f"Global plugin dizini: {p}" if is_tr else f"Global plugin path: {p}"
 
     if tool.id == "caveman":
-        skill_md = pathlib.Path.home() / ".agents" / "skills" / "caveman" / "SKILL.md"
-        if skill_md.is_file():
-            return f"Dosya: {skill_md}" if is_tr else f"File: {skill_md}"
+        active_md = pathlib.Path.home() / ".agents" / "skills" / "caveman" / "SKILL.md"
+        disabled_md = pathlib.Path.home() / ".agents" / "skills_disabled" / "caveman" / "SKILL.md"
+        if active_md.is_file():
+            return f"Dosya: {active_md}" if is_tr else f"File: {active_md}"
+        if disabled_md.is_file():
+            return f"Devre dışı kural: {disabled_md}" if is_tr else f"Disabled rule: {disabled_md}"
         return "Global kural" if is_tr else "Global rule"
 
     if tool.scope_selectable and tool.project_scope != "GLOBAL" and tool.project_scope in projects_map:
@@ -789,12 +815,29 @@ def probe_tool_health(
     projects_map: dict[str, str],
     live_map: dict[str, str],
     lang: str = "en",
+    missing_required_keys: set[str] | None = None,
 ) -> tuple[bool, str, str, int, str, str]:
     """Return (is_healthy, health_state, short_status_str, latency_ms, detail_msg, location_detail).
 
     ``health_state`` is one of: ``'ok'``, ``'warn'``, ``'error'``, ``'idle'``, ``'off'``.
     """
     loc_detail = resolve_disk_location(tool, projects_map, live_map, lang=lang)
+
+    if (
+        tool.enabled
+        and tool.vault_key_required
+        and tool.vault_key_name
+        and missing_required_keys is not None
+        and tool.vault_key_name in missing_required_keys
+    ):
+        return (
+            False,
+            "warn",
+            tr(lang, "st_missing_key"),
+            -1,
+            f"Missing {tool.vault_key_name}",
+            loc_detail,
+        )
 
     if tool.id == "blender_skills":
         plugin_dir = pathlib.Path.home() / ".gemini" / "config" / "plugins" / "blender-skills"
@@ -808,11 +851,16 @@ def probe_tool_health(
     if tool.id == "caveman":
         if not tool.enabled:
             return False, "off", tr(lang, "st_disabled"), -1, loc_detail, loc_detail
-        skill_md = pathlib.Path.home() / ".agents" / "skills" / "caveman" / "SKILL.md"
+        active_md = pathlib.Path.home() / ".agents" / "skills" / "caveman" / "SKILL.md"
+        disabled_md = pathlib.Path.home() / ".agents" / "skills_disabled" / "caveman" / "SKILL.md"
         modes = localized_tool_modes(tool, lang)
         mode_short = modes[min(tool.mode_index, len(modes) - 1)].split()[0] if modes else ""
         label = f"{tr(lang, 'st_ready')} ({mode_short})" if mode_short else tr(lang, "st_ready")
-        return True, "ok" if skill_md.is_file() else "idle", label, 1, str(skill_md), loc_detail
+        if active_md.is_file():
+            return True, "ok", label, 1, str(active_md), loc_detail
+        if disabled_md.is_file():
+            return True, "idle", label, 1, str(disabled_md), loc_detail
+        return False, "warn", tr(lang, "st_not_installed"), -1, str(active_md), loc_detail
 
     if tool.id == "blender_mcp":
         port = int(tool.port or 9876)

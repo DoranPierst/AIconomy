@@ -299,8 +299,8 @@ class StateStore:
         meta.update(saved_meta)
         meta["projects"] = merged_projs
 
-        # Migrate legacy sort_key="usage" -> "enabled"
-        if meta.get("sort_key") == "usage":
+        # Migrate legacy sort_key values -> "enabled"
+        if meta.get("sort_key") in ("usage", "mode"):
             meta["sort_key"] = "enabled"
 
         # Migrate legacy list active_profiles -> single active_profile key if empty
@@ -324,6 +324,10 @@ class StateStore:
                 else:
                     t.mode_index = 0
                 t.param_value = str(tdata.get("param_value", t.param_value))
+                if t.id in ("serena", "unity_mcp", "blender_mcp") and t.param_value.isdigit():
+                    p_int = int(t.param_value)
+                    if 1 <= p_int <= 65535:
+                        t.port = p_int
                 t.version = str(tdata.get("version", t.version))
                 opt_map = tdata.get("options", {})
                 for opt in t.options:

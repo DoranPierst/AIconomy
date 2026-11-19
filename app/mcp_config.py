@@ -1,4 +1,4 @@
-"""Serialized, atomic AI client configuration sync and Blender skills disk sync."""
+"""Serialized, atomic AI client configuration sync, Blender skills sync, and Caveman rule sync."""
 from __future__ import annotations
 
 import copy
@@ -12,7 +12,7 @@ import tempfile
 import threading
 from typing import Any
 
-from .catalog import ToolSpec
+from .catalog import ToolSpec, localized_tool_modes
 from .storage import WindowsDpapiVault
 
 _CONFIG_LOCK = threading.Lock()
@@ -21,6 +21,27 @@ CODEX_BEGIN_TAG = "# >>> BEGIN AICONOMY >>>"
 CODEX_END_TAG = "# <<< END AICONOMY <<<"
 _LEGACY_CODEX_BEGIN_TAG = "# >>> BEGIN AI-ARAC-MERKEZI >>>"
 _LEGACY_CODEX_END_TAG = "# <<< END AI-ARAC-MERKEZI <<<"
+
+CAVEMAN_BEGIN_TAG = "<!-- BEGIN AICONOMY CAVEMAN MODE -->"
+CAVEMAN_END_TAG = "<!-- END AICONOMY CAVEMAN MODE -->"
+
+_CAVEMAN_MODE_DIRECTIVES: dict[int, str] = {
+    0: (
+        "## Active AIconomy Mode: Lite (-35%)\n"
+        "Keep natural, readable full sentences while cutting greetings, filler, apologies, and closing recaps. "
+        "Keep all explanations clear and concise."
+    ),
+    1: (
+        "## Active AIconomy Mode: Full (-65%)\n"
+        "Apply standard Caveman compression: answer first, zero ceremony, short direct sentences (max 20 words), "
+        "articles optional when unambiguous, 100% of code/paths/negations verbatim."
+    ),
+    2: (
+        "## Active AIconomy Mode: Ultra (-75%)\n"
+        "Maximum telegraphic compression: terse fragments, bullet-level density, zero prose transitions, "
+        "minimum words per fact while keeping every code block, flag, path, number, and negation exact."
+    ),
+}
 
 
 def _force_rmtree(target: pathlib.Path) -> None:
@@ -60,6 +81,110 @@ def _dedupe_yaml_frontmatter_keys(md_text: str) -> str:
             bucket.add(key)
         out_lines.append(line)
     return "---" + "\n".join(out_lines) + "\n---" + parts[2]
+
+
+def _atomic_write_text(path: pathlib.Path, text: str) -> None:
+    """Write text to a sibling temporary file and atomically replace ``path``."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="") as fh:
+            fh.write(text)
+        os.replace(tmp_name, path)
+    except Exception:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
+
+
+def sync_caveman_on_disk(
+    caveman_tool: ToolSpec,
+    agents_root: pathlib.Path | None = None,
+    lang: str = "en",
+) -> tuple[bool, str]:
+    """Enable/disable Caveman on disk and stamp the selected Lite/Full/Ultra directive into SKILL.md."""
+    is_tr = lang == "tr"
+    root = agents_root or (pathlib.Path.home() / ".agents")
+    active_dir = root / "skills" / "caveman"
+    disabled_dir = root / "skills_disabled" / "caveman"
+
+    if not active_dir.is_dir() and not disabled_dir.is_dir():
+        msg = (
+            "Caveman kuralı diske kurulu değil."
+            if is_tr
+            else "Caveman rule is not installed on disk."
+        )
+        return False, msg
+
+    if not caveman_tool.enabled:
+        if active_dir.is_dir():
+            disabled_dir.parent.mkdir(parents=True, exist_ok=True)
+            if disabled_dir.exists():
+                _force_rmtree(disabled_dir)
+            shutil.move(str(active_dir), str(disabled_dir))
+        msg = (
+            "Caveman disk üzerinde devre dışı bırakıldı."
+            if is_tr
+            else "Caveman disabled on disk."
+        )
+        return True, msg
+
+    if not active_dir.is_dir() and disabled_dir.is_dir():
+        active_dir.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(disabled_dir), str(active_dir))
+
+    m_idx = max(0, min(int(caveman_tool.mode_index), 2))
+    skill_md = active_dir / "SKILL.md"
+    if skill_md.is_file():
+        orig_txt = skill_md.read_text(encoding="utf-8")
+        cleaned = re.sub(
+            rf"\n*{re.escape(CAVEMAN_BEGIN_TAG)}.*?{re.escape(CAVEMAN_END_TAG)}\s*",
+            "",
+            orig_txt,
+            flags=re.DOTALL,
+        ).rstrip()
+        directive = _CAVEMAN_MODE_DIRECTIVES[m_idx]
+        new_txt = f"{cleaned}\n\n{CAVEMAN_BEGIN_TAG}\n{directive}\n{CAVEMAN_END_TAG}\n"
+        if new_txt != orig_txt:
+            _atomic_write_text(skill_md, new_txt)
+
+    modes = localized_tool_modes(caveman_tool, lang)
+    mode_lbl = modes[m_idx] if m_idx < len(modes) else "Full (-65%)"
+    msg = (
+        f"Caveman aktif ({mode_lbl})."
+        if is_tr
+        else f"Caveman enabled ({mode_lbl})."
+    )
+    return True, msg
+
+
+def detect_installed_ai_clients(home_dir: pathlib.Path | None = None) -> set[str]:
+    """Detect which AI coding clients (AGY, CDX, CLD, CUR) appear installed on this machine."""
+    home = home_dir or pathlib.Path.home()
+    local_app = pathlib.Path(os.environ.get("LOCALAPPDATA", str(home / "AppData" / "Local")))
+    detected: set[str] = set()
+    if (
+        (home / ".gemini").is_dir()
+        or (local_app / "Programs" / "Antigravity").is_dir()
+        or shutil.which("antigravity")
+    ):
+        detected.add("AGY")
+    if (home / ".codex").is_dir() or shutil.which("codex"):
+        detected.add("CDX")
+    if (home / ".claude.json").is_file() or (home / ".claude").is_dir() or shutil.which("claude"):
+        detected.add("CLD")
+    if (
+        (home / ".cursor").is_dir()
+        or (local_app / "Programs" / "cursor").is_dir()
+        or (local_app / "cursor").is_dir()
+        or shutil.which("cursor")
+    ):
+        detected.add("CUR")
+    if not detected:
+        detected.add("AGY")
+    return detected
 
 
 def sync_blender_skills_on_disk(
@@ -140,33 +265,62 @@ def _is_http_mcp_tool(t: ToolSpec) -> bool:
     return bool(t.port and t.id in ("serena", "unity_mcp"))
 
 
+def build_effective_stdio_spec(
+    t: ToolSpec,
+    vault: WindowsDpapiVault,
+    wrap_windows_npx: bool = True,
+) -> tuple[str, list[str], dict[str, str]] | None:
+    """Resolve effective (command, args, env) for a stdio MCP tool, or None when blocked by a missing required key."""
+    if not t.mcp_command:
+        return None
+    if t.vault_key_required and t.vault_key_name and not vault.has_secret(t.vault_key_name):
+        return None
+
+    args = list(t.mcp_args)
+    opt_map = {o.key: bool(o.enabled) for o in t.options}
+    if t.id == "chrome_devtools":
+        if opt_map.get("headless_mode", False) and "--headless" not in args:
+            args.append("--headless")
+        if opt_map.get("isolated_profile", False) and "--isolated" not in args:
+            args.append("--isolated")
+
+    env: dict[str, str] = {}
+    if t.vault_key_name:
+        secret = vault.get_secret(t.vault_key_name)
+        if secret:
+            if t.id == "context7" and "--api-key" not in args:
+                args.extend(["--api-key", secret])
+            env[t.vault_key_name] = secret
+
+    p_val = t.param_value.strip()
+    if t.id == "elevenlabs_mcp" and p_val:
+        env["ELEVENLABS_MCP_OUTPUT_PATH"] = p_val
+    elif t.id == "blender_mcp":
+        b_port = int(t.port or (int(p_val) if p_val.isdigit() else 9876))
+        if b_port != 9876:
+            env["BLENDER_PORT"] = str(b_port)
+    elif t.id == "renderdoc_mcp" and p_val:
+        env["RENDERDOC_CAPTURE_DIR"] = p_val
+
+    cmd = t.mcp_command
+    if wrap_windows_npx and os.name == "nt" and cmd.lower() == "npx":
+        cmd = "cmd"
+        args = ["/c", "npx", *args]
+
+    return cmd, args, env
+
+
 def _build_mcp_entry(t: ToolSpec, vault: WindowsDpapiVault) -> dict[str, Any] | None:
     if _is_http_mcp_tool(t):
         return {"url": f"http://127.0.0.1:{t.port}/mcp"}
-    if t.mcp_command:
-        entry: dict[str, Any] = {"command": t.mcp_command, "args": list(t.mcp_args)}
-        if t.vault_key_name:
-            secret = vault.get_secret(t.vault_key_name)
-            if secret:
-                entry["env"] = {t.vault_key_name: secret}
-        return entry
-    return None
-
-
-def _atomic_write_text(path: pathlib.Path, text: str) -> None:
-    """Write text to a sibling temporary file and atomically replace ``path``."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent))
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8", newline="") as fh:
-            fh.write(text)
-        os.replace(tmp_name, path)
-    except Exception:
-        try:
-            os.unlink(tmp_name)
-        except OSError:
-            pass
-        raise
+    spec = build_effective_stdio_spec(t, vault, wrap_windows_npx=True)
+    if spec is None:
+        return None
+    cmd, args, env = spec
+    entry: dict[str, Any] = {"command": cmd, "args": args}
+    if env:
+        entry["env"] = env
+    return entry
 
 
 def _rewrite_mcp_json(
@@ -338,7 +492,12 @@ def _sync_mcp_json_clients_impl(
 
             handled_existing: set[str] = set()
             for sec_key, t_obj in alias_map.items():
-                want_cdx = bool(t_obj.enabled and t_obj.clients.get("CDX", False))
+                has_req_key = not (
+                    t_obj.vault_key_required
+                    and t_obj.vault_key_name
+                    and not vault.has_secret(t_obj.vault_key_name)
+                )
+                want_cdx = bool(t_obj.enabled and t_obj.clients.get("CDX", False) and has_req_key)
                 cleaned, found_sec = _sync_existing_codex_section(sec_key, want_cdx, cleaned)
                 if found_sec:
                     handled_existing.add(t_obj.id)
@@ -348,22 +507,26 @@ def _sync_mcp_json_clients_impl(
             for t in tools:
                 if not t.mcp_server_key or not (t.enabled and t.clients.get("CDX", False)):
                     continue
+                entry = _build_mcp_entry(t, vault)
+                if entry is None:
+                    continue
                 if t.id in handled_existing:
                     cdx_added += 1
                     continue
-                if _is_http_mcp_tool(t):
+                if "url" in entry:
                     cdx_lines.append(f"[mcp_servers.{t.mcp_server_key}]")
-                    cdx_lines.append(f'url = "http://127.0.0.1:{t.port}/mcp"')
+                    cdx_lines.append(f"url = {json.dumps(entry['url'])}")
                     cdx_added += 1
-                elif t.mcp_command:
-                    args_toml = ", ".join(json.dumps(a) for a in t.mcp_args)
+                else:
+                    args_toml = ", ".join(json.dumps(a) for a in entry.get("args", []))
                     cdx_lines.append(f"[mcp_servers.{t.mcp_server_key}]")
-                    cdx_lines.append(f"command = {json.dumps(t.mcp_command)}")
+                    cdx_lines.append(f"command = {json.dumps(entry['command'])}")
                     cdx_lines.append(f"args = [{args_toml}]")
-                    if t.vault_key_name and vault.get_secret(t.vault_key_name):
-                        sec = vault.get_secret(t.vault_key_name)
+                    env_dict = entry.get("env") or {}
+                    if env_dict:
                         cdx_lines.append(f"[mcp_servers.{t.mcp_server_key}.env]")
-                        cdx_lines.append(f"{t.vault_key_name} = {json.dumps(sec)}")
+                        for ek, ev in env_dict.items():
+                            cdx_lines.append(f"{ek} = {json.dumps(ev)}")
                     cdx_added += 1
             cdx_lines.append(CODEX_END_TAG)
             new_toml = cleaned + "\n\n" + "\n".join(cdx_lines) + "\n"

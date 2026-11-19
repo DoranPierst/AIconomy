@@ -237,6 +237,21 @@ class AiMatrixHeaderView(QHeaderView):
         self.sectionMoved.connect(lambda *_: self.sync_ai_bar_geometry())
         self.geometriesChanged.connect(self.sync_ai_bar_geometry)
 
+    def refresh_visible_clients(self, visible_codes: list[str]) -> int:
+        vis_set = set(visible_codes)
+        shown = 0
+        for code, _lbl in AI_CLIENTS:
+            btn = self.buttons.get(code)
+            if btn is not None:
+                is_vis = code in vis_set
+                btn.setVisible(is_vis)
+                if is_vis:
+                    shown += 1
+        col_w = max(60, shown * 40 + 8)
+        self.AI_COL_WIDTH = col_w
+        self.sync_ai_bar_geometry()
+        return col_w
+
     def sync_ai_bar_geometry(self) -> None:
         vh = self.viewport().height() or self.height()
         if self.count() <= self.AI_COL or self.isSectionHidden(self.AI_COL):

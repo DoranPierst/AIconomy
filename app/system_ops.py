@@ -11,6 +11,8 @@ from .host_apps import (
     launch_host_app_for_tool,
 )
 from .mcp_config import (
+    CAVEMAN_BEGIN_TAG,
+    CAVEMAN_END_TAG,
     CODEX_BEGIN_TAG,
     CODEX_END_TAG,
     _CONFIG_LOCK,
@@ -20,7 +22,10 @@ from .mcp_config import (
     _force_rmtree,
     _rewrite_mcp_json,
     _sync_mcp_json_clients_impl,
+    build_effective_stdio_spec,
+    detect_installed_ai_clients,
     sync_blender_skills_on_disk,
+    sync_caveman_on_disk,
     sync_mcp_json_clients,
 )
 from .plugins import (
@@ -56,6 +61,8 @@ from .processes import (
 )
 
 __all__ = [
+    "CAVEMAN_BEGIN_TAG",
+    "CAVEMAN_END_TAG",
     "CODEX_BEGIN_TAG",
     "CODEX_END_TAG",
     "NO_WINDOW",
@@ -79,8 +86,10 @@ __all__ = [
     "_run_stdio_handshake",
     "_sync_mcp_json_clients_impl",
     "_terminate_all",
+    "build_effective_stdio_spec",
     "check_all_tools_updates_parallel",
     "check_single_tool_update",
+    "detect_installed_ai_clients",
     "detect_running_dcc_apps",
     "enforce_tool_runtime_state",
     "find_port_owner",
@@ -98,6 +107,7 @@ __all__ = [
     "scan_live_process_locations",
     "stop_all_managed_services",
     "sync_blender_skills_on_disk",
+    "sync_caveman_on_disk",
     "sync_mcp_json_clients",
     "test_tool_connection_e2e",
     "update_single_tool",

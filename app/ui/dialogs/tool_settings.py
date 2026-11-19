@@ -1,36 +1,38 @@
-"""Per-tool technical settings dialog with direct API key shortcut and AI advisor."""
+"""Per-tool technical settings dialog with mode selector, real CLI options, API key shortcut, and reset."""
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
 from PySide6.QtCore import QEvent, QObject, Qt
 from PySide6.QtWidgets import (
-    QApplication,
     QCheckBox,
+    QComboBox,
     QDialog,
     QFrame,
     QHBoxLayout,
     QLabel,
     QLineEdit,
-    QMessageBox,
-    QPlainTextEdit,
     QPushButton,
     QVBoxLayout,
     QWidget,
 )
 
-from ...ai_advisor import build_tool_ai_prompt, parse_tool_ai_response
-from ...catalog import ToolSpec, localized_option_text, localized_tool_text
+from ...catalog import (
+    ToolSpec,
+    get_default_tool_spec,
+    localized_option_text,
+    localized_tool_modes,
+    localized_tool_text,
+)
 from ...i18n import tr
 from ..widgets import create_option_help_badge
-from .ai_paste import AiPasteDialog
 
 if TYPE_CHECKING:
     from ..main_window import MainWindow
 
 
 class ToolGearDialog(QDialog):
-    """Configure a tool's parameter, options, API key shortcut, and AI recommendations."""
+    """Configure a tool's active mode, parameter, real CLI options, API key shortcut, and defaults."""
 
     def __init__(
         self,
@@ -42,12 +44,12 @@ class ToolGearDialog(QDialog):
         self.main_win = parent
         self.tool = tool
         self.vault = parent.vault
-        self.logs = parent.logs
         self.lang = parent.lang
         self.scope_display = scope_display
+        self.reset_requested = False
         self.setWindowTitle(tr(self.lang, "gear_title", name=tool.name))
-        self.setMinimumWidth(640)
-        self.resize(680, 540)
+        self.setMinimumWidth(620)
+        self.resize(650, 460)
 
         lay = QVBoxLayout(self)
         lay.setSpacing(10)
@@ -62,6 +64,23 @@ class ToolGearDialog(QDialog):
             det.setWordWrap(True)
             loc_lay.addWidget(det)
         lay.addWidget(loc_card)
+
+        self.mode_cmb: QComboBox | None = None
+        modes_loc = localized_tool_modes(tool, self.lang)
+        if len(modes_loc) > 1:
+            m_card = QFrame()
+            m_card.setObjectName("card")
+            m_lay = QHBoxLayout(m_card)
+            m_lay.setContentsMargins(12, 8, 12, 8)
+            m_lay.setSpacing(10)
+            m_lay.addWidget(QLabel(f"<b>{tr(self.lang, 'gear_mode_lbl')}</b>"))
+            self.mode_cmb = QComboBox()
+            self.mode_cmb.addItems(modes_loc)
+            self.mode_cmb.setCurrentIndex(max(0, min(tool.mode_index, len(modes_loc) - 1)))
+            self.mode_cmb.setMinimumWidth(220)
+            m_lay.addWidget(self.mode_cmb)
+            m_lay.addStretch()
+            lay.addWidget(m_card)
 
         self.opt_help_card = QFrame()
         self.opt_help_card.setObjectName("bannerInfo")
@@ -168,28 +187,21 @@ class ToolGearDialog(QDialog):
         else:
             self.opt_help_card.hide()
 
-        self.prompt_preview = QPlainTextEdit()
-        self.prompt_preview.setReadOnly(True)
-        self.prompt_preview.setFixedHeight(90)
-        self.prompt_preview.hide()
-        lay.addWidget(self.prompt_preview)
-
         lay.addStretch()
 
         bot = QHBoxLayout()
-        btn_ask = QPushButton(tr(self.lang, "gear_ask_ai"))
-        btn_paste = QPushButton(tr(self.lang, "gear_paste_ai"))
+        self.btn_reset = QPushButton(tr(self.lang, "btn_reset_defaults"))
+        self.btn_reset.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_reset.clicked.connect(self._reset_to_defaults)
+
         btn_cancel = QPushButton(tr(self.lang, "btn_cancel"))
         btn_save = QPushButton(tr(self.lang, "btn_save"))
         btn_save.setObjectName("primaryBtn")
 
-        btn_ask.clicked.connect(self._copy_prompt)
-        btn_paste.clicked.connect(self._paste_response)
         btn_cancel.clicked.connect(self.reject)
         btn_save.clicked.connect(self._save)
 
-        bot.addWidget(btn_ask)
-        bot.addWidget(btn_paste)
+        bot.addWidget(self.btn_reset)
         bot.addStretch()
         bot.addWidget(btn_cancel)
         bot.addWidget(btn_save)
@@ -199,8 +211,15 @@ class ToolGearDialog(QDialog):
         if self._key_status_lbl is None:
             return
         has_k = self.vault.has_secret(self.tool.vault_key_name)
-        status_txt = tr(self.lang, "gear_key_set" if has_k else "gear_key_missing")
-        col = "#22c55e" if has_k else "#f59e0b"
+        if has_k:
+            status_txt = tr(self.lang, "gear_key_set")
+            col = "#22c55e"
+        elif self.tool.vault_key_required:
+            status_txt = tr(self.lang, "gear_key_missing")
+            col = "#f59e0b"
+        else:
+            status_txt = tr(self.lang, "gear_key_optional")
+            col = "#94a3b8"
         self._key_status_lbl.setText(
             f"<b>{self.tool.vault_key_name}:</b> <span style='color:{col}; font-weight:600;'>{status_txt}</span>"
         )
@@ -224,40 +243,43 @@ class ToolGearDialog(QDialog):
                 self._show_option_help(str(t), str(h))
         return super().eventFilter(watched, event)
 
-    def _copy_prompt(self) -> None:
-        cur_param = self.param_inp.text().strip() if self.param_inp else ""
-        opt_states = {k: cb.isChecked() for k, cb in self.opt_checks.items()}
-        has_key = self.vault.has_secret(self.tool.vault_key_name) if self.tool.vault_key_name else False
-        issue = self.logs.latest_issue_for_tool(self.tool.name)
-        prompt = build_tool_ai_prompt(
-            self.tool, cur_param, opt_states, has_key, issue, self.scope_display, lang=self.lang
-        )
-        QApplication.clipboard().setText(prompt)
-        self.prompt_preview.setPlainText(prompt)
-        self.prompt_preview.show()
-
-    def _paste_response(self) -> None:
-        dlg = AiPasteDialog(self, f"{self.tool.name} — {tr(self.lang, 'gear_paste_ai')}", lang=self.lang)
-        if dlg.exec() == QDialog.DialogCode.Accepted:
-            matched, msg = parse_tool_ai_response(self.tool, dlg.editor.toPlainText(), lang=self.lang)
-            if matched or "none" in msg.lower() or "kapalı" in msg.lower():
-                for k, cb in self.opt_checks.items():
-                    cb.setChecked(k in matched)
-                QMessageBox.information(
-                    self,
-                    tr(self.lang, "gear_ai_applied_title"),
-                    tr(self.lang, "gear_ai_applied_msg", msg=msg),
-                )
-            else:
-                QMessageBox.warning(
-                    self,
-                    tr(self.lang, "gear_ai_nomatch_title"),
-                    tr(self.lang, "gear_ai_nomatch_msg"),
-                )
+    def _reset_to_defaults(self) -> None:
+        self.reset_requested = True
+        default_spec = get_default_tool_spec(self.tool.id)
+        if default_spec is not None:
+            if self.param_inp is not None:
+                self.param_inp.setText(default_spec.param_value)
+            if self.mode_cmb is not None and default_spec.modes:
+                self.mode_cmb.setCurrentIndex(max(0, min(default_spec.mode_index, self.mode_cmb.count() - 1)))
+            def_opts = {o.key: o.enabled for o in default_spec.options}
+            for key, cb in self.opt_checks.items():
+                cb.setChecked(def_opts.get(key, False))
+        else:
+            if self.param_inp is not None:
+                self.param_inp.setText("")
+            if self.mode_cmb is not None:
+                self.mode_cmb.setCurrentIndex(0)
+            for cb in self.opt_checks.values():
+                cb.setChecked(False)
+        self._show_option_help(tr(self.lang, "btn_reset_defaults"), tr(self.lang, "gear_reset_loaded"))
 
     def _save(self) -> None:
         if self.param_inp is not None:
             self.tool.param_value = self.param_inp.text().strip()
+            if self.tool.id in ("serena", "unity_mcp", "blender_mcp") and self.tool.param_value.isdigit():
+                p_val = int(self.tool.param_value)
+                if 1 <= p_val <= 65535:
+                    self.tool.port = p_val
+        if self.mode_cmb is not None:
+            self.tool.mode_index = self.mode_cmb.currentIndex()
         for opt in self.tool.options:
             opt.enabled = self.opt_checks[opt.key].isChecked()
+        if self.reset_requested:
+            default_spec = get_default_tool_spec(self.tool.id)
+            if default_spec is not None:
+                if self.tool.scope_selectable:
+                    self.tool.project_scope = default_spec.project_scope
+                self.tool.clients = dict(default_spec.clients)
+                if self.param_inp is None and default_spec.port is not None:
+                    self.tool.port = default_spec.port
         self.accept()

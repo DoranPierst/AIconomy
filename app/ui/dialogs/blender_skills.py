@@ -3,7 +3,6 @@ from __future__ import annotations
 
 from PySide6.QtCore import QEvent, QObject
 from PySide6.QtWidgets import (
-    QApplication,
     QCheckBox,
     QComboBox,
     QDialog,
@@ -12,19 +11,15 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
-    QMessageBox,
-    QPlainTextEdit,
     QPushButton,
     QScrollArea,
     QVBoxLayout,
     QWidget,
 )
 
-from ...ai_advisor import build_skills_ai_prompt, parse_skills_ai_response
-from ...catalog import BLENDER_SKILLS_94, describe_blender_skill
+from ...catalog import BLENDER_SKILLS_94, DEFAULT_ACTIVE_BLENDER_SKILLS, describe_blender_skill
 from ...i18n import tr
 from ..widgets import create_option_help_badge
-from .ai_paste import AiPasteDialog
 
 
 class BlenderSkillsDialog(QDialog):
@@ -40,7 +35,7 @@ class BlenderSkillsDialog(QDialog):
         super().__init__(parent)
         self.lang = lang
         self.setWindowTitle(tr(lang, "skills_title"))
-        self.resize(920, 650)
+        self.resize(920, 640)
         self.draft_active: set[str] = set(active_skills)
         self.checked_items: set[str] = set(checked_skills or set())
         self.saved_result: set[str] | None = None
@@ -52,6 +47,7 @@ class BlenderSkillsDialog(QDialog):
         top_bar = QHBoxLayout()
         self.btn_all_on = QPushButton(tr(lang, "skills_all_on"))
         self.btn_all_off = QPushButton(tr(lang, "skills_all_off"))
+        self.btn_default = QPushButton(tr(lang, "skills_btn_default", n=len(DEFAULT_ACTIVE_BLENDER_SKILLS)))
         self.btn_sel_on = QPushButton(tr(lang, "skills_sel_on", n=0))
         self.btn_sel_on.setObjectName("primaryBtn")
         self.btn_sel_off = QPushButton(tr(lang, "skills_sel_off", n=0))
@@ -59,11 +55,19 @@ class BlenderSkillsDialog(QDialog):
 
         self.btn_all_on.clicked.connect(self._enable_all)
         self.btn_all_off.clicked.connect(self._disable_all)
+        self.btn_default.clicked.connect(self._restore_defaults)
         self.btn_sel_on.clicked.connect(self._enable_selected)
         self.btn_sel_off.clicked.connect(self._disable_selected)
         self.btn_clear_sel.clicked.connect(self._clear_selection)
 
-        for b in (self.btn_all_on, self.btn_all_off, self.btn_sel_on, self.btn_sel_off, self.btn_clear_sel):
+        for b in (
+            self.btn_all_on,
+            self.btn_all_off,
+            self.btn_default,
+            self.btn_sel_on,
+            self.btn_sel_off,
+            self.btn_clear_sel,
+        ):
             top_bar.addWidget(b)
 
         top_bar.addStretch()
@@ -110,30 +114,20 @@ class BlenderSkillsDialog(QDialog):
         sh_lay.addWidget(self.skill_help_body)
         root.addWidget(self.skill_help_card)
 
-        self.prompt_preview = QPlainTextEdit()
-        self.prompt_preview.setReadOnly(True)
-        self.prompt_preview.setFixedHeight(95)
-        self.prompt_preview.hide()
-        root.addWidget(self.prompt_preview)
-
         bot = QHBoxLayout()
         self.summary_lbl = QLabel()
         bot.addWidget(self.summary_lbl)
         bot.addStretch()
 
-        self.btn_ask_ai = QPushButton(tr(lang, "gear_ask_ai"))
-        self.btn_paste_ai = QPushButton(tr(lang, "gear_paste_ai"))
         self.btn_cancel = QPushButton(tr(lang, "btn_cancel"))
         self.btn_save = QPushButton(tr(lang, "btn_save"))
         self.btn_save.setObjectName("primaryBtn")
 
-        self.btn_ask_ai.clicked.connect(self._copy_ai_prompt)
-        self.btn_paste_ai.clicked.connect(self._paste_ai_response)
         self.btn_cancel.clicked.connect(self.reject)
         self.btn_save.clicked.connect(self._save_and_close)
 
-        for b in (self.btn_ask_ai, self.btn_paste_ai, self.btn_cancel, self.btn_save):
-            bot.addWidget(b)
+        bot.addWidget(self.btn_cancel)
+        bot.addWidget(self.btn_save)
         root.addLayout(bot)
 
         self._rebuild_grid()
@@ -237,6 +231,10 @@ class BlenderSkillsDialog(QDialog):
         self.draft_active.clear()
         self._rebuild_grid()
 
+    def _restore_defaults(self) -> None:
+        self.draft_active = set(DEFAULT_ACTIVE_BLENDER_SKILLS)
+        self._rebuild_grid()
+
     def _enable_selected(self) -> None:
         self.draft_active.update(self.checked_items)
         self._rebuild_grid()
@@ -248,32 +246,6 @@ class BlenderSkillsDialog(QDialog):
     def _clear_selection(self) -> None:
         self.checked_items.clear()
         self._rebuild_grid()
-
-    def _copy_ai_prompt(self) -> None:
-        prompt = build_skills_ai_prompt(self.draft_active, self.checked_items, lang=self.lang)
-        QApplication.clipboard().setText(prompt)
-        self.prompt_preview.setPlainText(prompt)
-        self.prompt_preview.show()
-
-    def _paste_ai_response(self) -> None:
-        dlg = AiPasteDialog(self, tr(self.lang, "skills_paste_title"), lang=self.lang)
-        if dlg.exec() == QDialog.DialogCode.Accepted:
-            matched, msg = parse_skills_ai_response(dlg.editor.toPlainText(), lang=self.lang)
-            if matched or "none" in msg.lower() or "kapalı" in msg.lower():
-                self.draft_active = set(matched)
-                self.checked_items = set(matched)
-                self._rebuild_grid()
-                QMessageBox.information(
-                    self,
-                    tr(self.lang, "gear_ai_applied_title"),
-                    tr(self.lang, "skills_ai_applied_msg", msg=msg, n=len(self.draft_active)),
-                )
-            else:
-                QMessageBox.warning(
-                    self,
-                    tr(self.lang, "gear_ai_nomatch_title"),
-                    tr(self.lang, "skills_ai_nomatch_msg"),
-                )
 
     def _save_and_close(self) -> None:
         self.saved_result = set(self.draft_active)

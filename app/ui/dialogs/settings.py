@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ...catalog import AI_CLIENTS
 from ...i18n import SUPPORTED_LANGUAGES, tr
 from ...storage import WindowsDpapiVault
 from ...updater import get_current_app_version
@@ -109,6 +110,25 @@ class SettingsDialog(QDialog):
         ver_row.addWidget(btn_upd)
         fl.addRow(tr(self.lang, "set_updates_lbl"), ver_row)
 
+        clients_row = QHBoxLayout()
+        clients_row.setSpacing(12)
+        vis_now = set(self.main_win.get_visible_client_codes())
+        self.client_vis_checks: dict[str, QCheckBox] = {}
+        for code, full_lbl in AI_CLIENTS:
+            is_det = code in self.main_win.installed_clients
+            det_txt = tr(self.lang, "client_detected" if is_det else "client_not_detected")
+            cb = QCheckBox(code)
+            cb.setChecked(code in vis_now)
+            cb.setCursor(Qt.CursorShape.PointingHandCursor)
+            cb.setToolTip(f"{full_lbl} ({det_txt})")
+            if not is_det:
+                cb.setStyleSheet("color: #64748b;")
+            cb.toggled.connect(lambda checked, c=code: self._on_visible_client_toggled(c, checked))
+            self.client_vis_checks[code] = cb
+            clients_row.addWidget(cb)
+        clients_row.addStretch()
+        fl.addRow(tr(self.lang, "set_clients_lbl"), clients_row)
+
         lay.addWidget(form_card)
 
         beh_card = QFrame()
@@ -148,6 +168,18 @@ class SettingsDialog(QDialog):
     def _on_autodetect_toggled(self, checked: bool) -> None:
         self.main_win.meta["auto_detect_apps"] = checked
         self.main_win._save_state()
+
+    def _on_visible_client_toggled(self, code: str, checked: bool) -> None:
+        selected = [c for c, _ in AI_CLIENTS if self.client_vis_checks[c].isChecked()]
+        if not selected:
+            cb = self.client_vis_checks[code]
+            cb.blockSignals(True)
+            cb.setChecked(True)
+            cb.blockSignals(False)
+            return
+        self.main_win.meta["visible_clients"] = selected
+        self.main_win._save_state()
+        self.main_win._refresh_table()
 
     # --- TAB 1: API KEYS (DPAPI VAULT) ---
     def _build_keys_tab(self) -> None:
@@ -222,7 +254,8 @@ class SettingsDialog(QDialog):
         self.main_win.logs.add("INFO", tr(self.lang, "settings_tab_keys"), msg)
         self.main_win.set_status(msg)
         self.main_win._refresh_logs_tab()
-        self.main_win._sync_live_environment_async(target_tools=[])
+        self.main_win.run_health_scan()
+        self.main_win._sync_live_environment_async(target_tools=list(self.main_win.tools))
         btn = self.vault_save_btns[key_name]
         btn.setText(tr(self.lang, "set_key_saved"))
         btn.setObjectName("successBtn")

@@ -3,7 +3,6 @@ from __future__ import annotations
 
 from .ui.dialogs import (
     AddRepoDialog,
-    AiPasteDialog,
     AppUpdateDialog,
     BlenderSkillsDialog,
     DiagnosticsDialog,
@@ -20,7 +19,6 @@ from .ui.workers import WorkerBridge
 __all__ = [
     "AddRepoDialog",
     "AiMatrixHeaderView",
-    "AiPasteDialog",
     "AppUpdateDialog",
     "BlenderSkillsDialog",
     "DARK_QSS",

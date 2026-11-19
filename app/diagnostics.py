@@ -14,6 +14,7 @@ import urllib.request
 
 from .catalog import ToolSpec
 from .host_apps import NO_WINDOW
+from .mcp_config import build_effective_stdio_spec
 from .storage import WindowsDpapiVault
 from .updater import get_current_app_version
 
@@ -133,18 +134,18 @@ def test_tool_connection_e2e(
         if not cmd_bin:
             lbl = f"Komut bulunamadı: {tool.mcp_command}" if is_tr else f"Command not found: {tool.mcp_command}"
             return False, -1, lbl, f"'{tool.mcp_command}' is not on PATH."
-        if tool.vault_key_name and not vault.has_secret(tool.vault_key_name):
+        if tool.vault_key_required and tool.vault_key_name and not vault.has_secret(tool.vault_key_name):
             lbl = f"API anahtarı eksik ({tool.vault_key_name})" if is_tr else f"Missing API key ({tool.vault_key_name})"
             det = "Ayarlar > API Anahtarları bölümünden ekleyin." if is_tr else "Configure in Settings > API Keys."
             return False, -1, lbl, det
 
+        spec = build_effective_stdio_spec(tool, vault, wrap_windows_npx=False)
+        eff_args = spec[1] if spec else list(tool.mcp_args)
+        eff_env = spec[2] if spec else {}
         env = os.environ.copy()
-        if tool.vault_key_name:
-            sec = vault.get_secret(tool.vault_key_name)
-            if sec:
-                env[tool.vault_key_name] = sec
+        env.update(eff_env)
 
-        return _run_stdio_handshake(cmd_bin, tool.mcp_args, env, t0, cfg_note, app_ver, lang=lang)
+        return _run_stdio_handshake(cmd_bin, eff_args, env, t0, cfg_note, app_ver, lang=lang)
 
     if tool.id == "blender_skills":
         plugin_dir = pathlib.Path.home() / ".gemini" / "config" / "plugins" / "blender-skills"

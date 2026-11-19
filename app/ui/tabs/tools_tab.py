@@ -1,4 +1,4 @@
-"""Tools tab mixin (6-column minimalist matrix, ToggleSwitch, clickable update pills, zero emojis)."""
+"""Tools tab mixin (5-column minimalist matrix, ToggleSwitch, clickable mode/skill/update pills, zero emojis)."""
 from __future__ import annotations
 
 import datetime as dt
@@ -106,8 +106,8 @@ class ToolsTabMixin:
         self.host_dep_banner.hide()
         lay.addWidget(self.host_dep_banner)
 
-        # 6-column minimalist Tools table
-        self.table = HoverTableWidget(0, 6, self)
+        # 5-column minimalist Tools table (Tool | Scope | Status | AI Clients | Enabled)
+        self.table = HoverTableWidget(0, 5, self)
         self.ai_header = AiMatrixHeaderView(self.table, self)
         self.bulk_client_btns: dict[str, QPushButton] = self.ai_header.buttons
         self.table.setHorizontalHeader(self.ai_header)
@@ -126,10 +126,9 @@ class ToolsTabMixin:
         hdr.setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)
         hdr.resizeSection(3, AiMatrixHeaderView.AI_COL_WIDTH)
         self.table.setColumnWidth(3, AiMatrixHeaderView.AI_COL_WIDTH)
-        hdr.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
-        hdr.setSectionResizeMode(5, QHeaderView.ResizeMode.Fixed)
-        hdr.resizeSection(5, 108)
-        self.table.setColumnWidth(5, 108)
+        hdr.setSectionResizeMode(4, QHeaderView.ResizeMode.Fixed)
+        hdr.resizeSection(4, 108)
+        self.table.setColumnWidth(4, 108)
         hdr.setCursor(Qt.CursorShape.PointingHandCursor)
         hdr.sectionClicked.connect(self._on_header_clicked)
         self.table.horizontalScrollBar().valueChanged.connect(lambda *_: hdr.sync_ai_bar_geometry())
@@ -209,7 +208,7 @@ class ToolsTabMixin:
         self.set_status(tr(self.lang, "msg_proj_added", name=proj_key))
 
     def _on_header_clicked(self, col: int) -> None:
-        key_map = {0: "name", 1: "project", 2: "ping", 4: "mode", 5: "enabled"}
+        key_map = {0: "name", 1: "project", 2: "ping", 4: "enabled"}
         if col not in key_map:
             return
         k = key_map[col]
@@ -217,7 +216,7 @@ class ToolsTabMixin:
             self.sort_desc = not self.sort_desc
         else:
             self.sort_key = k
-            self.sort_desc = col in (2, 5)
+            self.sort_desc = col in (2, 4)
         self._save_state()
         self._refresh_table()
 
@@ -227,15 +226,13 @@ class ToolsTabMixin:
             tr(self.lang, "col_scope"),
             tr(self.lang, "col_status"),
             "",
-            tr(self.lang, "col_mode"),
             tr(self.lang, "col_state"),
         ]
         key_to_col = {
             "name": 0,
             "project": 1,
             "ping": 2,
-            "mode": 4,
-            "enabled": 5,
+            "enabled": 4,
         }
         active_col = key_to_col.get(self.sort_key, -1)
         arrow = " ↓" if self.sort_desc else " ↑"
@@ -254,16 +251,6 @@ class ToolsTabMixin:
         if self.sort_key == "ping":
             rank = {"ok": 4, "idle": 3, "warn": 2, "error": 1, "off": 0}.get(item.health_state, 0)
             return (rank, -item.last_latency_ms if item.last_latency_ms >= 0 else -9999, item.name.lower())
-        if self.sort_key == "mode":
-            if item.id == "blender_skills":
-                m_txt = f"{len(self.active_skills):02d}/94"
-            elif len(item.modes) > 1:
-                modes = localized_tool_modes(item, self.lang)
-                m_txt = modes[min(item.mode_index, len(modes) - 1)].lower()
-            else:
-                m_txt = "~"
-            return (m_txt, item.name.lower())
-        # Default: enabled tools first, then alphabetical
         return (1 if item.enabled else 0, item.name.lower())
 
     def _calculate_token_economy(self) -> tuple[int, int]:
@@ -298,6 +285,11 @@ class ToolsTabMixin:
         pf = self.proj_filter_cmb.currentData() or "ALL"
         is_light = self.meta.get("theme", "dark") == "light"
 
+        vis_codes = self.get_visible_client_codes()
+        ai_col_w = self.ai_header.refresh_visible_clients(vis_codes)
+        self.ai_header.resizeSection(3, ai_col_w)
+        self.table.setColumnWidth(3, ai_col_w)
+
         rows: list[ToolSpec] = []
         for t in self.tools:
             t_kind = normalize_tool_kind(t.kind)
@@ -320,9 +312,10 @@ class ToolsTabMixin:
             rows.append(t)
 
         self._update_panel_header_indicators()
-        # Sort cleanly: when sorting by enabled descending, keep alphabetical ascending within each group
         if self.sort_key == "enabled":
-            rows.sort(key=lambda x: ((0 if x.enabled else 1) if self.sort_desc else (1 if x.enabled else 0), x.name.lower()))
+            rows.sort(
+                key=lambda x: ((0 if x.enabled else 1) if self.sort_desc else (1 if x.enabled else 0), x.name.lower())
+            )
         else:
             rows.sort(key=self._tool_sort_value, reverse=self.sort_desc)
         self._displayed_tools = rows
@@ -336,6 +329,13 @@ class ToolsTabMixin:
             if is_light
             else "background-color: #1a2434; color: #94a3b8; border: 1px solid #263549; border-radius: 4px; padding: 1px 6px; font-size: 10px; font-weight: 600;"
         )
+        mode_btn_style = (
+            "QPushButton { background-color: #eff6ff; color: #1d4ed8; border: 1px solid #bfdbfe; border-radius: 4px; padding: 1px 7px; font-size: 10px; font-weight: 600; }"
+            "QPushButton:hover { background-color: #dbeafe; border-color: #60a5fa; }"
+            if is_light
+            else "QPushButton { background-color: #132036; color: #93c5fd; border: 1px solid #1e3a5f; border-radius: 4px; padding: 1px 7px; font-size: 10px; font-weight: 600; }"
+            "QPushButton:hover { background-color: #1e3a5f; border-color: #3b82f6; }"
+        )
 
         for r_idx, t in enumerate(rows):
             self.table.setRowHeight(r_idx, 42)
@@ -344,10 +344,10 @@ class ToolsTabMixin:
             if t.live_location_detail:
                 tooltip_full = f"{tooltip_full}\n\n{t.live_location_detail}"
 
-            # Col 0: Name + muted type pill + version (clickable amber update button if outdated)
+            # Col 0: Name + type pill + version + compact active skill/mode pill
             nm_w = QWidget()
             nm_w.setObjectName("cellBox")
-            nm_w.setMinimumWidth(290)
+            nm_w.setMinimumWidth(310)
             nm_l = QHBoxLayout(nm_w)
             nm_l.setContentsMargins(12, 6, 8, 6)
             nm_l.setSpacing(7)
@@ -370,7 +370,9 @@ class ToolsTabMixin:
                 upd_btn.setFixedHeight(20)
                 upd_btn.setCursor(Qt.CursorShape.PointingHandCursor)
                 upd_btn.setToolTip(tr(self.lang, "row_update_tip", cur=cur_v, lat=lat_v))
-                upd_btn.clicked.connect(lambda _=False, tool_obj=t: self._run_batch_update([tool_obj], install_if_missing=True))
+                upd_btn.clicked.connect(
+                    lambda _=False, tool_obj=t: self._run_batch_update([tool_obj], install_if_missing=True)
+                )
                 nm_l.addWidget(upd_btn, alignment=Qt.AlignmentFlag.AlignVCenter)
             else:
                 ver_lbl = QLabel(f"v{cur_v}")
@@ -378,10 +380,29 @@ class ToolsTabMixin:
                 ver_lbl.setToolTip(tr(self.lang, "row_ver_tip", cur=cur_v))
                 nm_l.addWidget(ver_lbl, alignment=Qt.AlignmentFlag.AlignVCenter)
 
+            if t.id == "blender_skills":
+                sk_btn = QPushButton(tr(self.lang, "skills_btn", on=len(self.active_skills), tot=len(BLENDER_SKILLS_94)))
+                sk_btn.setFixedHeight(20)
+                sk_btn.setStyleSheet(mode_btn_style)
+                sk_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+                sk_btn.setToolTip(tr(self.lang, "row_gear_tip", name=t.name))
+                sk_btn.clicked.connect(lambda _=False, tool_obj=t: self.open_gear(tool_obj))
+                nm_l.addWidget(sk_btn, alignment=Qt.AlignmentFlag.AlignVCenter)
+            elif len(t.modes) > 1:
+                modes_loc = localized_tool_modes(t, self.lang)
+                cur_m = modes_loc[max(0, min(t.mode_index, len(modes_loc) - 1))]
+                m_btn = QPushButton(cur_m)
+                m_btn.setFixedHeight(20)
+                m_btn.setStyleSheet(mode_btn_style)
+                m_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+                m_btn.setToolTip(tr(self.lang, "row_gear_tip", name=t.name))
+                m_btn.clicked.connect(lambda _=False, tool_obj=t: self.open_gear(tool_obj))
+                nm_l.addWidget(m_btn, alignment=Qt.AlignmentFlag.AlignVCenter)
+
             nm_l.addStretch()
             self.table.setCellWidget(r_idx, 0, nm_w)
 
-            # Col 1: Scope (clean combobox or muted fixed label; path lives in tooltip)
+            # Col 1: Scope (clean combobox or muted fixed label)
             scope_tip = f"{self._format_scope_display(t)}\n{t.live_location_detail}".strip()
             proj_w = QWidget()
             proj_w.setObjectName("cellBox")
@@ -416,24 +437,38 @@ class ToolsTabMixin:
             st_tip = f"{st_text}\n{t.live_location_detail}".strip()
             self.table.setCellWidget(r_idx, 2, StatusBadgeWidget(st_state, st_text, st_tip))
 
-            # Col 3: AI Clients Matrix [AGY][CDX][CLD][CUR]
+            # Col 3: AI Clients Matrix (visible clients; uninstalled clients dimmed)
             mat_w = QWidget()
             mat_w.setObjectName("cellBox")
             mat_l = QHBoxLayout(mat_w)
             mat_l.setContentsMargins(6, 4, 6, 4)
             mat_l.setSpacing(4)
             for code, full_lbl in AI_CLIENTS:
+                if code not in vis_codes:
+                    continue
+                is_installed = code in self.installed_clients
                 c_btn = QPushButton(code)
                 c_btn.setCheckable(True)
                 is_c_on = t.clients.get(code, False)
                 c_btn.setChecked(is_c_on)
                 c_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-                c_btn.setToolTip(f"{full_lbl}: {tr(self.lang, 'client_on' if is_c_on else 'client_off')}")
+                tip_str = f"{full_lbl}: {tr(self.lang, 'client_on' if is_c_on else 'client_off')}"
+                if not is_installed:
+                    tip_str = f"{tip_str} ({tr(self.lang, 'client_not_detected')})"
+                c_btn.setToolTip(tip_str)
                 c_btn.setFixedSize(36, 24)
                 if is_c_on:
                     c_btn.setStyleSheet(
                         "background-color: #2563eb; color: #ffffff; border: 1px solid #3b82f6; "
                         "border-radius: 5px; font-size: 10px; font-weight: 700; padding: 0px;"
+                    )
+                elif not is_installed:
+                    c_btn.setStyleSheet(
+                        "background-color: #f8fafc; color: #cbd5e1; border: 1px dashed #e2e8f0; "
+                        "border-radius: 5px; font-size: 10px; font-weight: 600; padding: 0px;"
+                        if is_light
+                        else "background-color: #090d13; color: #334155; border: 1px dashed #162030; "
+                        "border-radius: 5px; font-size: 10px; font-weight: 600; padding: 0px;"
                     )
                 else:
                     c_btn.setStyleSheet(
@@ -447,33 +482,7 @@ class ToolsTabMixin:
                 mat_l.addWidget(c_btn)
             self.table.setCellWidget(r_idx, 3, mat_w)
 
-            # Col 4: Mode
-            mod_w = QWidget()
-            mod_w.setObjectName("cellBox")
-            mod_l = QHBoxLayout(mod_w)
-            mod_l.setContentsMargins(6, 4, 6, 4)
-            if t.id == "blender_skills":
-                sk_btn = QPushButton(tr(self.lang, "skills_btn", on=len(self.active_skills), tot=len(BLENDER_SKILLS_94)))
-                sk_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-                sk_btn.clicked.connect(lambda _=False, tool_obj=t: self.open_gear(tool_obj))
-                mod_l.addWidget(sk_btn)
-            elif len(t.modes) > 1:
-                cmb = QComboBox()
-                cmb.setMaximumWidth(205)
-                cmb.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
-                modes_loc = localized_tool_modes(t, self.lang)
-                cmb.addItems(modes_loc)
-                cmb.setCurrentIndex(min(t.mode_index, len(modes_loc) - 1))
-                cmb.currentIndexChanged.connect(lambda idx, tool_obj=t: self._change_mode(tool_obj, idx))
-                mod_l.addWidget(cmb)
-            else:
-                dash = QLabel("—")
-                dash.setAlignment(Qt.AlignmentFlag.AlignCenter)
-                dash.setStyleSheet("color: #64748b;")
-                mod_l.addWidget(dash)
-            self.table.setCellWidget(r_idx, 4, mod_w)
-
-            # Col 5: Configure gear icon + modern ToggleSwitch
+            # Col 4: Configure gear icon + modern ToggleSwitch
             act_w = QWidget()
             act_w.setObjectName("cellBox")
             act_l = QHBoxLayout(act_w)
@@ -494,17 +503,16 @@ class ToolsTabMixin:
             sw.setToolTip(tr(self.lang, "row_toggle_tip", name=t.name))
             sw.clicked.connect(lambda _checked=False, tool_obj=t: self._toggle_tool(tool_obj))
             act_l.addWidget(sw)
-            self.table.setCellWidget(r_idx, 5, act_w)
+            self.table.setCellWidget(r_idx, 4, act_w)
 
         active_k, saved_k = self._calculate_token_economy()
         self.token_summary_lbl.setText(tr(self.lang, "token_summary", act=active_k, sav=saved_k))
         self.table.resizeColumnToContents(1)
         self.table.resizeColumnToContents(2)
-        self.table.resizeColumnToContents(4)
         if self.table.columnWidth(1) < 150:
             self.table.setColumnWidth(1, 150)
-        if self.table.columnWidth(2) < 150:
-            self.table.setColumnWidth(2, 150)
+        if self.table.columnWidth(2) < 155:
+            self.table.setColumnWidth(2, 155)
         self._update_bulk_client_buttons()
         self.ai_header.sync_ai_bar_geometry()
         self.table._refresh_hover_from_cursor()
@@ -538,6 +546,11 @@ class ToolsTabMixin:
             )
         )
         menu.addAction(act_copy)
+
+        menu.addSeparator()
+        act_reset = QAction(tr(self.lang, "row_ctx_reset"), self)
+        act_reset.triggered.connect(lambda: self.reset_tool_to_defaults(t))
+        menu.addAction(act_reset)
 
         if t.has_update and t.latest_version:
             menu.addSeparator()
@@ -604,8 +617,14 @@ class ToolsTabMixin:
                 tool.param_value = proj_dir
         self._save_state()
         live_map = scan_live_process_locations(lang=self.lang)
+        missing_keys = self._missing_required_vault_keys()
         _, h_state, ping_str, ms, _, loc_det = probe_tool_health(
-            tool, len(self.active_skills), self.projects_map, live_map, lang=self.lang
+            tool,
+            len(self.active_skills),
+            self.projects_map,
+            live_map,
+            lang=self.lang,
+            missing_required_keys=missing_keys,
         )
         tool.health_state = h_state
         tool.last_ping = ping_str
@@ -613,7 +632,10 @@ class ToolsTabMixin:
         tool.live_location_detail = loc_det
         scope_disp = self._format_scope_display(tool)
         self.logs.add("INFO", tool.name, tr(self.lang, "log_scope_changed", scope=scope_disp), loc_det)
-        self.set_status(tr(self.lang, "msg_scope_changed", name=tool.name, scope=scope_disp))
+        self._set_config_status(tr(self.lang, "msg_scope_changed", name=tool.name, scope=scope_disp))
         self._refresh_table()
         self._refresh_logs_tab()
-        self._sync_live_environment_async(target_tools=[tool])
+        self._sync_live_environment_async(
+            target_tools=[tool],
+            restart_running=(tool.id == "serena" and tool.enabled),
+        )
