@@ -143,6 +143,7 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, ProfilesMixin, Tr
 
         self.runtime_started = False
         self._runtime_state = "probing"  # probing | stopped | starting | running | stopping
+        self._shutdown_done = False
         self._health_busy = False
         self._vram_busy = False
         self._dcc_busy = False
@@ -188,15 +189,19 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, ProfilesMixin, Tr
             if not t.enabled:
                 t.last_ping = tr(self.lang, "st_disabled")
                 t.health_state = "off"
-            elif self._tool_needs_vault_key(t):
-                t.last_ping = tr(self.lang, "st_missing_key")
-                t.health_state = "warn"
+            else:
+                t.last_ping = tr(self.lang, "st_stopped_standby")
+                t.health_state = "idle"
         self._rebuild_project_filter_combo()
         self._rebuild_profile_combo()
         self._refresh_table()
         self._refresh_plugins_tab()
         self._refresh_logs_tab()
         self._update_vram_bar()
+
+        app_inst = QApplication.instance()
+        if app_inst is not None:
+            app_inst.aboutToQuit.connect(self._shutdown_managed_runtime_sync)
 
         self.tick_timer = QTimer(self)
         self.tick_timer.timeout.connect(self._on_second_tick)
@@ -433,12 +438,62 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, ProfilesMixin, Tr
         self._apply_runtime_button_visuals()
         self._rebuild_tray_menu()
 
+    def _pause_all_configs_and_skills_on_disk(
+        self,
+        tools_snap: list[ToolSpec],
+        skills_snap: set[str],
+        proj_snap: dict[str, str],
+        lang_snap: str,
+    ) -> None:
+        """Pause AIconomy-managed MCP entries and skills on disk without mutating saved tool toggles."""
+        bs_tool = next((x for x in tools_snap if x.id == "blender_skills"), None)
+        if bs_tool:
+            sync_blender_skills_on_disk(
+                skills_snap,
+                False,
+                bs_tool.project_scope,
+                proj_snap,
+                lang=lang_snap,
+            )
+        cv_tool = next((x for x in tools_snap if x.id == "caveman"), None)
+        if cv_tool:
+            sync_caveman_on_disk(cv_tool, lang=lang_snap, runtime_active=False)
+        sync_custom_skill_tools_on_disk(tools_snap, lang=lang_snap, runtime_active=False)
+        sync_mcp_json_clients(tools_snap, self.vault, proj_snap, lang=lang_snap, runtime_active=False)
+
+    def _shutdown_managed_runtime_sync(self) -> None:
+        """Synchronously stop all managed servers and pause configs/skills on application exit."""
+        if getattr(self, "_shutdown_done", False):
+            return
+        self._shutdown_done = True
+        try:
+            self.tick_timer.stop()
+            self._sync_debounce.stop()
+        except Exception:
+            pass
+        if not self.sync_live_environment:
+            return
+        tools_snap = copy.deepcopy(self.tools)
+        skills_snap = set(self.active_skills)
+        proj_snap = dict(self.projects_map)
+        lang_snap = self.lang
+        with self._sync_lock:
+            try:
+                stop_all_managed_services(tools_snap, lang=lang_snap)
+            except Exception:
+                pass
+            try:
+                self._pause_all_configs_and_skills_on_disk(tools_snap, skills_snap, proj_snap, lang_snap)
+            except Exception:
+                pass
+
     def _run_initial_runtime_probe(self) -> None:
-        """Passive startup probe: checks whether managed services are already active without starting anything."""
+        """Always start cleanly in stopped state: clean orphaned servers & pause configs until user clicks Start."""
         self._set_runtime_ui_state("probing")
         all_tools_snap = copy.deepcopy(self.tools)
         snap_tools = [t for t in all_tools_snap if getattr(t, "in_workspace", True)]
-        sk_cnt = len(self.active_skills)
+        skills_snap = set(self.active_skills)
+        sk_cnt = len(skills_snap)
         proj_snap = dict(self.projects_map)
         lang_snap = self.lang
         missing_keys = self._missing_required_vault_keys()
@@ -446,20 +501,22 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, ProfilesMixin, Tr
         def worker() -> None:
             if self.sync_live_environment:
                 with self._sync_lock:
-                    cv_tool = next((x for x in all_tools_snap if x.id == "caveman"), None)
-                    if cv_tool:
-                        sync_caveman_on_disk(cv_tool, lang=lang_snap)
-                    sync_custom_skill_tools_on_disk(all_tools_snap, lang=lang_snap)
+                    stop_all_managed_services(all_tools_snap, lang=lang_snap)
+                    self._pause_all_configs_and_skills_on_disk(all_tools_snap, skills_snap, proj_snap, lang_snap)
             live_map = scan_live_process_locations(lang=lang_snap)
             out = []
             for t in snap_tools:
                 ok, h_state, ping_str, ms, detail, loc_detail = probe_tool_health(
-                    t, sk_cnt, proj_snap, live_map, lang=lang_snap, missing_required_keys=missing_keys
+                    t,
+                    sk_cnt,
+                    proj_snap,
+                    live_map,
+                    lang=lang_snap,
+                    missing_required_keys=missing_keys,
+                    runtime_active=False,
                 )
                 out.append((t.id, ok, h_state, ping_str, ms, detail, loc_detail))
-            already_running = has_running_managed_services(snap_tools, live_map)
-            target = "running" if already_running else "stopped"
-            safe_emit(self.bridge.runtime_transition_done, target, out, live_map, "")
+            safe_emit(self.bridge.runtime_transition_done, "stopped", out, live_map, "")
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -553,7 +610,8 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, ProfilesMixin, Tr
         self._set_runtime_ui_state("stopping")
         self.set_status(tr(self.lang, "msg_tools_stopping"))
 
-        ws_snap = copy.deepcopy(self.workspace_tools())
+        tools_snap = copy.deepcopy(self.tools)
+        ws_snap = [x for x in tools_snap if getattr(x, "in_workspace", True)]
         skills_snap = set(self.active_skills)
         proj_snap = dict(self.projects_map)
         lang_snap = self.lang
@@ -564,11 +622,18 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, ProfilesMixin, Tr
             with self._sync_lock:
                 if self.sync_live_environment:
                     _cnt, detail_msg = stop_all_managed_services(ws_snap, lang=lang_snap)
+                    self._pause_all_configs_and_skills_on_disk(tools_snap, skills_snap, proj_snap, lang_snap)
                 live_map = scan_live_process_locations(lang=lang_snap)
                 out = []
                 for x in ws_snap:
                     ok, h_state, ping_str, ms, detail, loc_detail = probe_tool_health(
-                        x, len(skills_snap), proj_snap, live_map, lang=lang_snap, missing_required_keys=missing_keys
+                        x,
+                        len(skills_snap),
+                        proj_snap,
+                        live_map,
+                        lang=lang_snap,
+                        missing_required_keys=missing_keys,
+                        runtime_active=False,
                     )
                     out.append((x.id, ok, h_state, ping_str, ms, detail, loc_detail))
 
@@ -826,22 +891,28 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, ProfilesMixin, Tr
                 if bs_tool:
                     sync_blender_skills_on_disk(
                         skills_snap,
-                        bool(getattr(bs_tool, "in_workspace", True) and bs_tool.enabled),
+                        bool(allow_start_flag and getattr(bs_tool, "in_workspace", True) and bs_tool.enabled),
                         bs_tool.project_scope,
                         proj_snap,
                         lang=lang_snap,
                     )
                 cv_tool = next((x for x in tools_snap if x.id == "caveman"), None)
                 if cv_tool:
-                    sync_caveman_on_disk(cv_tool, lang=lang_snap)
-                sync_custom_skill_tools_on_disk(tools_snap, lang=lang_snap)
-                sync_mcp_json_clients(tools_snap, self.vault, proj_snap, lang=lang_snap)
+                    sync_caveman_on_disk(cv_tool, lang=lang_snap, runtime_active=allow_start_flag)
+                sync_custom_skill_tools_on_disk(tools_snap, lang=lang_snap, runtime_active=allow_start_flag)
+                sync_mcp_json_clients(tools_snap, self.vault, proj_snap, lang=lang_snap, runtime_active=allow_start_flag)
                 eff_lang = self.lang
                 live_map = scan_live_process_locations(lang=eff_lang)
                 out = []
                 for x in ws_snap:
                     ok, h_state, ping_str, ms, detail, loc_detail = probe_tool_health(
-                        x, len(skills_snap), proj_snap, live_map, lang=eff_lang, missing_required_keys=missing_keys
+                        x,
+                        len(skills_snap),
+                        proj_snap,
+                        live_map,
+                        lang=eff_lang,
+                        missing_required_keys=missing_keys,
+                        runtime_active=allow_start_flag,
                     )
                     out.append((x.id, ok, h_state, ping_str, ms, detail, loc_detail))
             if measured_schemas:
@@ -857,6 +928,7 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, ProfilesMixin, Tr
         self.meta["first_run_dismissed"] = True
         self._refresh_first_run_banner()
         self._rebuild_profile_combo()
+        is_rt_running = bool(self.runtime_started and self._runtime_state == "running")
         if not tool.enabled:
             tool.health_state = "off"
             tool.last_ping = tr(self.lang, "st_disabled")
@@ -872,8 +944,11 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, ProfilesMixin, Tr
                 if ans == QMessageBox.StandardButton.Yes:
                     self.open_settings(SettingsDialog.TAB_KEYS, focus_key=tool.vault_key_name)
                     if not self._tool_needs_vault_key(tool):
-                        tool.health_state = "ok"
-                        tool.last_ping = tr(self.lang, "st_ready")
+                        tool.health_state = "ok" if is_rt_running else "idle"
+                        tool.last_ping = tr(self.lang, "st_ready" if is_rt_running else "st_stopped_standby")
+        elif not is_rt_running:
+            tool.health_state = "idle"
+            tool.last_ping = tr(self.lang, "st_stopped_standby")
         elif tool.port:
             tool.health_state = "idle"
             tool.last_ping = tr(self.lang, "st_scanning")
@@ -1292,6 +1367,7 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, ProfilesMixin, Tr
         sk_cnt = len(self.active_skills)
         proj_snap = dict(self.projects_map)
         missing_keys = self._missing_required_vault_keys()
+        rt_active = bool(self.runtime_started and self._runtime_state == "running")
 
         def worker() -> None:
             try:
@@ -1300,7 +1376,13 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, ProfilesMixin, Tr
                 out = []
                 for t in snap_tools:
                     ok, h_state, ping_str, ms, detail, loc_detail = probe_tool_health(
-                        t, sk_cnt, proj_snap, live_map, lang=eff_lang, missing_required_keys=missing_keys
+                        t,
+                        sk_cnt,
+                        proj_snap,
+                        live_map,
+                        lang=eff_lang,
+                        missing_required_keys=missing_keys,
+                        runtime_active=rt_active,
                     )
                     out.append((t.id, ok, h_state, ping_str, ms, detail, loc_detail))
                 if self.lang == eff_lang:
@@ -1389,6 +1471,7 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, ProfilesMixin, Tr
         proj_snap = dict(self.projects_map)
         lang_snap = self.lang
         missing_keys = self._missing_required_vault_keys()
+        rt_active = bool(self.runtime_started and self._runtime_state == "running")
 
         def worker() -> None:
             out = []
@@ -1397,7 +1480,13 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, ProfilesMixin, Tr
                 live_map = scan_live_process_locations(lang=lang_snap)
                 for t in snap_tools:
                     ok, h_state, ping_str, ms, detail, loc_detail = probe_tool_health(
-                        t, sk_cnt, proj_snap, live_map, lang=lang_snap, missing_required_keys=missing_keys
+                        t,
+                        sk_cnt,
+                        proj_snap,
+                        live_map,
+                        lang=lang_snap,
+                        missing_required_keys=missing_keys,
+                        runtime_active=rt_active,
                     )
                     out.append((t.id, ok, h_state, ping_str, ms, detail, loc_detail))
             finally:

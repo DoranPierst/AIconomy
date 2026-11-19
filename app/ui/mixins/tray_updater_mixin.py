@@ -123,13 +123,14 @@ class TrayUpdaterMixin:
     def _quit_app(self) -> None:
         self.force_quit = True
         self._save_state()
+        self._shutdown_managed_runtime_sync()
         if self.tray:
             self.tray.hide()
         QApplication.quit()
 
     def closeEvent(self, event: Any) -> None:  # noqa: N802
         self._save_state()
-        minimize_to_tray = bool(self.meta.get("minimize_to_tray", True))
+        minimize_to_tray = bool(self.meta.get("minimize_to_tray", False))
         if not self.force_quit and minimize_to_tray and self.tray and self.tray.isVisible():
             event.ignore()
             self.hide()
@@ -142,6 +143,7 @@ class TrayUpdaterMixin:
                 )
                 self.tray_notified = True
             return
+        self._shutdown_managed_runtime_sync()
         self.table.detach_filter()
         self.log_table.detach_filter()
         super().closeEvent(event)
@@ -165,20 +167,21 @@ class TrayUpdaterMixin:
             self._refresh_plugins_tab()
 
     def _handle_sync_configs(self) -> None:
+        rt_active = bool(self.runtime_started and self._runtime_state == "running")
         bs_tool = next((t for t in self.tools if t.id == "blender_skills"), None)
         if bs_tool:
             sync_blender_skills_on_disk(
                 self.active_skills,
-                bool(getattr(bs_tool, "in_workspace", True) and bs_tool.enabled),
+                bool(rt_active and getattr(bs_tool, "in_workspace", True) and bs_tool.enabled),
                 bs_tool.project_scope,
                 self.projects_map,
                 lang=self.lang,
             )
         cv_tool = next((t for t in self.tools if t.id == "caveman"), None)
         if cv_tool:
-            sync_caveman_on_disk(cv_tool, lang=self.lang)
-        sync_custom_skill_tools_on_disk(self.tools, lang=self.lang)
-        msgs = sync_mcp_json_clients(self.tools, self.vault, self.projects_map, lang=self.lang)
+            sync_caveman_on_disk(cv_tool, lang=self.lang, runtime_active=rt_active)
+        sync_custom_skill_tools_on_disk(self.tools, lang=self.lang, runtime_active=rt_active)
+        msgs = sync_mcp_json_clients(self.tools, self.vault, self.projects_map, lang=self.lang, runtime_active=rt_active)
         summary = " | ".join(msgs) if msgs else tr(self.lang, "log_no_cfg_files")
         self.logs.add("INFO", tr(self.lang, "log_src_cfg_sync"), summary)
         self._refresh_logs_tab()
@@ -250,19 +253,21 @@ class TrayUpdaterMixin:
                 t.health_state = "off"
 
         if self.sync_live_environment:
+            rt_active = bool(self.runtime_started and self._runtime_state == "running")
             bs_tool = next((t for t in self.tools if t.id == "blender_skills"), None)
             if bs_tool:
                 sync_blender_skills_on_disk(
                     self.active_skills,
-                    bool(getattr(bs_tool, "in_workspace", True) and bs_tool.enabled),
+                    bool(rt_active and getattr(bs_tool, "in_workspace", True) and bs_tool.enabled),
                     bs_tool.project_scope,
                     self.projects_map,
                     lang=self.lang,
                 )
             cv_tool = next((t for t in self.tools if t.id == "caveman"), None)
             if cv_tool:
-                sync_caveman_on_disk(cv_tool, lang=self.lang)
-            sync_custom_skill_tools_on_disk(self.tools, lang=self.lang)
+                sync_caveman_on_disk(cv_tool, lang=self.lang, runtime_active=rt_active)
+            sync_custom_skill_tools_on_disk(self.tools, lang=self.lang, runtime_active=rt_active)
+            sync_mcp_json_clients(self.tools, self.vault, self.projects_map, lang=self.lang, runtime_active=rt_active)
 
         self._retranslate_ui()
         self._rebuild_kind_filter_combo()

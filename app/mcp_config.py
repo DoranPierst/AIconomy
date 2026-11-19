@@ -177,6 +177,7 @@ def sync_caveman_on_disk(
     agents_root: pathlib.Path | None = None,
     agy_skills_root: pathlib.Path | None = None,
     lang: str = "en",
+    runtime_active: bool = True,
 ) -> tuple[bool, str]:
     """Enable/disable Caveman on disk, stamp Lite/Full/Ultra directive, and mirror to Antigravity when AGY is enabled."""
     is_tr = lang == "tr"
@@ -200,7 +201,7 @@ def sync_caveman_on_disk(
         )
         return False, msg
 
-    if not (getattr(caveman_tool, "in_workspace", True) and caveman_tool.enabled):
+    if not (runtime_active and getattr(caveman_tool, "in_workspace", True) and caveman_tool.enabled):
         if active_dir.is_dir():
             disabled_dir.parent.mkdir(parents=True, exist_ok=True)
             if disabled_dir.exists():
@@ -253,6 +254,7 @@ def sync_custom_skill_tools_on_disk(
     agents_root: pathlib.Path | None = None,
     agy_skills_root: pathlib.Path | None = None,
     lang: str = "en",
+    runtime_active: bool = True,
 ) -> list[str]:
     """Sync Git-cloned custom skill packs / rules between ~/.agents/skills and Antigravity's ~/.gemini/config/skills."""
     is_tr = lang == "tr"
@@ -281,7 +283,7 @@ def sync_custom_skill_tools_on_disk(
             _remove_agy_skill_mirrors(agy_root, t.id)
             continue
 
-        want_on = bool(getattr(t, "in_workspace", True) and t.enabled)
+        want_on = bool(runtime_active and getattr(t, "in_workspace", True) and t.enabled)
         if not want_on:
             if active_dir.is_dir():
                 disabled_dir.parent.mkdir(parents=True, exist_ok=True)
@@ -592,10 +594,11 @@ def sync_mcp_json_clients(
     vault: WindowsDpapiVault,
     projects_map: dict[str, str] | None = None,
     lang: str = "en",
+    runtime_active: bool = True,
 ) -> list[str]:
     """Synchronize all AI client config files under a single lock to avoid concurrent writes."""
     with _CONFIG_LOCK:
-        return _sync_mcp_json_clients_impl(tools, vault, projects_map, lang=lang)
+        return _sync_mcp_json_clients_impl(tools, vault, projects_map, lang=lang, runtime_active=runtime_active)
 
 
 def _strip_marked_codex_blocks(toml_text: str) -> str:
@@ -618,6 +621,7 @@ def _sync_mcp_json_clients_impl(
     vault: WindowsDpapiVault,
     projects_map: dict[str, str] | None = None,
     lang: str = "en",
+    runtime_active: bool = True,
 ) -> list[str]:
     """Write global and project-scoped MCP client configs with .bak backups."""
     is_tr = lang == "tr"
@@ -633,16 +637,23 @@ def _sync_mcp_json_clients_impl(
 
     for code, cfg_path in client_paths.items():
         wanted: dict[str, dict[str, Any]] = {}
-        for t in tools:
-            if not t.mcp_server_key or not (getattr(t, "in_workspace", True) and t.enabled and t.clients.get(code, False)):
-                continue
-            if code in ("CLD", "CUR") and t.scope_selectable and t.project_scope != "GLOBAL":
-                continue
-            entry = _build_mcp_entry(t, vault)
-            if entry:
-                wanted[t.mcp_server_key] = entry
+        if runtime_active:
+            for t in tools:
+                if not t.mcp_server_key or not (getattr(t, "in_workspace", True) and t.enabled and t.clients.get(code, False)):
+                    continue
+                if code in ("CLD", "CUR") and t.scope_selectable and t.project_scope != "GLOBAL":
+                    continue
+                entry = _build_mcp_entry(t, vault)
+                if entry:
+                    wanted[t.mcp_server_key] = entry
         try:
-            written, err = _rewrite_mcp_json(cfg_path, managed_keys, wanted, create_if_missing=(code == "AGY"), lang=lang)
+            written, err = _rewrite_mcp_json(
+                cfg_path,
+                managed_keys,
+                wanted,
+                create_if_missing=(runtime_active and code == "AGY"),
+                lang=lang,
+            )
         except Exception as exc:
             written, err = False, (f"yazma hatası ({exc})" if is_tr else f"write error ({exc})")
         if err:
@@ -654,15 +665,19 @@ def _sync_mcp_json_clients_impl(
         proj_dir = pathlib.Path(proj_dir_str)
         if not proj_dir.is_dir():
             continue
-        scoped_tools = [
-            t
-            for t in tools
-            if t.mcp_server_key
-            and getattr(t, "in_workspace", True)
-            and t.enabled
-            and t.scope_selectable
-            and t.project_scope == proj_name
-        ]
+        scoped_tools = (
+            [
+                t
+                for t in tools
+                if t.mcp_server_key
+                and getattr(t, "in_workspace", True)
+                and t.enabled
+                and t.scope_selectable
+                and t.project_scope == proj_name
+            ]
+            if runtime_active
+            else []
+        )
         for target_code, rel_cfg in [("CLD", ".mcp.json"), ("CUR", ".cursor/mcp.json")]:
             p_wanted: dict[str, dict[str, Any]] = {}
             for t in scoped_tools:
@@ -672,7 +687,7 @@ def _sync_mcp_json_clients_impl(
                         p_wanted[t.mcp_server_key] = entry
             p_cfg = proj_dir / rel_cfg
             try:
-                written, err = _rewrite_mcp_json(p_cfg, managed_keys, p_wanted, create_if_missing=True, lang=lang)
+                written, err = _rewrite_mcp_json(p_cfg, managed_keys, p_wanted, create_if_missing=runtime_active, lang=lang)
             except Exception as exc:
                 written, err = False, (f"yazma hatası ({exc})" if is_tr else f"write error ({exc})")
             if err:
@@ -719,7 +734,8 @@ def _sync_mcp_json_clients_impl(
             for sec_key, t_obj in alias_map.items():
                 has_req_key = is_tool_credential_ready(t_obj, vault)
                 want_cdx = bool(
-                    getattr(t_obj, "in_workspace", True)
+                    runtime_active
+                    and getattr(t_obj, "in_workspace", True)
                     and t_obj.enabled
                     and t_obj.clients.get("CDX", False)
                     and has_req_key
@@ -730,32 +746,33 @@ def _sync_mcp_json_clients_impl(
 
             cdx_lines: list[str] = [CODEX_BEGIN_TAG]
             cdx_added = 0
-            for t in tools:
-                if not t.mcp_server_key or not (
-                    getattr(t, "in_workspace", True) and t.enabled and t.clients.get("CDX", False)
-                ):
-                    continue
-                entry = _build_mcp_entry(t, vault)
-                if entry is None:
-                    continue
-                if t.id in handled_existing:
-                    cdx_added += 1
-                    continue
-                if "url" in entry:
-                    cdx_lines.append(f"[mcp_servers.{t.mcp_server_key}]")
-                    cdx_lines.append(f"url = {json.dumps(entry['url'])}")
-                    cdx_added += 1
-                else:
-                    args_toml = ", ".join(json.dumps(a) for a in entry.get("args", []))
-                    cdx_lines.append(f"[mcp_servers.{t.mcp_server_key}]")
-                    cdx_lines.append(f"command = {json.dumps(entry['command'])}")
-                    cdx_lines.append(f"args = [{args_toml}]")
-                    env_dict = entry.get("env") or {}
-                    if env_dict:
-                        cdx_lines.append(f"[mcp_servers.{t.mcp_server_key}.env]")
-                        for ek, ev in env_dict.items():
-                            cdx_lines.append(f"{ek} = {json.dumps(ev)}")
-                    cdx_added += 1
+            if runtime_active:
+                for t in tools:
+                    if not t.mcp_server_key or not (
+                        getattr(t, "in_workspace", True) and t.enabled and t.clients.get("CDX", False)
+                    ):
+                        continue
+                    entry = _build_mcp_entry(t, vault)
+                    if entry is None:
+                        continue
+                    if t.id in handled_existing:
+                        cdx_added += 1
+                        continue
+                    if "url" in entry:
+                        cdx_lines.append(f"[mcp_servers.{t.mcp_server_key}]")
+                        cdx_lines.append(f"url = {json.dumps(entry['url'])}")
+                        cdx_added += 1
+                    else:
+                        args_toml = ", ".join(json.dumps(a) for a in entry.get("args", []))
+                        cdx_lines.append(f"[mcp_servers.{t.mcp_server_key}]")
+                        cdx_lines.append(f"command = {json.dumps(entry['command'])}")
+                        cdx_lines.append(f"args = [{args_toml}]")
+                        env_dict = entry.get("env") or {}
+                        if env_dict:
+                            cdx_lines.append(f"[mcp_servers.{t.mcp_server_key}.env]")
+                            for ek, ev in env_dict.items():
+                                cdx_lines.append(f"{ek} = {json.dumps(ev)}")
+                        cdx_added += 1
             cdx_lines.append(CODEX_END_TAG)
             new_toml = cleaned + "\n\n" + "\n".join(cdx_lines) + "\n"
             if new_toml != orig_toml:

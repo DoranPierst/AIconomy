@@ -143,7 +143,7 @@ class SettingsDialog(QDialog):
         bl.setSpacing(10)
 
         self.tray_cb = QCheckBox(tr(self.lang, "set_tray_cb"))
-        self.tray_cb.setChecked(bool(self.main_win.meta.get("minimize_to_tray", True)))
+        self.tray_cb.setChecked(bool(self.main_win.meta.get("minimize_to_tray", False)))
         self.tray_cb.toggled.connect(self._on_tray_toggled)
         bl.addWidget(self.tray_cb)
 

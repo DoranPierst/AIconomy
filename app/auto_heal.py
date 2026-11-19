@@ -369,6 +369,8 @@ def detect_background_heal_plans(
     lang: str = "en",
 ) -> list[HealPlan]:
     """Identify safe issues that can be repaired automatically in the background."""
+    if not runtime_running:
+        return []
     is_tr = lang == "tr"
     by_id = {t.id: t for t in tools}
     plans: list[HealPlan] = []

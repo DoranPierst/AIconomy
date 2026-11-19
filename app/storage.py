@@ -399,7 +399,7 @@ class StateStore:
         active_skills = set(DEFAULT_ACTIVE_BLENDER_SKILLS)
         meta: dict[str, Any] = {
             "theme": "dark",
-            "minimize_to_tray": True,
+            "minimize_to_tray": False,
             "auto_detect_apps": True,
             "first_run_dismissed": False,
             "projects": default_projects_map(),

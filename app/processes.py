@@ -570,14 +570,49 @@ def stop_all_managed_services(tools: list[ToolSpec], lang: str = "en") -> tuple[
             _find_managed_processes({"trellis-server.exe"}),
             "TRELLIS",
         ),
+        (
+            _find_managed_processes(set(), host_keywords=("--mcp-exec",)),
+            "MCP Bridge",
+        ),
     ]
+
+    # Also find frozen AIconomy.exe --mcp-exec child bridge processes (never self)
+    self_pid = os.getpid()
+    bridge_exes: list[psutil.Process] = []
+    for p in psutil.process_iter(["pid", "name", "cmdline"]):
+        try:
+            if p.info.get("pid") == self_pid:
+                continue
+            nm = (p.info.get("name") or "").lower()
+            if nm == "aiconomy.exe":
+                cmd_s = " ".join(str(x).lower() for x in (p.info.get("cmdline") or []))
+                if "--mcp-exec" in cmd_s:
+                    bridge_exes.append(p)
+        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+            continue
+    if bridge_exes:
+        groups.append((bridge_exes, "MCP Bridge"))
 
     all_procs: list[psutil.Process] = []
     seen_pids: set[int] = set()
     for procs, label in groups:
         for p in procs:
-            if p.pid in seen_pids:
+            if p.pid in seen_pids or p.pid == self_pid:
                 continue
+            # Also terminate direct children of --mcp-exec bridges (npx/node/uvx)
+            if label == "MCP Bridge":
+                try:
+                    for ch in p.children(recursive=True):
+                        if ch.pid not in seen_pids and ch.pid != self_pid:
+                            seen_pids.add(ch.pid)
+                            try:
+                                ch.terminate()
+                                all_procs.append(ch)
+                                stopped_pids.add(ch.pid)
+                            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                                pass
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    pass
             seen_pids.add(p.pid)
             try:
                 p.terminate()
@@ -911,12 +946,16 @@ def probe_tool_health(
     live_map: dict[str, str],
     lang: str = "en",
     missing_required_keys: set[str] | None = None,
+    runtime_active: bool = True,
 ) -> tuple[bool, str, str, int, str, str]:
     """Return (is_healthy, health_state, short_status_str, latency_ms, detail_msg, location_detail).
 
     ``health_state`` is one of: ``'ok'``, ``'warn'``, ``'error'``, ``'idle'``, ``'off'``.
     """
     loc_detail = resolve_disk_location(tool, projects_map, live_map, lang=lang)
+
+    if tool.enabled and not runtime_active:
+        return True, "idle", tr(lang, "st_stopped_standby"), -1, loc_detail, loc_detail
 
     if (
         tool.enabled

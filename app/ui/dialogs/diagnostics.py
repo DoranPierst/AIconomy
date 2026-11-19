@@ -56,6 +56,12 @@ class DiagnosticsDialog(QDialog):
         self.btn_retest.clicked.connect(self.start_tests)
         top_actions.addWidget(self.btn_retest)
 
+        self.btn_start_now = QPushButton(tr(self.lang, "diag_btn_start_now"))
+        self.btn_start_now.setObjectName("successBtn")
+        self.btn_start_now.hide()
+        self.btn_start_now.clicked.connect(self._handle_start_and_retest)
+        top_actions.addWidget(self.btn_start_now)
+
         btn_scan = QPushButton(tr(self.lang, "diag_btn_scan"))
         btn_scan.clicked.connect(self.main_win.run_health_scan)
         top_actions.addWidget(btn_scan)
@@ -126,6 +132,29 @@ class DiagnosticsDialog(QDialog):
         self._fail_count = 0
         self.start_tests()
 
+    def _handle_start_and_retest(self) -> None:
+        from PySide6.QtCore import QTimer
+
+        if self.main_win._runtime_state == "stopped":
+            self.main_win.start_all_tools()
+            self.btn_start_now.setEnabled(False)
+            self.summary_lbl.setText(tr(self.lang, "msg_tools_starting"))
+
+            def _poll_ready() -> None:
+                if not self.isVisible():
+                    return
+                if self.main_win._runtime_state == "running":
+                    self.btn_start_now.setEnabled(True)
+                    self.start_tests()
+                elif self.main_win._runtime_state == "starting":
+                    QTimer.singleShot(350, _poll_ready)
+                else:
+                    self.btn_start_now.setEnabled(True)
+
+            QTimer.singleShot(350, _poll_ready)
+        elif self.main_win._runtime_state == "running":
+            self.start_tests()
+
     def start_tests(self) -> None:
         if self._running:
             return
@@ -138,10 +167,31 @@ class DiagnosticsDialog(QDialog):
         self._raw_details = [""] * len(self.tools)
 
         if not self.tools:
+            self.btn_start_now.hide()
             self.summary_lbl.setText(tr(self.lang, "diag_no_enabled"))
             self._running = False
             self.btn_retest.setEnabled(True)
             return
+
+        if self.main_win._runtime_state != "running":
+            self.btn_start_now.show()
+            self.btn_start_now.setEnabled(self.main_win._runtime_state == "stopped")
+            stopped_lbl = tr(self.lang, "st_stopped_standby")
+            stopped_det = tr(self.lang, "diag_stopped_row")
+            for r, t in enumerate(self.tools):
+                self.tbl.setItem(r, 0, QTableWidgetItem(t.name))
+                st_item = QTableWidgetItem(stopped_lbl)
+                st_item.setForeground(QColor("#f59e0b"))
+                self.tbl.setItem(r, 1, st_item)
+                self.tbl.setItem(r, 2, QTableWidgetItem("—"))
+                self.tbl.setItem(r, 3, QTableWidgetItem(stopped_det))
+                self._raw_details[r] = tr(self.lang, "diag_stopped_banner")
+            self.summary_lbl.setText(tr(self.lang, "diag_stopped_banner"))
+            self._running = False
+            self.btn_retest.setEnabled(True)
+            return
+
+        self.btn_start_now.hide()
 
         self.summary_lbl.setText(tr(self.lang, "diag_running", n=len(self.tools)))
         for r, t in enumerate(self.tools):
