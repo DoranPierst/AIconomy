@@ -3,7 +3,6 @@ chcp 65001 >nul
 cd /d "%~dp0"
 echo Stopping any running AIconomy instance...
 taskkill /f /im AIconomy.exe >nul 2>&1
-taskkill /f /im AI-Arac-Merkezi.exe >nul 2>&1
 timeout /t 1 /nobreak >nul
 echo [1/2] Syncing dependencies and PyInstaller...
 uv sync --dev

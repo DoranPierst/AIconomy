@@ -2,6 +2,13 @@
 
 All notable changes to **AIconomy** are documented in this file.
 
+## [Unreleased]
+
+### Security & Authentication Hardening (Faz 1)
+- **Zero-Plaintext `--mcp-exec` RAM Bridge:** Replaced plaintext API key writes in `mcp_config.json`, `.claude.json`, `.cursor/mcp.json`, and `config.toml` with a fast pre-GUI `--mcp-exec <tool_id>` launcher that decrypts credentials solely in RAM and scrubs unrelated host environment secrets from child MCP processes.
+- **Browser OAuth 2.1 & Official CLI Sign-In:** Added keyless OAuth authentication (`mcp-remote` OAuth 2.1 for Cloudflare, Linear, Sentry, Notion, Atlassian, Supabase, Netlify, Stripe; official CLI browser login for GitHub, GitHub Actions, Azure, Google Cloud, Snyk, Railway).
+- **Optional Vault Master Passphrase (`PBKDF2-SHA256 + DPAPI`) & Auto-Redaction:** Added optional `600,000`-iteration `PBKDF2-HMAC-SHA256` + `CryptProtectData` entropy protection in `Settings > API Keys`, automatic secret redaction (`***REDACTED***`) in SQLite logs and AI troubleshooting prompts, and `UserAccessOption` local IPC pipe locking.
+
 ## [1.5.0] - 2026-11-19
 
 Major feature, UX, and catalog release introducing passive runtime control, a curated 100-tool library with zero auto-downloads, interactive token share analytics, task-driven profile creation, and dynamic DPAPI key management.
@@ -42,7 +49,7 @@ Major public-release overhaul focused on reliability, minimalist UX, modular arc
 ### Localization & Repo Hygiene
 - **100% English & Turkish Parity:** Removed 6 incomplete machine-translated languages and verified exact 1:1 key parity across all UI tabs, dialogs, backend status/error messages, catalog descriptions, and 94 Blender skill entries.
 - **Tag-Only Release Workflow:** Updated `.github/workflows/release.yml` to build and publish releases exclusively on `v*` tags and `workflow_dispatch`.
-- **Transparent Security Disclosure:** Explicitly documents that API keys are encrypted at rest via Windows DPAPI and written to enabled AI client config files only when synced.
+- **Encrypted Windows DPAPI Vault:** Stores API credentials encrypted at rest via Windows `CryptProtectData`.
 
 ## [1.3.0 - 1.3.3] - 2026-11-18
 

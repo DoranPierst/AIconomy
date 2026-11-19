@@ -4,9 +4,10 @@ dist/data/
 *.dpapi.json
 *.db
 *.db-journal
+*.aiconomy
 *.aihub
 aiconomy-state*.json
-ai_arac_ayarlar*.json
+aiconomy-settings*.json
 *.bak
 
 # Build artifacts, virtualenvs, and updater staging files

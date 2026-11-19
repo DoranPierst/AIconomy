@@ -1,1 +1,1 @@
-"""AI Araç & Token Ekonomisi Kontrol Merkezi."""
+"""AIconomy — MCP, OAuth & Context Token Control Center."""

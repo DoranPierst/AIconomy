@@ -5,7 +5,7 @@
 <h1 align="center">AIconomy</h1>
 
 <p align="center">
-  A minimalist native Windows desktop control center (PySide6 / Qt 6) for managing MCP servers, AI coding client configs, skill packs, local GPU/3D bridges, and context token budgets from one place.
+  Native Windows desktop control center (PySide6 / Qt 6) for managing MCP servers, AI coding client configs, Browser OAuth &amp; zero-plaintext DPAPI credentials, skill packs, and context token budgets from one place.
 </p>
 
 <p align="center">
@@ -16,7 +16,7 @@
 </p>
 
 <p align="center">
-  <img src="assets/screenshot_dark.png" alt="AIconomy Dark Mode Interface" width="960" />
+  <img src="assets/screenshot_dark.png" alt="AIconomy Interface" width="960" />
 </p>
 
 ---
@@ -27,7 +27,7 @@ No Python installation required:
 
 1. Download **`AIconomy.exe`** from the [**Latest Release**](https://github.com/DoranPierst/AIconomy/releases/latest).
 2. Double-click `AIconomy.exe` to launch.
-3. Click the version badge in the footer (or **More menu -> Check for App Updates**) anytime to pull future GitHub releases automatically.
+3. Click the version badge in the footer (or **More menu -> Check for updates**) anytime to check and apply future GitHub releases automatically.
 
 > **Windows SmartScreen note:** `AIconomy.exe` is currently unsigned, so Windows Defender SmartScreen may show a warning on first run (**More info** -> **Run anyway**). You can also inspect the source and build the executable locally with `build_exe.bat`.
 
@@ -37,18 +37,19 @@ No Python installation required:
 
 - **Passive Startup & Locked Start/Stop Control:** Opens with zero unsolicited background server spawns; a single bidirectional **Start Tools** / **Stop Tools** button stays safely locked until managed processes (`psutil.wait_procs`) and local TCP ports settle.
 - **Unified Per-Client MCP Matrix (`AGY / CDX / CLD / CUR`):** Enable or disable MCP servers, CLI tools, rules, and skill packs per AI client (**Google Antigravity**, **OpenAI Codex**, **Claude Code**, **Cursor**), with automatic Windows `cmd /c npx` wrapping and uninstalled-client dimming.
-- **Curated 100-Tool Library with On-Demand Install:** Keep your **Tools** workspace lean (`14` installed starter tools) and browse **86** additional verified Windows-compatible MCP/Skill/Rule entries in **Plugins** — library entries stay uninstalled on disk until you click **Download & Install**.
-- **General + App-Specific Scoped Tags & `+ Create Profile` Wizard:** Distinguishes general software tags (`Coding & LSP`, `Testing & QA`) from host-specific tags (`Unity: Testing & QA`, `Blender: 3D Modeling`, `Chrome: Testing & QA`) with dynamic per-app rows in **+ Create Profile** and calm muted colors that glow only when selected.
+- **Curated 100-Tool Library with On-Demand Install:** Keep your **Tools** workspace lean (`14` starter tools) and browse **86** additional verified Windows-compatible MCP, Skill, and Rule entries in **Plugins** — library entries remain uninstalled on disk until you click **Download & Install**.
+- **Zero-Plaintext `--mcp-exec` RAM Bridge & Optional Vault PIN:** API keys are encrypted at rest via Windows DPAPI (`CryptProtectData`) with an optional `600,000`-iteration `PBKDF2-HMAC-SHA256` Master Passphrase, and injected solely into child process RAM at launch — **raw secrets are never written to `.json` or `.toml` AI client config files**.
+- **Keyless Browser OAuth 2.1 & Official CLI Sign-In:** Connect supported services (**Cloudflare**, **Linear**, **Sentry**, **Notion**, **Atlassian**, **Supabase**, **Netlify**, **Stripe** via `mcp-remote`, plus **GitHub**, **Azure**, **Google Cloud**, **Snyk**, and **Railway** CLI OAuth) directly through your browser without copying static API tokens.
+- **General + App-Specific Scoped Tags & `+ Create Profile` Wizard:** Separates general software tags (`Coding & LSP`, `Testing & QA`) from host-specific tags (`Unity: Testing & QA`, `Blender: 3D Modeling`, `Chrome: Testing & QA`) with dynamic per-app rows in **+ Create Profile** and calm muted colors that glow only when selected.
 - **Interactive Token Usage Breakdown:** Click the footer token badge anytime to inspect per-client 200K context load, per-tool schema share bars, **Token Saver** vs **Capability Schema** classifications, and live tool toggles.
-- **Dynamic Windows DPAPI Key Vault:** API key fields appear automatically in **Settings -> API Keys** whenever you add a key-backed tool to your workspace, encrypted at rest via Windows `CryptProtectData`.
-- **Diagnostics Center & SQLite Logs:** Run live end-to-end MCP handshakes (`initialize`, Blender socket, `stdio` JSON-RPC), release stuck local ports safely, reset individual tools to factory defaults, and export structured AI troubleshooting prompts.
-- **100% English & Turkish UI:** Full live language switching with Windows OS locale auto-detection, Dark and Light themes (updated screenshot below), and system tray controls.
+- **Diagnostics Center & Auto-Redacted SQLite Logs:** Run live end-to-end MCP handshakes (`initialize`, Blender socket, `stdio` JSON-RPC), release stuck local ports safely, reset individual tools to factory defaults, and export structured AI troubleshooting prompts with automatic token/secret redaction.
+- **100% English & Turkish UI:** Full live language switching with Windows OS locale auto-detection, Dark and Light themes, and system tray controls.
 
 ---
 
 ## Files AIconomy Modifies
 
-When you toggle tools or change scopes, AIconomy updates **only its own managed entries** inside the AI client configs below using atomic writes. A `.bak` backup is written before any modification, and untouched files are never rewritten:
+When you toggle tools or change scopes, AIconomy updates **only its own managed entries** inside the AI client configs below using serialized atomic writes. A `.bak` backup is created before any modification, and unchanged files are never touched:
 
 | Client | Configuration File(s) |
 |---|---|
@@ -59,14 +60,14 @@ When you toggle tools or change scopes, AIconomy updates **only its own managed 
 
 ### Data Storage & Portable Mode
 
-- Application state (`aiconomy-state.json`), SQLite logs (`aiconomy.db`), and encrypted API keys (`aiconomy-vault.dpapi.json`) are stored in `%LOCALAPPDATA%\AIconomy\data`.
-- Existing files from earlier versions (`hub_state.json`, `ai_hub_logs.db`, `vault.dpapi.json`) are migrated non-destructively on first launch.
+- Application state (`aiconomy-state.json`), auto-redacted SQLite logs (`aiconomy.db`), and encrypted credentials (`aiconomy-vault.dpapi.json`) are stored in `%LOCALAPPDATA%\AIconomy\data`.
 - To run in **portable mode**, create an empty `portable.txt` file next to `AIconomy.exe` to store data in a local `data\` folder beside the executable.
 
-### Security & API Keys
+### Security Architecture
 
-- API keys entered in **Settings -> API Keys** are encrypted at rest on disk using Windows DPAPI (`CryptProtectData`, scoped to the current Windows user account).
-- **Plaintext-on-sync notice:** When a tool that requires an API key is enabled and synced to an AI client, that key is written **in plain text** into the enabled client's MCP config file listed above, because MCP clients read environment variables directly from those config files.
+- **Zero Plaintext on Disk:** Credential-backed `stdio` MCP servers are registered in AI client config files via `AIconomy --mcp-exec <tool_id>`, resolving secrets strictly in memory at launch (`<10ms` pre-GUI entrypoint) while scrubbing unrelated sensitive environment variables from child MCP processes.
+- **DPAPI + Optional Master Passphrase:** Secrets are protected by Windows `CryptProtectData` tied to your Windows user account, with an optional **Vault Master Passphrase / PIN** (`PBKDF2-HMAC-SHA256`, `600,000` iterations) in **Settings -> API Keys** so other processes in the same session cannot decrypt the vault without your PIN.
+- **Automatic Secret Redaction & User-Scoped IPC:** Known API token formats (`sk-...`, `ghp_...`, `github_pat_...`, `ntn_...`, `sntryu_...`, `Bearer ...`) and stored vault values are automatically masked (`***REDACTED***`) before touching SQLite logs or diagnostic prompts, and the single-instance local pipe is restricted to the current Windows user (`UserAccessOption`).
 
 ---
 
@@ -86,4 +87,4 @@ uv run python main.py
 
 ## License
 
-Released under the [MIT License](LICENSE). See [CHANGELOG.md](CHANGELOG.md) for release history.
+Copyright (c) 2026 [DoranPierst](https://github.com/DoranPierst). Released under the [MIT License](LICENSE). See [CHANGELOG.md](CHANGELOG.md) for release history.
