@@ -33,24 +33,99 @@ _IGNORED_WIN_TITLES = {
 }
 
 
+_AI_CLIENT_PROCESS_NAMES = frozenset(
+    {
+        "antigravity.exe",
+        "cursor.exe",
+        "claude.exe",
+        "codex.exe",
+        "windsurf.exe",
+    }
+)
+
+
+class _NvmlMemory(ctypes.Structure):
+    _fields_ = [
+        ("total", ctypes.c_ulonglong),
+        ("free", ctypes.c_ulonglong),
+        ("used", ctypes.c_ulonglong),
+    ]
+
+
+class _NvmlVramReader:
+    """In-process ctypes wrapper around Windows nvml.dll (zero subprocess overhead, <0.1ms)."""
+
+    def __init__(self) -> None:
+        self._initialized = False
+        self._unavailable = False
+        self._dll: Any = None
+        self._handle = ctypes.c_void_p()
+        self._gpu_name = ""
+
+    def _ensure_init(self) -> bool:
+        if self._initialized:
+            return True
+        if self._unavailable or os.name != "nt":
+            return False
+        candidates = ["nvml.dll"]
+        prog_files = os.environ.get("ProgramFiles", r"C:\Program Files")
+        nvsmi_dll = pathlib.Path(prog_files) / "NVIDIA Corporation" / "NVSMI" / "nvml.dll"
+        if nvsmi_dll.is_file():
+            candidates.append(str(nvsmi_dll))
+        for cand in candidates:
+            try:
+                dll = ctypes.WinDLL(cand)
+                if dll.nvmlInit_v2() != 0:
+                    continue
+                handle = ctypes.c_void_p()
+                if dll.nvmlDeviceGetHandleByIndex_v2(0, ctypes.byref(handle)) != 0:
+                    continue
+                name_buf = ctypes.create_string_buffer(96)
+                if dll.nvmlDeviceGetName(handle, name_buf, 96) == 0:
+                    self._gpu_name = name_buf.value.decode("utf-8", errors="replace").strip()
+                else:
+                    self._gpu_name = "NVIDIA GPU"
+                self._dll = dll
+                self._handle = handle
+                self._initialized = True
+                return True
+            except Exception:
+                continue
+        self._unavailable = True
+        return False
+
+    def read_vram_mb(self) -> tuple[str, int, int]:
+        if not self._ensure_init() or self._dll is None:
+            return "", 0, 0
+        try:
+            mem = _NvmlMemory()
+            if self._dll.nvmlDeviceGetMemoryInfo(self._handle, ctypes.byref(mem)) == 0 and mem.total > 0:
+                used_mb = int(mem.used // (1024 * 1024))
+                total_mb = int(mem.total // (1024 * 1024))
+                return self._gpu_name, used_mb, total_mb
+        except Exception:
+            pass
+        return "", 0, 0
+
+
+_NVML_READER = _NvmlVramReader()
+
+
 def query_gpu_vram() -> tuple[str, int, int]:
-    """Return (gpu_name, used_mb, total_mb) from nvidia-smi, or ('', 0, 0) when unavailable."""
-    try:
-        proc = subprocess.run(
-            ["nvidia-smi", "--query-gpu=name,memory.used,memory.total", "--format=csv,noheader,nounits"],
-            capture_output=True,
-            text=True,
-            timeout=2.5,
-            creationflags=NO_WINDOW,
-        )
-        if proc.returncode == 0 and proc.stdout.strip():
-            line = proc.stdout.strip().splitlines()[0]
-            parts = [p.strip() for p in line.split(",")]
-            if len(parts) >= 3:
-                return parts[0], int(float(parts[1])), int(float(parts[2]))
-    except Exception:
-        pass
-    return "", 0, 0
+    """Return (gpu_name, used_mb, total_mb) in-process via nvml.dll (zero subprocesses)."""
+    return _NVML_READER.read_vram_mb()
+
+
+def has_running_ai_client_processes() -> bool:
+    """Return True when at least one AI coding client process (Antigravity, Cursor, Claude, Codex) is running."""
+    for proc in psutil.process_iter(["name"]):
+        try:
+            nm = (proc.info.get("name") or "").lower()
+            if nm in _AI_CLIENT_PROCESS_NAMES:
+                return True
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+    return False
 
 
 def _is_interactive_default_desktop() -> bool:

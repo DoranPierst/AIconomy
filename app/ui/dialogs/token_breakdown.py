@@ -1,6 +1,8 @@
 """Interactive Token Usage Breakdown dialog: per-client 200K load, per-tool % shares, saver vs capability roles."""
 from __future__ import annotations
 
+import copy
+import threading
 from typing import TYPE_CHECKING
 
 from PySide6.QtCore import Qt
@@ -17,9 +19,11 @@ from PySide6.QtWidgets import (
 )
 
 from ...catalog import ToolSpec
+from ...diagnostics import measure_tool_schema_tokens
 from ...i18n import tr
-from ...tokens import SAVER_NOTE_KEYS, compute_token_breakdown, fmt_tokens
+from ...tokens import SAVER_NOTE_KEYS, compute_token_breakdown, fmt_tokens, schema_cache_key
 from ..widgets import ToggleSwitch
+from ..workers import safe_emit
 
 if TYPE_CHECKING:
     from ..main_window import MainWindow
@@ -79,12 +83,19 @@ class TokenBreakdownDialog(QDialog):
         bot.addWidget(self.footer_totals_lbl)
         bot.addStretch()
 
+        self.btn_measure = QPushButton(tr(self.lang, "tok_btn_measure"))
+        self.btn_measure.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_measure.clicked.connect(self._run_live_schema_measurement)
+        bot.addWidget(self.btn_measure)
+
         btn_close = QPushButton(tr(self.lang, "btn_close"))
         btn_close.setObjectName("primaryBtn")
         btn_close.clicked.connect(self.accept)
         bot.addWidget(btn_close)
         root.addLayout(bot)
 
+        self._measuring = False
+        self.main_win.bridge.schema_measure_done.connect(self._on_measure_done)
         self._rebuild_view()
 
     @staticmethod
@@ -97,12 +108,14 @@ class TokenBreakdownDialog(QDialog):
 
     def _rebuild_view(self) -> None:
         is_light = self.main_win.meta.get("theme", "dark") == "light"
+        tok_cache = self.main_win.meta.get("schema_token_cache")
         bd = compute_token_breakdown(
             self.main_win.tools,
             len(self.main_win.active_skills),
             self.main_win.projects_map,
             missing_required_keys=self.main_win._missing_required_vault_keys(),
             installed_clients=self.main_win.installed_clients,
+            schema_token_cache=tok_cache if isinstance(tok_cache, dict) else None,
         )
 
         # 1. Rebuild 4 AI client cards
@@ -210,6 +223,30 @@ class TokenBreakdownDialog(QDialog):
                 )
                 role_lbl.setStyleSheet(saver_pill_qss if share.is_token_saver else cap_pill_qss)
                 title_r.addWidget(role_lbl)
+
+                if t.id not in ("blender_skills", "caveman"):
+                    src_lbl = QLabel(
+                        tr(self.lang, "tok_badge_measured" if share.is_measured else "tok_badge_estimated")
+                    )
+                    if share.is_measured:
+                        src_qss = (
+                            "background-color: #ecfdf5; color: #047857; border: 1px solid #6ee7b7; "
+                            "border-radius: 4px; padding: 1px 5px; font-size: 9.5px; font-weight: 700;"
+                            if is_light
+                            else "background-color: #0b2e23; color: #34d399; border: 1px solid #059669; "
+                            "border-radius: 4px; padding: 1px 5px; font-size: 9.5px; font-weight: 700;"
+                        )
+                    else:
+                        src_qss = (
+                            "background-color: #f1f5f9; color: #64748b; border: 1px solid #cbd5e1; "
+                            "border-radius: 4px; padding: 1px 5px; font-size: 9.5px; font-weight: 600;"
+                            if is_light
+                            else "background-color: #162030; color: #94a3b8; border: 1px solid #263549; "
+                            "border-radius: 4px; padding: 1px 5px; font-size: 9.5px; font-weight: 600;"
+                        )
+                    src_lbl.setStyleSheet(src_qss)
+                    title_r.addWidget(src_lbl)
+
                 title_r.addStretch()
                 info_col.addLayout(title_r)
 
@@ -301,3 +338,45 @@ class TokenBreakdownDialog(QDialog):
     def _edit_skills(self, tool: ToolSpec) -> None:
         self.main_win.open_gear(tool)
         self._rebuild_view()
+
+    def _run_live_schema_measurement(self) -> None:
+        if self._measuring or not getattr(self.main_win, "sync_live_environment", True):
+            return
+        targets = [
+            copy.deepcopy(t)
+            for t in self.main_win.workspace_tools()
+            if t.enabled and t.id not in ("blender_skills", "caveman", "unity_pipeline", "trellis")
+        ]
+        if not targets:
+            self.main_win.set_status(tr(self.lang, "msg_tok_measure_none"))
+            return
+        self._measuring = True
+        self.btn_measure.setEnabled(False)
+        self.btn_measure.setText(tr(self.lang, "tok_btn_measuring"))
+        vault = self.main_win.vault
+
+        def worker() -> None:
+            measured: dict[str, int] = {}
+            for t_snap in targets:
+                tok_val = measure_tool_schema_tokens(t_snap, vault)
+                if isinstance(tok_val, int) and tok_val > 0:
+                    measured[schema_cache_key(t_snap)] = tok_val
+            safe_emit(self.main_win.bridge.schema_measure_done, measured, len(measured))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_measure_done(self, measured: dict[str, int], count: int) -> None:
+        self._measuring = False
+        if isinstance(measured, dict) and measured:
+            cache = self.main_win.meta.setdefault("schema_token_cache", {})
+            if isinstance(cache, dict):
+                cache.update(measured)
+            self.main_win._save_state()
+            self.main_win._refresh_table()
+            self.main_win.set_status(tr(self.lang, "msg_tok_measured", n=count))
+        else:
+            self.main_win.set_status(tr(self.lang, "msg_tok_measure_none"))
+        if self.isVisible():
+            self.btn_measure.setEnabled(True)
+            self.btn_measure.setText(tr(self.lang, "tok_btn_measure"))
+            self._rebuild_view()

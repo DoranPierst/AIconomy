@@ -156,9 +156,19 @@ class DiagnosticsDialog(QDialog):
         lang = self.lang
 
         def worker() -> None:
+            from ...diagnostics import measure_tool_schema_tokens
+            from ...tokens import schema_cache_key
+
+            measured: dict[str, int] = {}
             for idx, t in enumerate(snap):
                 ok, ms, msg, raw = test_tool_connection_e2e(t, self.main_win.vault, proj, sk, lang=lang)
                 safe_emit(self._bridge.conn_test_row, idx, ok, ms, msg, raw)
+                if ok and t.id in ("serena", "unity_mcp"):
+                    tok_val = measure_tool_schema_tokens(t, self.main_win.vault)
+                    if isinstance(tok_val, int) and tok_val > 0:
+                        measured[schema_cache_key(t)] = tok_val
+            if measured:
+                safe_emit(self.main_win.bridge.schema_measure_done, measured, len(measured))
             safe_emit(self._bridge.conn_test_done)
 
         threading.Thread(target=worker, daemon=True).start()

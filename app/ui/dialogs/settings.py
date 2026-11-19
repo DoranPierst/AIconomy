@@ -152,6 +152,11 @@ class SettingsDialog(QDialog):
         self.auto_detect_cb.toggled.connect(self._on_autodetect_toggled)
         bl.addWidget(self.auto_detect_cb)
 
+        self.auto_stop_idle_cb = QCheckBox(tr(self.lang, "set_autostop_idle_cb"))
+        self.auto_stop_idle_cb.setChecked(bool(self.main_win.meta.get("auto_stop_idle_http", False)))
+        self.auto_stop_idle_cb.toggled.connect(self._on_autostop_idle_toggled)
+        bl.addWidget(self.auto_stop_idle_cb)
+
         lay.addWidget(beh_card)
         lay.addStretch()
         self.tabs.addTab(w, tr(self.lang, "settings_tab_general"))
@@ -172,6 +177,11 @@ class SettingsDialog(QDialog):
 
     def _on_autodetect_toggled(self, checked: bool) -> None:
         self.main_win.meta["auto_detect_apps"] = checked
+        self.main_win._save_state()
+
+    def _on_autostop_idle_toggled(self, checked: bool) -> None:
+        self.main_win.meta["auto_stop_idle_http"] = checked
+        self.main_win._no_client_seconds = 0
         self.main_win._save_state()
 
     def _on_visible_client_toggled(self, code: str, checked: bool) -> None:

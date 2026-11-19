@@ -727,7 +727,7 @@ def build_default_catalog() -> list[ToolSpec]:
             name="Chrome DevTools MCP",
             category="web_browser",
             kind="stdio",
-            version="v0.18.0",
+            version="v1.13.0",
             repo_url="https://github.com/ChromeDevTools/chrome-devtools-mcp",
             schema_tokens=3400,
             summary="For Chrome / Web projects only: inspects console errors, DOM layout, network requests, and Lighthouse performance.",
@@ -738,10 +738,10 @@ def build_default_catalog() -> list[ToolSpec]:
             scope_selectable=True,
             project_scope="GLOBAL",
             has_gear=True,
-            install_cmd="npx -y chrome-devtools-mcp@latest",
+            install_cmd="npx -y chrome-devtools-mcp@1.13.0",
             mcp_server_key="chrome-devtools",
             mcp_command="npx",
-            mcp_args=["-y", "chrome-devtools-mcp@latest"],
+            mcp_args=["-y", "chrome-devtools-mcp@1.13.0"],
             tags=["web_browser", "chrome:testing_qa", "free_local"],
             options=[
                 CheckOption(

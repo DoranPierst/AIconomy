@@ -36,6 +36,7 @@ from ...plugins import (
     PluginCheckResult,
     check_all_tools_updates_parallel,
     install_library_tool,
+    sync_pinned_version_on_tool,
     update_single_tool,
 )
 from ...tokens import fmt_tokens
@@ -491,10 +492,14 @@ class PluginsTabMixin:
                     )
                     row.addWidget(upd_one)
 
-                rem_btn = QPushButton(tr(self.lang, "plug_btn_remove_ws"))
+                uninstalling_ids = getattr(self, "_uninstalling_tool_ids", set())
+                is_uninst = t.id in uninstalling_ids
+                rem_txt = tr(self.lang, "plug_btn_uninstalling" if is_uninst else "plug_btn_remove_ws")
+                rem_btn = QPushButton(rem_txt)
+                rem_btn.setEnabled(not is_uninst)
                 rem_btn.setCursor(Qt.CursorShape.PointingHandCursor)
                 rem_btn.setToolTip(tr(self.lang, "plug_btn_remove_ws_tip"))
-                rem_btn.clicked.connect(lambda _=False, tool_obj=t: self.remove_tool_from_workspace(tool_obj))
+                rem_btn.clicked.connect(lambda _=False, tool_obj=t: self.prompt_remove_or_uninstall_tool(tool_obj))
                 row.addWidget(rem_btn)
 
             self.plugins_lay.addWidget(card)
@@ -652,6 +657,7 @@ class PluginsTabMixin:
                 tool_obj.version = f"v{target_v}"
                 tool_obj.latest_version = f"v{target_v}"
                 tool_obj.has_update = False
+                sync_pinned_version_on_tool(tool_obj, target_v)
             ver_note = f"v{prev_v} -> v{target_v}" if prev_v != target_v else f"v{target_v}"
             self.logs.add("INFO", t_name, tr(self.lang, "log_plug_updated", ver=ver_note), raw_log)
         else:

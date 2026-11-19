@@ -285,12 +285,14 @@ class ToolsTabMixin:
         return (1 if item.enabled else 0, item.name.lower())
 
     def _calculate_token_economy(self) -> tuple[int, int]:
+        tok_cache = self.meta.get("schema_token_cache")
         bd = compute_token_breakdown(
             self.tools,
             len(self.active_skills),
             self.projects_map,
             missing_required_keys=self._missing_required_vault_keys(),
             installed_clients=self.installed_clients,
+            schema_token_cache=tok_cache if isinstance(tok_cache, dict) else None,
         )
         return bd.active_tokens, bd.saved_tokens
 
@@ -612,7 +614,7 @@ class ToolsTabMixin:
         menu.addAction(act_reset)
 
         act_remove_ws = QAction(tr(self.lang, "row_ctx_remove_ws"), self)
-        act_remove_ws.triggered.connect(lambda: self.remove_tool_from_workspace(t))
+        act_remove_ws.triggered.connect(lambda: self.prompt_remove_or_uninstall_tool(t))
         menu.addAction(act_remove_ws)
 
         if t.has_update and t.latest_version:

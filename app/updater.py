@@ -1,7 +1,8 @@
-"""GitHub release checker and one-click self-updater for AIconomy (EN & TR, single version source)."""
+"""Locked official GitHub release checker and SHA-256 verified self-updater for AIconomy (EN & TR)."""
 from __future__ import annotations
 
 import dataclasses
+import hashlib
 import json
 import os
 import pathlib
@@ -16,7 +17,14 @@ from typing import Callable
 
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
 
-DEFAULT_APP_REPO = "https://github.com/DoranPierst/AIconomy"
+OFFICIAL_OWNER = "DoranPierst"
+OFFICIAL_REPO = "AIconomy"
+DEFAULT_APP_REPO = f"https://github.com/{OFFICIAL_OWNER}/{OFFICIAL_REPO}"
+_ALLOWED_DOWNLOAD_HOSTS = (
+    "github.com",
+    "objects.githubusercontent.com",
+    "release-assets.githubusercontent.com",
+)
 
 
 def get_source_root() -> pathlib.Path:
@@ -47,22 +55,23 @@ def get_current_app_version() -> str:
     return "0.0.0"
 
 
-def get_bundled_update_repo() -> str:
-    for c in _iter_version_json_candidates():
-        if c.is_file():
-            try:
-                r = str(json.loads(c.read_text(encoding="utf-8")).get("update_repo", "")).strip()
-                if r:
-                    return r
-            except Exception:
-                pass
-    return ""
+def is_official_app_repo(repo_input: str) -> bool:
+    """Return True only when ``repo_input`` points to the official HTTPS DoranPierst/AIconomy repository."""
+    s = (repo_input or "").strip().removesuffix(".git").strip("/")
+    if not s:
+        return False
+    m = re.fullmatch(r"https://github\.com/([^/\s]+)/([^/\s#?]+)", s, flags=re.IGNORECASE)
+    if m:
+        return m.group(1).lower() == OFFICIAL_OWNER.lower() and m.group(2).lower() == OFFICIAL_REPO.lower()
+    if "/" in s and " " not in s and not s.startswith(("http://", "https://")):
+        parts = s.split("/")
+        if len(parts) == 2:
+            return parts[0].lower() == OFFICIAL_OWNER.lower() and parts[1].lower() == OFFICIAL_REPO.lower()
+    return False
 
 
-def resolve_effective_app_repo(saved_meta_repo: str = "") -> str:
-    for candidate in (saved_meta_repo.strip(), get_bundled_update_repo(), DEFAULT_APP_REPO):
-        if candidate:
-            return candidate
+def resolve_effective_app_repo(_saved_meta_repo: str = "") -> str:
+    """Always return the pinned official AIconomy repository (prevents state-file update hijacking)."""
     return DEFAULT_APP_REPO
 
 
@@ -105,11 +114,7 @@ def resolve_github_latest_release_web(
     ua: str,
     timeout: float = 6.0,
 ) -> tuple[str, str, bool]:
-    """Resolve the latest GitHub release tag via the public /releases/latest 302 redirect.
-
-    Uses zero ``api.github.com`` rate-limit quota and requires no ``GITHUB_TOKEN``.
-    Returns ``(raw_tag, html_url, github_reachable)``.
-    """
+    """Resolve the latest GitHub release tag via the public /releases/latest 302 redirect."""
     opener = urllib.request.build_opener(_NoRedirectHandler)
     url = f"https://github.com/{owner}/{repo}/releases/latest"
     req = urllib.request.Request(url, method="HEAD", headers={"User-Agent": ua})
@@ -154,6 +159,64 @@ def _probe_github_release_exe_url(owner: str, repo: str, raw_tag: str, ua: str, 
     return ""
 
 
+def _normalize_sha256_digest(raw_digest: str) -> str:
+    val = (raw_digest or "").strip().lower()
+    if val.startswith("sha256:"):
+        val = val.split(":", 1)[1].strip()
+    if re.fullmatch(r"[0-9a-f]{64}", val):
+        return val
+    return ""
+
+
+def _fetch_release_exe_metadata_api(
+    owner: str,
+    repo: str,
+    headers: dict[str, str],
+    tag_name: str = "",
+) -> tuple[str, str, str, str, str]:
+    """Return (clean_ver, changelog, html_url, exe_download_url, exe_sha256) from GitHub Releases API."""
+    endpoint = (
+        f"https://api.github.com/repos/{owner}/{repo}/releases/tags/{urllib.parse.quote(tag_name)}"
+        if tag_name
+        else f"https://api.github.com/repos/{owner}/{repo}/releases/latest"
+    )
+    req = urllib.request.Request(endpoint, headers=headers)
+    with urllib.request.urlopen(req, timeout=7) as resp:
+        rel = json.loads(resp.read().decode("utf-8"))
+    ver = str(rel.get("tag_name", "")).strip().lstrip("vV")
+    body = str(rel.get("body", "")).strip()
+    html_url = str(rel.get("html_url", ""))
+    exe_url = ""
+    exe_sha = ""
+    for asset in rel.get("assets", []):
+        name = str(asset.get("name", ""))
+        if name.lower().endswith(".exe"):
+            exe_url = str(asset.get("browser_download_url", ""))
+            exe_sha = _normalize_sha256_digest(str(asset.get("digest", "")))
+            break
+    if not exe_sha and body:
+        m = re.search(r"\b([0-9a-fA-F]{64})\b", body)
+        if m:
+            exe_sha = m.group(1).lower()
+    return ver, body, html_url, exe_url, exe_sha
+
+
+def _is_trusted_download_url(exe_url: str) -> bool:
+    try:
+        parsed = urllib.parse.urlparse(exe_url)
+    except Exception:
+        return False
+    if parsed.scheme.lower() != "https":
+        return False
+    host = (parsed.hostname or "").lower()
+    if host not in _ALLOWED_DOWNLOAD_HOSTS:
+        return False
+    if host == "github.com":
+        expected_prefix = f"/{OFFICIAL_OWNER.lower()}/{OFFICIAL_REPO.lower()}/releases/download/"
+        return parsed.path.lower().startswith(expected_prefix)
+    return True
+
+
 @dataclasses.dataclass
 class UpdateCheckResult:
     ok: bool
@@ -166,22 +229,26 @@ class UpdateCheckResult:
     repo_url: str
     can_git_pull: bool
     message: str
+    exe_sha256: str = ""
 
 
-def check_for_app_updates(repo_input: str, github_token: str = "", lang: str = "en") -> UpdateCheckResult:
+def check_for_app_updates(repo_input: str = "", github_token: str = "", lang: str = "en") -> UpdateCheckResult:
     is_tr = lang == "tr"
     local_ver = get_current_app_version()
-    if not repo_input.strip():
-        repo_input = resolve_effective_app_repo("")
+    candidate = repo_input.strip() or DEFAULT_APP_REPO
 
-    try:
-        owner, repo = parse_github_owner_repo(repo_input, lang=lang)
-    except ValueError as exc:
-        return UpdateCheckResult(False, False, local_ver, local_ver, "", "", "", repo_input, False, str(exc))
+    if not is_official_app_repo(candidate):
+        sec_msg = (
+            f"Güvenlik engeli: Yalnızca resmi {DEFAULT_APP_REPO} güncelleme kaynağına izin verilir."
+            if is_tr
+            else f"Security block: Only the official {DEFAULT_APP_REPO} update repository is permitted."
+        )
+        return UpdateCheckResult(False, False, local_ver, local_ver, "", "", "", DEFAULT_APP_REPO, False, sec_msg)
 
-    clean_repo_url = f"https://github.com/{owner}/{repo}"
+    owner, repo = OFFICIAL_OWNER, OFFICIAL_REPO
+    clean_repo_url = DEFAULT_APP_REPO
     ua = f"AIconomy/{local_ver}"
-    headers = {"User-Agent": ua}
+    headers = {"User-Agent": ua, "Accept": "application/vnd.github+json"}
     if github_token:
         headers["Authorization"] = f"Bearer {github_token}"
 
@@ -189,29 +256,25 @@ def check_for_app_updates(repo_input: str, github_token: str = "", lang: str = "
     changelog = ""
     notes_url = f"{clean_repo_url}/releases"
     exe_url = ""
+    exe_sha256 = ""
     github_reachable = False
 
-    if github_token:
-        try:
-            req = urllib.request.Request(f"https://api.github.com/repos/{owner}/{repo}/releases/latest", headers=headers)
-            with urllib.request.urlopen(req, timeout=7) as resp:
-                github_reachable = True
-                rel = json.loads(resp.read().decode("utf-8"))
-                tag = str(rel.get("tag_name", "")).lstrip("vV")
-                if tag:
-                    remote_ver = tag
-                    changelog = str(rel.get("body", "")).strip()
-                if rel.get("html_url"):
-                    notes_url = str(rel["html_url"])
-                for asset in rel.get("assets", []):
-                    name = str(asset.get("name", ""))
-                    if name.lower().endswith(".exe"):
-                        exe_url = str(asset.get("browser_download_url", ""))
-                        break
-        except urllib.error.HTTPError:
-            github_reachable = True
-        except Exception:
-            pass
+    try:
+        api_ver, api_body, api_html, api_exe, api_sha = _fetch_release_exe_metadata_api(owner, repo, headers)
+        github_reachable = True
+        if api_ver:
+            remote_ver = api_ver
+            changelog = api_body
+        if api_html:
+            notes_url = api_html
+        if api_exe:
+            exe_url = api_exe
+        if api_sha:
+            exe_sha256 = api_sha
+    except urllib.error.HTTPError:
+        github_reachable = True
+    except Exception:
+        pass
 
     if not remote_ver:
         raw_tag, tag_url, web_ok = resolve_github_latest_release_web(owner, repo, ua)
@@ -235,6 +298,10 @@ def check_for_app_updates(repo_input: str, github_token: str = "", lang: str = "
                 v_str = str(v_data.get("version", "")).lstrip("vV").strip()
                 v_chg = str(v_data.get("changelog", "")).strip()
                 if v_str and (not remote_ver or parse_semver(v_str) > parse_semver(remote_ver)):
+                    if exe_url and parse_semver(v_str) > parse_semver(remote_ver):
+                        # Newer commit on main without a compiled release yet -> don't reuse older tag's .exe!
+                        exe_url = ""
+                        exe_sha256 = ""
                     remote_ver = v_str
                     if v_chg:
                         changelog = v_chg
@@ -284,7 +351,24 @@ def check_for_app_updates(repo_input: str, github_token: str = "", lang: str = "
         repo_url=clean_repo_url,
         can_git_pull=git_dir_exists,
         message=msg,
+        exe_sha256=exe_sha256,
     )
+
+
+def verify_file_sha256(file_path: pathlib.Path, expected_sha256: str) -> tuple[bool, str]:
+    """Compute SHA-256 of ``file_path`` and verify exact match against ``expected_sha256``."""
+    norm_exp = _normalize_sha256_digest(expected_sha256)
+    if not norm_exp:
+        return False, ""
+    h = hashlib.sha256()
+    with open(file_path, "rb") as fh:
+        while True:
+            chunk = fh.read(65536)
+            if not chunk:
+                break
+            h.update(chunk)
+    actual = h.hexdigest().lower()
+    return actual == norm_exp, actual
 
 
 def apply_self_update(
@@ -293,20 +377,61 @@ def apply_self_update(
     progress_cb: Callable[[int, int], None] | None = None,
     lang: str = "en",
 ) -> tuple[bool, str, str]:
-    """Download/pull update and return (ok, action_kind ['swap_exe' | 'restart_py' | 'none'], message)."""
+    """Download/pull update with mandatory official repo & SHA-256 verification."""
     is_tr = lang == "tr"
     is_frozen = getattr(sys, "frozen", False)
     local_ver = get_current_app_version()
 
+    if not is_official_app_repo(check_res.repo_url or DEFAULT_APP_REPO):
+        msg = (
+            "Güvenlik engeli: Resmi olmayan güncelleme kaynağı reddedildi."
+            if is_tr
+            else "Security block: Untrusted update repository rejected."
+        )
+        return False, "none", msg
+
     if is_frozen and check_res.exe_download_url:
+        if not _is_trusted_download_url(check_res.exe_download_url):
+            msg = (
+                "Güvenlik engeli: İndirme adresi resmi GitHub kaynağına ait değil."
+                if is_tr
+                else "Security block: Download URL does not belong to official GitHub releases."
+            )
+            return False, "none", msg
+
         current_exe = pathlib.Path(sys.executable).resolve()
         new_exe = current_exe.with_suffix(".exe.new")
-        headers = {"User-Agent": f"AIconomy/{local_ver}"}
+        headers = {"User-Agent": f"AIconomy/{local_ver}", "Accept": "application/vnd.github+json"}
         if github_token:
             headers["Authorization"] = f"Bearer {github_token}"
 
+        expected_sha = _normalize_sha256_digest(check_res.exe_sha256)
+        if not expected_sha and check_res.remote_version:
+            try:
+                _v, _b, _h, _u, fetched_sha = _fetch_release_exe_metadata_api(
+                    OFFICIAL_OWNER,
+                    OFFICIAL_REPO,
+                    headers,
+                    tag_name=f"v{check_res.remote_version.lstrip('vV')}",
+                )
+                expected_sha = _normalize_sha256_digest(fetched_sha)
+            except Exception:
+                pass
+
+        if not expected_sha:
+            msg = (
+                "Güvenlik engeli: Resmi SHA-256 bütünlük özeti doğrulanamadığı için güncelleme durduruldu."
+                if is_tr
+                else "Security block: Could not retrieve official SHA-256 digest; update aborted."
+            )
+            return False, "none", msg
+
         try:
-            req = urllib.request.Request(check_res.exe_download_url, headers=headers)
+            dl_headers = {"User-Agent": f"AIconomy/{local_ver}"}
+            if github_token:
+                dl_headers["Authorization"] = f"Bearer {github_token}"
+            req = urllib.request.Request(check_res.exe_download_url, headers=dl_headers)
+            hasher = hashlib.sha256()
             with urllib.request.urlopen(req, timeout=60) as resp:
                 total = int(resp.headers.get("Content-Length") or 0)
                 downloaded = 0
@@ -316,9 +441,20 @@ def apply_self_update(
                         if not chunk:
                             break
                         out_f.write(chunk)
+                        hasher.update(chunk)
                         downloaded += len(chunk)
                         if progress_cb and total > 0:
                             progress_cb(downloaded, total)
+
+            actual_sha = hasher.hexdigest().lower()
+            if actual_sha != expected_sha:
+                new_exe.unlink(missing_ok=True)
+                msg = (
+                    f"SHA-256 bütünlük doğrulaması başarısız oldu! Dosya silindi.\nBeklenen: {expected_sha}\nHesaplanan: {actual_sha}"
+                    if is_tr
+                    else f"SHA-256 integrity check failed! File deleted.\nExpected: {expected_sha}\nActual: {actual_sha}"
+                )
+                return False, "none", msg
 
             if not new_exe.is_file() or new_exe.stat().st_size < 1_000_000:
                 new_exe.unlink(missing_ok=True)
@@ -356,9 +492,9 @@ def apply_self_update(
             bat_path.write_text(bat_content, encoding="utf-8")
             subprocess.Popen(["cmd.exe", "/c", str(bat_path)], creationflags=NO_WINDOW)
             msg = (
-                f"v{check_res.remote_version} indirildi; uygulama şimdi yeniden başlatılacak."
+                f"v{check_res.remote_version} indirildi (SHA-256 doğrulandı); uygulama şimdi yeniden başlatılacak."
                 if is_tr
-                else f"Downloaded v{check_res.remote_version}; restarting AIconomy now."
+                else f"Downloaded v{check_res.remote_version} (SHA-256 verified); restarting AIconomy now."
             )
             return True, "swap_exe", msg
         except Exception as exc:

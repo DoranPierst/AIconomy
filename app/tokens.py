@@ -2,9 +2,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 import pathlib
 import shutil
-from typing import Callable
+from typing import Any, Callable
 
 from .catalog import (
     AI_CLIENTS,
@@ -33,6 +34,7 @@ class ToolTokenShare:
     is_token_saver: bool
     active_clients: list[str]
     zero_reason_key: str = ""
+    is_measured: bool = False
 
 
 @dataclass
@@ -52,6 +54,20 @@ class TokenBreakdown:
     context_window: int
     clients: list[ClientTokenLoad]
     tool_shares: list[ToolTokenShare]
+
+
+def schema_cache_key(tool: ToolSpec) -> str:
+    """Build a deterministic cache key reflecting tool version, active mode, and CLI options."""
+    opts_sig = ",".join(f"{o.key}:{int(bool(o.enabled))}" for o in tool.options)
+    return f"{tool.id}|{tool.version}|{tool.mode_index}|{opts_sig}"
+
+
+def estimate_tokens_from_tools_payload(tools_list: list[Any]) -> int:
+    """Compute realistic BPE schema token footprint from a live MCP tools/list response array."""
+    if not tools_list:
+        return 0
+    compact = json.dumps(tools_list, ensure_ascii=False, separators=(",", ":"))
+    return max(50, int(round(len(compact) / 3.8)) + len(tools_list) * 12)
 
 
 def fmt_tokens(tok: int) -> str:
@@ -137,10 +153,12 @@ def compute_token_breakdown(
     installed_clients: set[str] | None = None,
     home_dir: pathlib.Path | None = None,
     which_fn: Callable[[str], str | None] = shutil.which,
+    schema_token_cache: dict[str, int] | None = None,
 ) -> TokenBreakdown:
     """Compute realistic active schema load, honest disabled savings, per-client totals, and per-tool % shares."""
     missing_keys = missing_required_keys or set()
     inst_clients = installed_clients if installed_clients is not None else {c for c, _ in AI_CLIENTS}
+    tok_cache = schema_token_cache or {}
     which_cache: dict[str, bool] = {}
 
     client_totals: dict[str, int] = {c: 0 for c, _ in AI_CLIENTS}
@@ -167,11 +185,17 @@ def compute_token_breakdown(
             t, projects_map, home_dir=home_dir, which_cache=which_cache, which_fn=which_fn
         )
 
-        nominal = (
-            sk_clamped * BLENDER_SKILL_INDEX_TOKENS
-            if t.id == "blender_skills"
-            else int(t.schema_tokens)
-        )
+        is_measured = False
+        if t.id == "blender_skills":
+            nominal = sk_clamped * BLENDER_SKILL_INDEX_TOKENS
+        else:
+            ck = schema_cache_key(t)
+            cached_val = tok_cache.get(ck)
+            if isinstance(cached_val, int) and cached_val > 0:
+                nominal = cached_val
+                is_measured = True
+            else:
+                nominal = int(t.schema_tokens)
 
         if t.enabled:
             if has_missing_key:
@@ -204,6 +228,7 @@ def compute_token_breakdown(
                     is_token_saver=(t.id in TOKEN_SAVER_IDS),
                     active_clients=active_clients,
                     zero_reason_key=zero_reason,
+                    is_measured=is_measured,
                 )
             )
         else:
@@ -212,7 +237,7 @@ def compute_token_breakdown(
                 if t.id == "blender_skills":
                     saved_tokens += len(BLENDER_SKILLS_94) * BLENDER_SKILL_INDEX_TOKENS
                 else:
-                    saved_tokens += int(t.schema_tokens)
+                    saved_tokens += nominal
 
     for row in raw_shares:
         row.share_percent = (row.effective_tokens / active_tokens * 100.0) if active_tokens > 0 else 0.0

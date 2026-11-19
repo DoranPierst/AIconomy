@@ -2,12 +2,32 @@
 
 All notable changes to **AIconomy** are documented in this file.
 
-## [Unreleased]
+## [1.6.0] - 2026-11-19
 
-### Security & Authentication Hardening (Faz 1)
-- **Zero-Plaintext `--mcp-exec` RAM Bridge:** Replaced plaintext API key writes in `mcp_config.json`, `.claude.json`, `.cursor/mcp.json`, and `config.toml` with a fast pre-GUI `--mcp-exec <tool_id>` launcher that decrypts credentials solely in RAM and scrubs unrelated host environment secrets from child MCP processes.
-- **Browser OAuth 2.1 & Official CLI Sign-In:** Added keyless OAuth authentication (`mcp-remote` OAuth 2.1 for Cloudflare, Linear, Sentry, Notion, Atlassian, Supabase, Netlify, Stripe; official CLI browser login for GitHub, GitHub Actions, Azure, Google Cloud, Snyk, Railway).
-- **Optional Vault Master Passphrase (`PBKDF2-SHA256 + DPAPI`) & Auto-Redaction:** Added optional `600,000`-iteration `PBKDF2-HMAC-SHA256` + `CryptProtectData` entropy protection in `Settings > API Keys`, automatic secret redaction (`***REDACTED***`) in SQLite logs and AI troubleshooting prompts, and `UserAccessOption` local IPC pipe locking.
+Major security hardening, keyless Browser OAuth, live protocol measurement, and modular architecture release across all 5 engineering phases.
+
+### Zero-Plaintext Credentials, Vault PIN & Browser OAuth (Faz 1)
+- **Zero-Plaintext `--mcp-exec` RAM Bridge:** Replaced raw API key writes in `mcp_config.json`, `.claude.json`, `.cursor/mcp.json`, and `config.toml` with a fast pre-GUI `--mcp-exec <tool_id>` launcher (`<10ms`, zero Qt import) that decrypts secrets solely in RAM and scrubs unrelated host environment variables (`OPENAI_API_KEY`, `STRIPE_SECRET_KEY`, etc.) from child MCP processes.
+- **Browser OAuth 2.1 & Official CLI Sign-In (14 Tools):** Added keyless browser OAuth authentication (`mcp-remote` OAuth 2.1 PKCE for Cloudflare, Linear, Sentry, Notion, Atlassian, Supabase, Netlify, Stripe; official CLI browser login for GitHub, GitHub Actions, Azure, Google Cloud, Snyk, Railway).
+- **Optional Vault Master Passphrase (`PBKDF2-SHA256 + DPAPI`), Auto-Redaction & Pipe Lock:** Added optional `600,000`-iteration `PBKDF2-HMAC-SHA256` + `CryptProtectData` entropy protection in `Settings > API Keys`, automatic secret redaction (`***REDACTED***`) in SQLite logs and AI troubleshooting prompts, and `UserAccessOption` local IPC pipe locking.
+
+### Supply-Chain Armor & SHA-256 Verified Updater (Faz 2)
+- **Version Pinning & `--ignore-scripts` Protection:** Pinned all `@latest` package tags across the 100-tool catalog to verified npm/PyPI versions and enforced `npm install -g --ignore-scripts` by default to prevent silent lifecycle script execution.
+- **Anti-Typosquatting `Add from GitHub` Verification:** `inspect_github_repo` now inspects the repository's `package.json` / `pyproject.toml` and verifies on npm/PyPI that `repository.url` / `project_urls` points back to that exact GitHub `owner/repo`, blocking automatic `npx` / `uvx` execution when ownership mismatches.
+- **Locked Official Update Channel + Mandatory SHA-256 Digest Check:** Locked self-updates strictly to `https://github.com/DoranPierst/AIconomy` and verified downloaded `AIconomy.exe` binaries byte-for-byte against the official GitHub Release `sha256` digest before replacement (deleting `.exe.new` immediately on mismatch).
+
+### Live `tools/list` Schema Measurement & Local Port Protection (Faz 3)
+- **Live MCP `tools/list` Schema Token Meter:** Queries live HTTP and `stdio` MCP servers (`initialize` + `tools/list`) to measure real tool schema footprints, caches results per `(tool_id, version, mode_index, options)`, and displays **Measured** vs **Estimated** badges plus a **Measure Live Schemas** action in `Token Usage Breakdown`.
+- **Auto-Stop Local HTTP MCP Servers on Idle:** Optional security setting in `Settings > General` automatically stops local HTTP MCP servers (`:9121`, `:8080`) after 5 minutes when no AI coding editor (`Antigravity`, `Cursor`, `Claude`, `Codex`) is open.
+
+### `nvml.dll` Zero-Subprocess VRAM, Adaptive Sleep & True Uninstall (Faz 4)
+- **In-Process `nvml.dll` (`ctypes`) GPU VRAM Reader:** Replaced periodic `nvidia-smi.exe` subprocess spawns with direct in-memory `nvml.dll` `ctypes` queries (`<0.1ms` cached, `0` subprocesses).
+- **Adaptive System Tray Sleep Mode:** Throttles background status polling to once every 60 seconds and pauses VRAM/DCC checks while minimized to the system tray, refreshing instantaneously when restored.
+- **True Package Uninstall (`Hide from Tools Only` vs `Uninstall from PC`):** Removing an installed plugin now lets you either hide it from `Tools` or run a real disk uninstall (`npm uninstall -g`, `uv tool uninstall`, or skill folder removal) and revert its state to `Not downloaded`.
+
+### SHA-256 Remote `catalog.json` & Modular Architecture (Faz 5)
+- **SHA-256 Verified `assets/catalog.json`:** Externalized the 86-tool library catalog into `assets/catalog.json` + `assets/catalog.sha256` with offline-first loading and SHA-256 verified remote catalog refresh (`More -> Refresh remote catalog`) without requiring a new `.exe` build.
+- **Modular `MainWindow` Mixins:** Extracted profile orchestration (`ProfilesMixin`) and system tray / updater / backup workflows (`TrayUpdaterMixin`) into dedicated `app/ui/mixins/` modules.
 
 ## [1.5.0] - 2026-11-19
 

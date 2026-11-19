@@ -1,5 +1,5 @@
 {
-  "version": "1.5.0",
+  "version": "1.6.0",
   "update_repo": "https://github.com/DoranPierst/AIconomy",
-  "changelog": "Major v1.5.0 release: passive startup with bidirectional locked Start/Stop Tools, curated 100-tool Windows library (14 starter + 86 on-demand Download & Install plugins), General vs. Dynamic App-Specific Scoped Tags (Unity, Blender, Chrome, Godot, Unreal, Figma, etc.) with selection-only glow, 3-tier + Create Profile task wizard, interactive Token Usage Breakdown dialog, dynamic Windows DPAPI API Key Vault, real CLI/disk settings wiring, Windows cmd /c npx wrapper, per-tool Reset to Defaults, and 100% EN/TR parity."
+  "changelog": "Major v1.6.0 security, OAuth, and architecture release: zero-plaintext --mcp-exec RAM secret bridge with child env scrubbing, Browser OAuth 2.1 (mcp-remote) + official CLI sign-in across 14 tools, optional PBKDF2-SHA256 + Windows DPAPI Vault Master Passphrase, automatic SQLite/prompt secret redaction, pinned package versions with npm --ignore-scripts & GitHub->npm/PyPI ownership verification, locked official updater with SHA-256 verification, live tools/list schema token measurement (Measured vs Estimated), idle AI editor HTTP auto-stop, zero-subprocess nvml.dll VRAM reader, 60s adaptive tray sleep, true package uninstall (Hide vs Uninstall from PC), and SHA-256 verified remote-refreshable catalog.json."
 }

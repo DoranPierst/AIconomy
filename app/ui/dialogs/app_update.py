@@ -72,6 +72,7 @@ class AppUpdateDialog(QDialog):
         r_lay.addWidget(QLabel(f"<b>{tr(self.lang, 'upd_channel_hdr')}</b>"))
         row = QHBoxLayout()
         self.repo_inp = QLineEdit(cur_repo)
+        self.repo_inp.setReadOnly(True)
         self.repo_inp.setPlaceholderText("https://github.com/DoranPierst/AIconomy")
         row.addWidget(self.repo_inp, stretch=1)
 
@@ -122,12 +123,8 @@ class AppUpdateDialog(QDialog):
         self.repo_card.setVisible(not self.repo_card.isVisible())
 
     def run_check(self) -> None:
-        repo = self.repo_inp.text().strip()
-        if repo:
-            self.main_win.meta["app_update_repo"] = repo
-            self.main_win._save_state()
-        else:
-            repo = resolve_effective_app_repo(str(self.main_win.meta.get("app_update_repo", "")))
+        repo = resolve_effective_app_repo()
+        self.repo_inp.setText(repo)
         self.btn_check.setEnabled(False)
         self.btn_apply.setEnabled(False)
         self.status_badge.setText(tr(self.lang, "upd_checking"))
@@ -196,6 +193,8 @@ class AppUpdateDialog(QDialog):
             lines.append(tr(self.lang, "upd_lbl_notes", url=res.release_notes_url))
         if res.exe_download_url:
             lines.append(tr(self.lang, "upd_method_exe"))
+            if getattr(res, "exe_sha256", ""):
+                lines.append(f"SHA-256: {res.exe_sha256}")
         elif res.can_git_pull:
             lines.append(tr(self.lang, "upd_method_git"))
         if res.changelog:

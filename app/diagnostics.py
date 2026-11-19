@@ -17,6 +17,7 @@ from .host_apps import NO_WINDOW
 from .mcp_config import build_effective_stdio_spec, is_tool_credential_ready
 from .security import build_isolated_child_env
 from .storage import WindowsDpapiVault
+from .tokens import estimate_tokens_from_tools_payload
 from .updater import get_current_app_version
 
 
@@ -251,3 +252,177 @@ def _run_stdio_handshake(
                 proc.kill()
             except Exception:
                 pass
+
+
+def _extract_tools_from_jsonrpc_text(raw_body: str) -> list[dict] | None:
+    """Parse either a direct JSON-RPC reply or SSE `data: {...}` lines to extract `result.tools`."""
+    candidates: list[str] = []
+    stripped = raw_body.strip()
+    if stripped.startswith("{"):
+        candidates.append(stripped)
+    for line in raw_body.splitlines():
+        ls = line.strip()
+        if ls.startswith("data:"):
+            payload = ls[5:].strip()
+            if payload.startswith("{"):
+                candidates.append(payload)
+        elif ls.startswith("{"):
+            candidates.append(ls)
+    for cand in candidates:
+        try:
+            obj = json.loads(cand)
+            if isinstance(obj, dict):
+                res = obj.get("result")
+                if isinstance(res, dict) and isinstance(res.get("tools"), list):
+                    return res["tools"]
+        except Exception:
+            continue
+    return None
+
+
+def measure_tool_schema_tokens(
+    tool: ToolSpec,
+    vault: WindowsDpapiVault,
+) -> int | None:
+    """Query live MCP `tools/list` (HTTP or stdio) and compute exact schema token footprint, or None if unreachable."""
+    app_ver = get_current_app_version()
+
+    # 1. Local HTTP Streamable MCP servers (Serena, Unity MCP)
+    if tool.id in ("serena", "unity_mcp") and tool.port:
+        url = f"http://127.0.0.1:{int(tool.port)}/mcp"
+        headers = {
+            "Content-Type": "application/json",
+            "Accept": "application/json, text/event-stream",
+        }
+        init_payload = json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": "2024-11-05",
+                    "capabilities": {},
+                    "clientInfo": {"name": "aiconomy-schema-meter", "version": app_ver},
+                },
+            }
+        ).encode("utf-8")
+        try:
+            req1 = urllib.request.Request(url, data=init_payload, method="POST", headers=headers)
+            session_id = ""
+            with urllib.request.urlopen(req1, timeout=3.5) as r1:
+                session_id = str(r1.headers.get("Mcp-Session-Id") or r1.headers.get("mcp-session-id") or "").strip()
+                _ = r1.read(8192)
+            req_headers = dict(headers)
+            if session_id:
+                req_headers["Mcp-Session-Id"] = session_id
+            try:
+                notif = json.dumps({"jsonrpc": "2.0", "method": "notifications/initialized"}).encode("utf-8")
+                with urllib.request.urlopen(
+                    urllib.request.Request(url, data=notif, method="POST", headers=req_headers), timeout=2.0
+                ):
+                    pass
+            except Exception:
+                pass
+            list_payload = json.dumps({"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}}).encode("utf-8")
+            with urllib.request.urlopen(
+                urllib.request.Request(url, data=list_payload, method="POST", headers=req_headers), timeout=4.5
+            ) as r2:
+                body2 = r2.read(524288).decode("utf-8", errors="replace")
+            tools_arr = _extract_tools_from_jsonrpc_text(body2)
+            if tools_arr is not None:
+                return estimate_tokens_from_tools_payload(tools_arr)
+        except Exception:
+            return None
+        return None
+
+    # 2. Stdio MCP servers
+    if not (tool.mcp_command or getattr(tool, "auth_mode", "key") == "oauth"):
+        return None
+    if not is_tool_credential_ready(tool, vault):
+        return None
+    spec = build_effective_stdio_spec(tool, vault, wrap_windows_npx=False)
+    if spec is None:
+        return None
+    raw_bin, eff_args, eff_env = spec
+    cmd_bin = shutil.which(f"{raw_bin}.cmd") or shutil.which(raw_bin)
+    if not cmd_bin:
+        return None
+    env = build_isolated_child_env(eff_env, allowed_secret_key=tool.vault_key_name)
+
+    try:
+        proc = subprocess.Popen(
+            [cmd_bin, *eff_args],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            env=env,
+            creationflags=NO_WINDOW,
+        )
+    except Exception:
+        return None
+
+    found_tools: list[dict] | None = None
+    init_done = threading.Event()
+    list_done = threading.Event()
+
+    def _reader() -> None:
+        nonlocal found_tools
+        if not proc.stdout:
+            return
+        for raw_line in proc.stdout:
+            ls = raw_line.strip()
+            if not ls.startswith("{"):
+                continue
+            try:
+                msg = json.loads(ls)
+            except Exception:
+                continue
+            if not isinstance(msg, dict):
+                continue
+            if msg.get("id") == 1 and "result" in msg:
+                init_done.set()
+            elif msg.get("id") == 2 and isinstance(msg.get("result"), dict):
+                t_arr = msg["result"].get("tools")
+                if isinstance(t_arr, list):
+                    found_tools = t_arr
+                list_done.set()
+                break
+
+    rt = threading.Thread(target=_reader, daemon=True)
+    rt.start()
+    try:
+        if proc.stdin:
+            init_line = json.dumps(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "initialize",
+                    "params": {
+                        "protocolVersion": "2024-11-05",
+                        "capabilities": {},
+                        "clientInfo": {"name": "aiconomy-schema-meter", "version": app_ver},
+                    },
+                }
+            )
+            proc.stdin.write(init_line + "\n")
+            proc.stdin.flush()
+            if init_done.wait(timeout=5.5):
+                proc.stdin.write('{"jsonrpc":"2.0","method":"notifications/initialized"}\n')
+                proc.stdin.write('{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}\n')
+                proc.stdin.flush()
+                list_done.wait(timeout=5.5)
+        if found_tools is not None:
+            return estimate_tokens_from_tools_payload(found_tools)
+    except Exception:
+        return None
+    finally:
+        try:
+            proc.terminate()
+            proc.wait(timeout=1.2)
+        except Exception:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+    return None

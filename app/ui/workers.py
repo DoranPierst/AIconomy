@@ -33,3 +33,5 @@ class WorkerBridge(QObject):
     lib_install_progress = Signal(int, int, str)  # (idx, total, tool_name)
     lib_install_item_done = Signal(str, bool, str, str, str, bool)  # (tool_id, ok, new_ver, msg, raw_log, enable_after)
     lib_install_all_done = Signal(int, int)  # (ok_cnt, fail_cnt)
+    lib_uninstall_done = Signal(str, bool, str, str)  # (tool_id, ok, msg, raw_log)
+    schema_measure_done = Signal(object, int)  # (measured_dict, count)

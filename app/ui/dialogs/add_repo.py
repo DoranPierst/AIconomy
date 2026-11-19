@@ -107,19 +107,21 @@ class AddRepoDialog(QDialog):
         self.detected_candidate = info
         self.btn_add.setEnabled(True)
         kind_lbl = tool_kind_label(info["kind"], self.lang)
-        self.result_box.setPlainText(
-            tr(
-                self.lang,
-                "repo_summary",
-                name=info["name"],
-                stars=info["stars"],
-                kind=kind_lbl,
-                skills=info["skill_count"],
-                desc=info["description"],
-                cmd=info["install_cmd"],
-                key=tr(self.lang, "yes" if info["needs_api_key"] else "no"),
-            )
+        summary_txt = tr(
+            self.lang,
+            "repo_summary",
+            name=info["name"],
+            stars=info["stars"],
+            kind=kind_lbl,
+            skills=info["skill_count"],
+            desc=info["description"],
+            cmd=info["install_cmd"],
+            key=tr(self.lang, "yes" if info["needs_api_key"] else "no"),
         )
+        sec_warn = str(info.get("security_warning") or "").strip()
+        if sec_warn:
+            summary_txt = f"{summary_txt}\n\n[!] {sec_warn}"
+        self.result_box.setPlainText(summary_txt)
 
     def _add_repo(self) -> None:
         info = self.detected_candidate
@@ -157,7 +159,7 @@ class AddRepoDialog(QDialog):
             category="coding_dev",
             in_workspace=True,
             kind=normalize_tool_kind(info["kind"]),
-            version="v1.0.0",
+            version=str(info.get("version") or "v1.0.0"),
             repo_url=info["repo_url"],
             schema_tokens=2000,
             summary=str(info.get("description") or f"{info['name']} custom tool."),
