@@ -21,14 +21,14 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QMessageBox,
     QPushButton,
+    QScrollArea,
     QTabWidget,
     QVBoxLayout,
     QWidget,
 )
 
-from ...catalog import AI_CLIENTS
+from ...catalog import AI_CLIENTS, localized_tool_text
 from ...i18n import SUPPORTED_LANGUAGES, tr
-from ...storage import WindowsDpapiVault
 from ...updater import get_current_app_version
 
 if TYPE_CHECKING:
@@ -43,13 +43,14 @@ class SettingsDialog(QDialog):
     TAB_PROJECTS = 2
     TAB_BACKUP = 3
 
-    def __init__(self, parent: "MainWindow", initial_tab: int = 0) -> None:
+    def __init__(self, parent: "MainWindow", initial_tab: int = 0, focus_key: str = "") -> None:
         super().__init__(parent)
         self.main_win = parent
         self.lang = parent.lang
+        self._focus_key = focus_key.strip()
         self.setWindowTitle(tr(self.lang, "settings_title"))
-        self.setMinimumSize(680, 480)
-        self.resize(720, 520)
+        self.setMinimumSize(700, 500)
+        self.resize(760, 560)
 
         root = QVBoxLayout(self)
         root.setSpacing(10)
@@ -64,6 +65,10 @@ class SettingsDialog(QDialog):
 
         if 0 <= initial_tab < self.tabs.count():
             self.tabs.setCurrentIndex(initial_tab)
+        if self._focus_key and self._focus_key in self.vault_inputs:
+            target_inp = self.vault_inputs[self._focus_key]
+            self.keys_scroll.ensureWidgetVisible(target_inp)
+            target_inp.setFocus()
 
         bot = QHBoxLayout()
         bot.addStretch()
@@ -181,7 +186,38 @@ class SettingsDialog(QDialog):
         self.main_win._save_state()
         self.main_win._refresh_table()
 
-    # --- TAB 1: API KEYS (DPAPI VAULT) ---
+    # --- TAB 1: API KEYS (DYNAMIC DPAPI VAULT) ---
+    def _collect_vault_key_rows(self) -> list[tuple[str, str]]:
+        rows: list[tuple[str, str]] = [("GITHUB_TOKEN", tr(self.lang, "set_key_github"))]
+        seen: set[str] = {"GITHUB_TOKEN"}
+
+        for t in self.main_win.tools:
+            if not getattr(t, "in_workspace", True) or not t.vault_key_name:
+                continue
+            k_name = t.vault_key_name.strip()
+            if not k_name or k_name in seen:
+                continue
+            seen.add(k_name)
+            desc_txt = localized_tool_text(t, "vault_key_desc", self.lang)
+            if not desc_txt:
+                desc_txt = tr(self.lang, "set_key_for_tool", name=t.name)
+            rows.append((k_name, desc_txt))
+
+        for saved_k in sorted(self.main_win.vault._read_map().keys()):
+            if not saved_k or saved_k in seen:
+                continue
+            seen.add(saved_k)
+            match_t = next((x for x in self.main_win.tools if x.vault_key_name == saved_k), None)
+            if match_t is not None:
+                desc_txt = localized_tool_text(match_t, "vault_key_desc", self.lang) or tr(
+                    self.lang, "set_key_for_tool", name=match_t.name
+                )
+            else:
+                desc_txt = tr(self.lang, "set_key_saved_custom")
+            rows.append((saved_k, desc_txt))
+
+        return rows
+
     def _build_keys_tab(self) -> None:
         w = QWidget()
         lay = QVBoxLayout(w)
@@ -202,17 +238,30 @@ class SettingsDialog(QDialog):
         wl.addWidget(warn_lbl)
         lay.addWidget(warn_card)
 
+        self.keys_scroll = QScrollArea()
+        self.keys_scroll.setWidgetResizable(True)
+        self.keys_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.keys_scroll.viewport().setObjectName("cellBox")
+        keys_host = QWidget()
+        keys_host.setObjectName("cellBox")
+        keys_lay = QVBoxLayout(keys_host)
+        keys_lay.setContentsMargins(0, 0, 4, 0)
+        keys_lay.setSpacing(8)
+        self.keys_scroll.setWidget(keys_host)
+
         self.vault_inputs: dict[str, QLineEdit] = {}
         self.vault_save_btns: dict[str, QPushButton] = {}
-        for key_name, desc_key in WindowsDpapiVault.STANDARD_KEYS:
+        for key_name, desc_txt in self._collect_vault_key_rows():
             card = QFrame()
             card.setObjectName("card")
             r = QHBoxLayout(card)
             r.setContentsMargins(12, 8, 12, 8)
             r.setSpacing(8)
 
-            info = QLabel(f"<b>{key_name}</b><br><span style='color:#94a3b8; font-size:11px;'>{tr(self.lang, desc_key)}</span>")
-            info.setFixedWidth(240)
+            info = QLabel(
+                f"<b>{key_name}</b><br><span style='color:#94a3b8; font-size:11px;'>{desc_txt}</span>"
+            )
+            info.setFixedWidth(250)
             info.setWordWrap(True)
             r.addWidget(info)
 
@@ -235,13 +284,14 @@ class SettingsDialog(QDialog):
 
             btn_save = QPushButton(tr(self.lang, "set_key_save"))
             btn_save.setObjectName("primaryBtn")
-            btn_save.setFixedWidth(74)
+            btn_save.setFixedWidth(80)
             btn_save.clicked.connect(lambda _=False, k=key_name: self._save_key(k))
             self.vault_save_btns[key_name] = btn_save
             r.addWidget(btn_save)
-            lay.addWidget(card)
+            keys_lay.addWidget(card)
 
-        lay.addStretch()
+        keys_lay.addStretch()
+        lay.addWidget(self.keys_scroll, stretch=1)
         self.tabs.addTab(w, tr(self.lang, "settings_tab_keys"))
 
     def _save_key(self, key_name: str) -> None:

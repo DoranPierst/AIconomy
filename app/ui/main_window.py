@@ -152,7 +152,6 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, QMainWindow):
         self._sync_debounce.setInterval(400)
         self._sync_debounce.timeout.connect(self._flush_live_sync)
 
-        self.plugin_checks: dict[str, QCheckBox] = {}
         self.checked_log_ids: set[int] = set()
         self.log_row_checks: dict[int, QCheckBox] = {}
         self._auto_heal_cooldown: dict[str, float] = {}
@@ -178,6 +177,11 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, QMainWindow):
         self._retranslate_ui()
         init_missing_keys = self._missing_required_vault_keys()
         for t in self.tools:
+            if not getattr(t, "in_workspace", True):
+                t.enabled = False
+                t.last_ping = tr(self.lang, "st_disabled")
+                t.health_state = "off"
+                continue
             t.live_location_detail = resolve_disk_location(t, self.projects_map, {}, lang=self.lang)
             if not t.enabled:
                 t.last_ping = tr(self.lang, "st_disabled")
@@ -205,6 +209,9 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, QMainWindow):
     def projects_map(self) -> dict[str, str]:
         return self.meta.setdefault("projects", {})
 
+    def workspace_tools(self) -> list[ToolSpec]:
+        return [t for t in self.tools if getattr(t, "in_workspace", True)]
+
     def get_visible_client_codes(self) -> list[str]:
         all_codes = [c for c, _ in AI_CLIENTS]
         raw = self.meta.get("visible_clients")
@@ -218,7 +225,10 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, QMainWindow):
         return {
             t.vault_key_name
             for t in self.tools
-            if t.vault_key_required and t.vault_key_name and not self.vault.has_secret(t.vault_key_name)
+            if getattr(t, "in_workspace", True)
+            and t.vault_key_required
+            and t.vault_key_name
+            and not self.vault.has_secret(t.vault_key_name)
         }
 
     def _format_scope_display(self, t: ToolSpec) -> str:
@@ -426,7 +436,7 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, QMainWindow):
     def _run_initial_runtime_probe(self) -> None:
         """Passive startup probe: checks whether managed services are already active without starting anything."""
         self._set_runtime_ui_state("probing")
-        snap_tools = copy.deepcopy(self.tools)
+        snap_tools = copy.deepcopy(self.workspace_tools())
         sk_cnt = len(self.active_skills)
         proj_snap = dict(self.projects_map)
         lang_snap = self.lang
@@ -456,7 +466,7 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, QMainWindow):
         """Start all enabled tool servers, sync AI client configs, and lock the button until verified."""
         if self._runtime_state != "stopped":
             return
-        enabled_tools = [t for t in self.tools if t.enabled]
+        enabled_tools = [t for t in self.workspace_tools() if t.enabled]
         if not enabled_tools:
             self.set_status(tr(self.lang, "msg_no_enabled_to_start"))
             return
@@ -469,6 +479,7 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, QMainWindow):
         self.set_status(tr(self.lang, "msg_tools_starting"))
 
         tools_snap = copy.deepcopy(self.tools)
+        ws_snap = [x for x in tools_snap if getattr(x, "in_workspace", True)]
         skills_snap = set(self.active_skills)
         proj_snap = dict(self.projects_map)
         lang_snap = self.lang
@@ -478,7 +489,7 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, QMainWindow):
             started_ports: list[int] = []
             with self._sync_lock:
                 if self.sync_live_environment:
-                    for t_obj in tools_snap:
+                    for t_obj in ws_snap:
                         if t_obj.enabled:
                             note = enforce_tool_runtime_state(
                                 t_obj, proj_snap, allow_stop=False, allow_start=True, lang=lang_snap
@@ -488,7 +499,11 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, QMainWindow):
                     bs_tool = next((x for x in tools_snap if x.id == "blender_skills"), None)
                     if bs_tool:
                         sync_blender_skills_on_disk(
-                            skills_snap, bs_tool.enabled, bs_tool.project_scope, proj_snap, lang=lang_snap
+                            skills_snap,
+                            bool(getattr(bs_tool, "in_workspace", True) and bs_tool.enabled),
+                            bs_tool.project_scope,
+                            proj_snap,
+                            lang=lang_snap,
                         )
                     cv_tool = next((x for x in tools_snap if x.id == "caveman"), None)
                     if cv_tool:
@@ -499,13 +514,13 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, QMainWindow):
 
                 live_map = scan_live_process_locations(lang=lang_snap)
                 out = []
-                for x in tools_snap:
+                for x in ws_snap:
                     ok, h_state, ping_str, ms, detail, loc_detail = probe_tool_health(
                         x, len(skills_snap), proj_snap, live_map, lang=lang_snap, missing_required_keys=missing_keys
                     )
                     out.append((x.id, ok, h_state, ping_str, ms, detail, loc_detail))
 
-            en_cnt = sum(1 for x in tools_snap if x.enabled)
+            en_cnt = sum(1 for x in ws_snap if x.enabled)
             summary = tr(lang_snap, "msg_tools_started", n=en_cnt)
             safe_emit(self.bridge.runtime_transition_done, "running", out, live_map, summary)
 
@@ -522,7 +537,7 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, QMainWindow):
         self._set_runtime_ui_state("stopping")
         self.set_status(tr(self.lang, "msg_tools_stopping"))
 
-        tools_snap = copy.deepcopy(self.tools)
+        ws_snap = copy.deepcopy(self.workspace_tools())
         skills_snap = set(self.active_skills)
         proj_snap = dict(self.projects_map)
         lang_snap = self.lang
@@ -532,10 +547,10 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, QMainWindow):
             detail_msg = ""
             with self._sync_lock:
                 if self.sync_live_environment:
-                    _cnt, detail_msg = stop_all_managed_services(tools_snap, lang=lang_snap)
+                    _cnt, detail_msg = stop_all_managed_services(ws_snap, lang=lang_snap)
                 live_map = scan_live_process_locations(lang=lang_snap)
                 out = []
-                for x in tools_snap:
+                for x in ws_snap:
                     ok, h_state, ping_str, ms, detail, loc_detail = probe_tool_health(
                         x, len(skills_snap), proj_snap, live_map, lang=lang_snap, missing_required_keys=missing_keys
                     )
@@ -689,7 +704,7 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, QMainWindow):
             return
         title = profile_title(profile_key, self.lang)
         # Only ask confirmation if user currently has an unsaved custom setup with enabled tools
-        has_custom_active = (not self.meta.get("active_profile")) and any(t.enabled for t in self.tools)
+        has_custom_active = (not self.meta.get("active_profile")) and any(t.enabled for t in self.workspace_tools())
         if ask_confirm and has_custom_active:
             msg_box = QMessageBox(self)
             msg_box.setIcon(QMessageBox.Icon.Question)
@@ -712,8 +727,14 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, QMainWindow):
                     return
 
         target_enable = set(PROFILES[profile_key]["enable"])
+        for t in self.tools:
+            if t.id in target_enable and not getattr(t, "in_workspace", True):
+                t.in_workspace = True
         missing_keys = self._missing_required_vault_keys()
         for t in self.tools:
+            if not getattr(t, "in_workspace", True):
+                t.enabled = False
+                continue
             t.enabled = t.id in target_enable
             if not t.enabled:
                 t.health_state = "off"
@@ -726,13 +747,17 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, QMainWindow):
         self.meta["first_run_dismissed"] = True
         self._refresh_first_run_banner()
         self._save_state()
+        self._rebuild_tag_filter_combo()
+        self._rebuild_plugin_filter_combos()
+        self._update_tab_titles()
         self._rebuild_profile_combo()
 
-        en_cnt = sum(1 for t in self.tools if t.enabled)
+        en_cnt = sum(1 for t in self.workspace_tools() if t.enabled)
         msg = tr(self.lang, "msg_profile_applied", name=title, n=en_cnt)
         self.logs.add("INFO", tr(self.lang, "log_src_profile"), msg)
         self._set_config_status(msg)
         self._refresh_table()
+        self._refresh_plugins_tab()
         self._refresh_logs_tab()
         self._sync_live_environment_async(target_tools=list(self.tools))
 
@@ -766,10 +791,11 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, QMainWindow):
         presets[name] = {
             "name": name,
             "saved_at": dt.datetime.now().strftime("%Y-%m-%d %H:%M"),
-            "enabled_count": sum(1 for t in self.tools if t.enabled),
+            "enabled_count": sum(1 for t in self.workspace_tools() if t.enabled),
             "active_blender_skills": sorted(self.active_skills),
             "tools": {
                 t.id: {
+                    "in_workspace": True,
                     "enabled": bool(t.enabled),
                     "clients": dict(t.clients),
                     "project_scope": t.project_scope,
@@ -777,7 +803,7 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, QMainWindow):
                     "param_value": t.param_value,
                     "options": {o.key: bool(o.enabled) for o in t.options},
                 }
-                for t in self.tools
+                for t in self.workspace_tools()
             },
         }
         self.meta["active_profile"] = f"custom:{name}"
@@ -801,9 +827,12 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, QMainWindow):
             for t in self.tools:
                 saved = tools_snap.get(t.id)
                 if not isinstance(saved, dict):
+                    t.enabled = False
                     continue
+                if saved.get("enabled") or saved.get("in_workspace"):
+                    t.in_workspace = True
                 if "enabled" in saved:
-                    t.enabled = bool(saved["enabled"])
+                    t.enabled = bool(saved["enabled"]) and bool(getattr(t, "in_workspace", True))
                 if isinstance(saved.get("clients"), dict):
                     for k, v in saved["clients"].items():
                         if k in t.clients:
@@ -825,7 +854,7 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, QMainWindow):
                             o.enabled = bool(saved["options"][o.key])
 
         missing_keys = self._missing_required_vault_keys()
-        for t in self.tools:
+        for t in self.workspace_tools():
             if not t.enabled:
                 t.health_state = "off"
                 t.last_ping = tr(self.lang, "st_disabled")
@@ -840,9 +869,12 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, QMainWindow):
         self.meta["first_run_dismissed"] = True
         self._refresh_first_run_banner()
         self._save_state()
+        self._rebuild_tag_filter_combo()
+        self._rebuild_plugin_filter_combos()
+        self._update_tab_titles()
         self._rebuild_profile_combo()
 
-        en_cnt = sum(1 for t in self.tools if t.enabled)
+        en_cnt = sum(1 for t in self.workspace_tools() if t.enabled)
         msg = tr(self.lang, "msg_profile_applied", name=name, n=en_cnt)
         self.logs.add("INFO", tr(self.lang, "log_src_profile"), msg)
         self._set_config_status(msg)
@@ -967,8 +999,6 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, QMainWindow):
     def _save_state(self) -> None:
         self.meta["sort_key"] = self.sort_key
         self.meta["sort_desc"] = self.sort_desc
-        if self.plugin_checks:
-            self.meta["plugin_checked_ids"] = [tid for tid, cb in self.plugin_checks.items() if cb.isChecked()]
         self.store.save(self.tools, self.active_skills, self.meta, self.default_ids)
 
     def set_theme(self, mode: str) -> None:
@@ -986,6 +1016,9 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, QMainWindow):
         self.lang = norm
         self.meta["lang"] = norm
         for t in self.tools:
+            if not getattr(t, "in_workspace", True):
+                t.last_ping = tr(self.lang, "st_disabled")
+                continue
             t.last_ping = tr(self.lang, "st_disabled") if not t.enabled else tr(self.lang, "st_scanning")
             t.live_location_detail = resolve_disk_location(t, self.projects_map, {}, lang=self.lang)
         self._save_state()
@@ -993,6 +1026,7 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, QMainWindow):
         self._rebuild_kind_filter_combo()
         self._rebuild_tag_filter_combo()
         self._rebuild_project_filter_combo()
+        self._rebuild_plugin_filter_combos()
         self._rebuild_profile_combo()
         self._rebuild_tray_menu()
         self._refresh_first_run_banner()
@@ -1007,13 +1041,14 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, QMainWindow):
     def _update_tab_titles(self) -> None:
         if not hasattr(self, "tabs") or self.tabs.count() < 3:
             return
-        self.tabs.setTabText(0, tr(self.lang, "tab_tools", n=len(self.tools)))
-        upd_cnt = sum(1 for t in self.tools if t.has_update)
+        ws_tools = self.workspace_tools()
+        self.tabs.setTabText(0, tr(self.lang, "tab_tools", n=len(ws_tools)))
+        upd_cnt = sum(1 for t in ws_tools if t.has_update)
         if upd_cnt > 0:
             key = "tab_plugins_upd_one" if upd_cnt == 1 else "tab_plugins_upd"
             self.tabs.setTabText(1, tr(self.lang, key, n=upd_cnt))
         else:
-            self.tabs.setTabText(1, tr(self.lang, "tab_plugins"))
+            self.tabs.setTabText(1, tr(self.lang, "tab_plugins_cnt", n=len(self.tools)))
         counts = self.logs.counts_by_level()
         if counts["ERR"] > 0 or counts["WARN"] > 0:
             self.tabs.setTabText(2, tr(self.lang, "tab_logs_counts", err=counts["ERR"], warn=counts["WARN"]))
@@ -1039,19 +1074,12 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, QMainWindow):
         self.token_summary_btn.setToolTip(tr(self.lang, "token_summary_tip"))
 
         self.search_inp.setPlaceholderText(tr(self.lang, "search_ph"))
-        self.btn_plug_sel_all.setText(tr(self.lang, "plug_sel_all"))
-        self.btn_plug_clr_all.setText(tr(self.lang, "plug_clr_all"))
+        self.plug_search_inp.setPlaceholderText(tr(self.lang, "plug_search_ph"))
         self.btn_plugins_check.setText(tr(self.lang, "plug_check"))
-        self.btn_plugins_install_sel.setText(tr(self.lang, "plug_upd_sel"))
         self.btn_add_github.setText(tr(self.lang, "plug_add_github"))
         self.btn_jump_err_logs.setText(tr(self.lang, "plug_btn_view_errs"))
-        upd_cnt = sum(1 for t in self.tools if t.has_update)
         if self.checking_plugins_busy:
             self.plugins_banner_lbl.setText(tr(self.lang, "plug_banner_checking"))
-        elif upd_cnt > 0:
-            self.plugins_banner_lbl.setText(tr(self.lang, "plug_banner_updates", n=upd_cnt))
-        else:
-            self.plugins_banner_lbl.setText(tr(self.lang, "plug_banner_all_ok"))
 
         self.lbl_log_level.setText(tr(self.lang, "log_level_lbl"))
         if self.log_lvl_cmb.count() > 0:
@@ -1104,6 +1132,7 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, QMainWindow):
         self._sync_restart_ids.clear()
 
         tools_snap = copy.deepcopy(self.tools)
+        ws_snap = [x for x in tools_snap if getattr(x, "in_workspace", True)]
         skills_snap = set(self.active_skills)
         proj_snap = dict(self.projects_map)
         lang_snap = self.lang
@@ -1113,19 +1142,23 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, QMainWindow):
         def worker() -> None:
             with self._sync_lock:
                 for t_obj in tools_snap:
-                    if t_obj.id in target_ids:
+                    if t_obj.id in target_ids and (getattr(t_obj, "in_workspace", True) or t_obj.id in stop_ids):
                         enforce_tool_runtime_state(
                             t_obj,
                             proj_snap,
                             allow_stop=(t_obj.id in stop_ids),
-                            allow_start=allow_start_flag,
+                            allow_start=(allow_start_flag and getattr(t_obj, "in_workspace", True)),
                             restart_if_running=(t_obj.id in restart_ids),
                             lang=lang_snap,
                         )
                 bs_tool = next((x for x in tools_snap if x.id == "blender_skills"), None)
                 if bs_tool:
                     sync_blender_skills_on_disk(
-                        skills_snap, bs_tool.enabled, bs_tool.project_scope, proj_snap, lang=lang_snap
+                        skills_snap,
+                        bool(getattr(bs_tool, "in_workspace", True) and bs_tool.enabled),
+                        bs_tool.project_scope,
+                        proj_snap,
+                        lang=lang_snap,
                     )
                 cv_tool = next((x for x in tools_snap if x.id == "caveman"), None)
                 if cv_tool:
@@ -1133,7 +1166,7 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, QMainWindow):
                 sync_mcp_json_clients(tools_snap, self.vault, proj_snap, lang=lang_snap)
                 live_map = scan_live_process_locations(lang=lang_snap)
                 out = []
-                for x in tools_snap:
+                for x in ws_snap:
                     ok, h_state, ping_str, ms, detail, loc_detail = probe_tool_health(
                         x, len(skills_snap), proj_snap, live_map, lang=lang_snap, missing_required_keys=missing_keys
                     )
@@ -1161,7 +1194,7 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, QMainWindow):
                     tr(self.lang, "key_req_prompt_msg", name=tool.name, key=tool.vault_key_name),
                 )
                 if ans == QMessageBox.StandardButton.Yes:
-                    self.open_settings(SettingsDialog.TAB_KEYS)
+                    self.open_settings(SettingsDialog.TAB_KEYS, focus_key=tool.vault_key_name)
                     if self.vault.has_secret(tool.vault_key_name):
                         tool.health_state = "ok"
                         tool.last_ping = tr(self.lang, "st_ready")
@@ -1175,7 +1208,7 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, QMainWindow):
             tool.health_state = "ok"
             tool.last_ping = tr(self.lang, "st_ready")
         self._save_state()
-        if self._runtime_state == "running" and not any(t.enabled for t in self.tools):
+        if self._runtime_state == "running" and not any(t.enabled for t in self.workspace_tools()):
             self._set_runtime_ui_state("stopped")
         state_word = tr(self.lang, "client_on" if tool.enabled else "client_off").lower()
         self.logs.add("DBG", tool.name, tr(self.lang, "log_tool_toggled", state=state_word))
@@ -1196,13 +1229,14 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, QMainWindow):
         self._sync_live_environment_async(target_tools=[])
 
     def _update_bulk_client_buttons(self) -> None:
-        total = len(self.tools)
+        ws_tools = self.workspace_tools()
+        total = len(ws_tools)
         is_light = self.meta.get("theme", "dark") == "light"
         for code, full_lbl in AI_CLIENTS:
             btn = self.bulk_client_btns.get(code)
             if not btn:
                 continue
-            on_cnt = sum(1 for t in self.tools if t.clients.get(code, False))
+            on_cnt = sum(1 for t in ws_tools if t.clients.get(code, False))
             is_installed = code in self.installed_clients
             btn.setText(code)
             if total > 0 and on_cnt == total:
@@ -1240,19 +1274,20 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, QMainWindow):
             )
 
     def _toggle_client_all(self, client_code: str, mode: str = "auto") -> None:
+        ws_tools = self.workspace_tools()
         if mode == "auto":
-            any_on = any(t.clients.get(client_code, False) for t in self.tools)
+            any_on = any(t.clients.get(client_code, False) for t in ws_tools)
             target_state = not any_on
-            for t in self.tools:
+            for t in ws_tools:
                 t.clients[client_code] = target_state
         elif mode == "all_on":
-            for t in self.tools:
+            for t in ws_tools:
                 t.clients[client_code] = True
         elif mode == "active_only":
-            for t in self.tools:
+            for t in ws_tools:
                 t.clients[client_code] = bool(t.enabled)
         else:
-            for t in self.tools:
+            for t in ws_tools:
                 t.clients[client_code] = False
 
         self.meta["active_profile"] = ""
@@ -1316,6 +1351,55 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, QMainWindow):
             restart_running=(tool.id in ("serena", "unity_mcp") and tool.enabled),
         )
 
+    def add_tool_to_workspace(self, tool: ToolSpec) -> None:
+        """Add a curated library tool to the active Tools workspace with ZERO external downloads."""
+        if getattr(tool, "in_workspace", True):
+            return
+        tool.in_workspace = True
+        tool.enabled = False
+        tool.health_state = "off"
+        tool.last_ping = tr(self.lang, "st_disabled")
+        tool.live_location_detail = resolve_disk_location(tool, self.projects_map, self._latest_live_map, lang=self.lang)
+        self._save_state()
+        self._rebuild_tag_filter_combo()
+        self._rebuild_plugin_filter_combos()
+        self._update_tab_titles()
+        self._refresh_table()
+        self._refresh_plugins_tab()
+        if tool.vault_key_name and not self.vault.has_secret(tool.vault_key_name):
+            msg = tr(self.lang, "msg_ws_added_key", name=tool.name, key=tool.vault_key_name)
+        else:
+            msg = tr(self.lang, "msg_ws_added", name=tool.name)
+        self.logs.add("INFO", tool.name, msg)
+        self.set_status(msg)
+        self._refresh_logs_tab()
+
+    def remove_tool_from_workspace(self, tool: ToolSpec) -> None:
+        """Remove a tool from the active Tools workspace (remains available in the Plugins library)."""
+        if not getattr(tool, "in_workspace", True):
+            return
+        was_enabled = bool(tool.enabled)
+        tool.enabled = False
+        tool.in_workspace = False
+        tool.health_state = "off"
+        tool.last_ping = tr(self.lang, "st_disabled")
+        if self._runtime_state == "running" and not any(t.enabled for t in self.workspace_tools()):
+            self._set_runtime_ui_state("stopped")
+        self._save_state()
+        self._rebuild_tag_filter_combo()
+        self._rebuild_plugin_filter_combos()
+        self._update_tab_titles()
+        self._refresh_table()
+        self._refresh_plugins_tab()
+        msg = tr(self.lang, "msg_ws_removed", name=tool.name)
+        self.logs.add("INFO", tool.name, msg)
+        if was_enabled:
+            self._set_config_status(msg)
+            self._sync_live_environment_async(target_tools=[tool])
+        else:
+            self.set_status(msg)
+        self._refresh_logs_tab()
+
     # --- DIALOG LAUNCHERS ---
     def open_gear(self, tool: ToolSpec) -> None:
         if tool.gear_kind == "skills94":
@@ -1370,8 +1454,8 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, QMainWindow):
                     restart_running=(changed and tool.id in ("serena", "unity_mcp") and tool.enabled),
                 )
 
-    def open_settings(self, initial_tab: int = 0) -> None:
-        dlg = SettingsDialog(self, initial_tab=initial_tab)
+    def open_settings(self, initial_tab: int = 0, focus_key: str = "") -> None:
+        dlg = SettingsDialog(self, initial_tab=initial_tab, focus_key=focus_key)
         dlg.exec()
 
     def open_diagnostics(self) -> None:
@@ -1399,10 +1483,18 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, QMainWindow):
         blender_skills: set[str],
         selected_tags: list[str] | None = None,
     ) -> None:
-        """Save a task-wizard profile to custom presets and immediately activate it."""
+        """Save a task-wizard profile to custom presets and immediately activate it (0 downloads)."""
+        for t in self.tools:
+            if t.id in enabled_tool_ids and not getattr(t, "in_workspace", True):
+                t.in_workspace = True
+                t.live_location_detail = resolve_disk_location(
+                    t, self.projects_map, self._latest_live_map, lang=self.lang
+                )
+
         missing_keys = self._missing_required_vault_keys()
         for t in self.tools:
             if not getattr(t, "in_workspace", True):
+                t.enabled = False
                 continue
             t.enabled = t.id in enabled_tool_ids
             if t.enabled and not any(t.clients.values()):
@@ -1428,11 +1520,12 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, QMainWindow):
         presets[name] = {
             "name": name,
             "saved_at": dt.datetime.now().strftime("%Y-%m-%d %H:%M"),
-            "enabled_count": sum(1 for t in self.tools if t.enabled),
+            "enabled_count": sum(1 for t in self.workspace_tools() if t.enabled),
             "tags": list(selected_tags or []),
             "active_blender_skills": sorted(self.active_skills),
             "tools": {
                 t.id: {
+                    "in_workspace": True,
                     "enabled": bool(t.enabled),
                     "clients": dict(t.clients),
                     "project_scope": t.project_scope,
@@ -1440,17 +1533,20 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, QMainWindow):
                     "param_value": t.param_value,
                     "options": {o.key: bool(o.enabled) for o in t.options},
                 }
-                for t in self.tools
+                for t in self.workspace_tools()
             },
         }
         self.meta["active_profile"] = f"custom:{name}"
         self.meta["first_run_dismissed"] = True
         self._refresh_first_run_banner()
         self._save_state()
+        self._rebuild_tag_filter_combo()
+        self._rebuild_plugin_filter_combos()
+        self._update_tab_titles()
         self._rebuild_profile_combo()
         self._rebuild_tray_menu()
 
-        en_cnt = sum(1 for t in self.tools if t.enabled)
+        en_cnt = sum(1 for t in self.workspace_tools() if t.enabled)
         msg = tr(self.lang, "msg_profile_applied", name=name, n=en_cnt)
         self.logs.add("INFO", tr(self.lang, "log_src_profile"), msg)
         self._set_config_status(msg)
@@ -1476,7 +1572,7 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, QMainWindow):
         if self._live_watch_busy:
             return
         self._live_watch_busy = True
-        snap_tools = copy.deepcopy(self.tools)
+        snap_tools = copy.deepcopy(self.workspace_tools())
         sk_cnt = len(self.active_skills)
         proj_snap = dict(self.projects_map)
         lang_snap = self.lang
@@ -1569,7 +1665,7 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, QMainWindow):
             return
         self._health_busy = True
         self.set_status(tr(self.lang, "msg_scanning"))
-        snap_tools = copy.deepcopy(self.tools)
+        snap_tools = copy.deepcopy(self.workspace_tools())
         sk_cnt = len(self.active_skills)
         proj_snap = dict(self.projects_map)
         lang_snap = self.lang
@@ -1671,7 +1767,9 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, QMainWindow):
             self.host_dep_banner.hide()
             return
 
-        missing = get_missing_host_dependencies(self.tools, self._latest_live_map, self.projects_map, lang=self.lang)
+        missing = get_missing_host_dependencies(
+            self.workspace_tools(), self._latest_live_map, self.projects_map, lang=self.lang
+        )
         if not missing:
             self.host_dep_banner.hide()
             return
@@ -1769,7 +1867,11 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, QMainWindow):
         bs_tool = next((t for t in self.tools if t.id == "blender_skills"), None)
         if bs_tool:
             sync_blender_skills_on_disk(
-                self.active_skills, bs_tool.enabled, bs_tool.project_scope, self.projects_map, lang=self.lang
+                self.active_skills,
+                bool(getattr(bs_tool, "in_workspace", True) and bs_tool.enabled),
+                bs_tool.project_scope,
+                self.projects_map,
+                lang=self.lang,
             )
         cv_tool = next((t for t in self.tools if t.id == "caveman"), None)
         if cv_tool:
@@ -1839,13 +1941,21 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, QMainWindow):
         self._apply_theme(self.meta.get("theme", "dark"))
 
         for t in self.tools:
-            t.live_location_detail = resolve_disk_location(t, self.projects_map, {}, lang=self.lang)
+            if getattr(t, "in_workspace", True):
+                t.live_location_detail = resolve_disk_location(t, self.projects_map, {}, lang=self.lang)
+            else:
+                t.last_ping = tr(self.lang, "st_disabled")
+                t.health_state = "off"
 
         if self.sync_live_environment:
             bs_tool = next((t for t in self.tools if t.id == "blender_skills"), None)
             if bs_tool:
                 sync_blender_skills_on_disk(
-                    self.active_skills, bs_tool.enabled, bs_tool.project_scope, self.projects_map, lang=self.lang
+                    self.active_skills,
+                    bool(getattr(bs_tool, "in_workspace", True) and bs_tool.enabled),
+                    bs_tool.project_scope,
+                    self.projects_map,
+                    lang=self.lang,
                 )
             cv_tool = next((t for t in self.tools if t.id == "caveman"), None)
             if cv_tool:
@@ -1855,6 +1965,7 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, QMainWindow):
         self._rebuild_kind_filter_combo()
         self._rebuild_tag_filter_combo()
         self._rebuild_project_filter_combo()
+        self._rebuild_plugin_filter_combos()
         self._rebuild_profile_combo()
         self._rebuild_tray_menu()
         self._refresh_first_run_banner()

@@ -1,4 +1,4 @@
-"""Plugins & updates tab mixin (emoji-free, includes Add from GitHub dialog, K9 thread-safe)."""
+"""Curated 100-Tool Plugins Library & Workspace Manager tab mixin (zero auto-downloads, EN & TR, K9 thread-safe)."""
 from __future__ import annotations
 
 import copy
@@ -8,12 +8,12 @@ import time
 from PySide6.QtCore import QTimer, Qt
 from PySide6.QtWidgets import (
     QApplication,
-    QCheckBox,
+    QComboBox,
     QDialog,
     QFrame,
     QHBoxLayout,
     QLabel,
-    QMessageBox,
+    QLineEdit,
     QProgressBar,
     QPushButton,
     QScrollArea,
@@ -21,9 +21,19 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ...catalog import ToolSpec, localized_tool_text, tool_kind_label
+from ...catalog import (
+    ALL_TAG_IDS,
+    LIBRARY_CATEGORY_IDS,
+    ToolSpec,
+    category_label,
+    is_benefit_tag,
+    localized_tool_text,
+    tag_label,
+    tool_kind_label,
+)
 from ...i18n import tr
 from ...plugins import PluginCheckResult, check_all_tools_updates_parallel, update_single_tool
+from ...tokens import fmt_tokens
 from ...updater import parse_semver
 from ..dialogs.add_repo import AddRepoDialog
 from ..dialogs.tool_info import ToolInfoDialog
@@ -31,7 +41,7 @@ from ..workers import safe_emit
 
 
 class PluginsTabMixin:
-    """Mixin implementing Tab 1 (Plugins)."""
+    """Mixin implementing Tab 1 (Curated 100-Tool Plugins Library + Workspace Updates)."""
 
     def _init_plugins_tab(self) -> None:
         tab = QWidget()
@@ -39,43 +49,46 @@ class PluginsTabMixin:
         lay.setContentsMargins(10, 10, 10, 10)
         lay.setSpacing(8)
 
-        top = QHBoxLayout()
-        top.setSpacing(6)
-        self.btn_plug_sel_all = QPushButton(tr(self.lang, "plug_sel_all"))
-        self.btn_plug_sel_all.clicked.connect(lambda: self._set_all_plugin_checks(True))
-        top.addWidget(self.btn_plug_sel_all)
+        # 1. LIBRARY FILTER BAR (Search + Category + Tag + Status)
+        self._plug_search_debounce = QTimer(self)
+        self._plug_search_debounce.setSingleShot(True)
+        self._plug_search_debounce.setInterval(120)
+        self._plug_search_debounce.timeout.connect(self._refresh_plugins_tab)
 
-        self.btn_plug_clr_all = QPushButton(tr(self.lang, "plug_clr_all"))
-        self.btn_plug_clr_all.clicked.connect(lambda: self._set_all_plugin_checks(False))
-        top.addWidget(self.btn_plug_clr_all)
+        flt = QHBoxLayout()
+        flt.setSpacing(8)
 
-        self.btn_plugins_check = QPushButton(tr(self.lang, "plug_check"))
-        self.btn_plugins_check.setObjectName("primaryBtn")
-        self.btn_plugins_check.clicked.connect(lambda: self.run_plugin_update_check(manual=True))
-        top.addWidget(self.btn_plugins_check)
+        self.plug_search_inp = QLineEdit()
+        self.plug_search_inp.setPlaceholderText(tr(self.lang, "plug_search_ph"))
+        self.plug_search_inp.setMinimumWidth(240)
+        self.plug_search_inp.textChanged.connect(lambda _txt: self._plug_search_debounce.start())
+        flt.addWidget(self.plug_search_inp, stretch=1)
 
-        self.btn_plugins_update_all = QPushButton(tr(self.lang, "plug_upd_avail", n=0))
-        self.btn_plugins_update_all.setObjectName("successBtn")
-        self.btn_plugins_update_all.setEnabled(False)
-        self.btn_plugins_update_all.clicked.connect(self._handle_start_available_updates)
-        top.addWidget(self.btn_plugins_update_all)
+        self.plug_cat_cmb = QComboBox()
+        self.plug_cat_cmb.setMinimumWidth(175)
+        self.plug_cat_cmb.currentIndexChanged.connect(self._refresh_plugins_tab)
+        flt.addWidget(self.plug_cat_cmb)
 
-        self.btn_plugins_install_sel = QPushButton(tr(self.lang, "plug_upd_sel"))
-        self.btn_plugins_install_sel.clicked.connect(self._handle_update_selected_plugins)
-        top.addWidget(self.btn_plugins_install_sel)
+        self.plug_tag_cmb = QComboBox()
+        self.plug_tag_cmb.setMinimumWidth(155)
+        self.plug_tag_cmb.currentIndexChanged.connect(self._refresh_plugins_tab)
+        flt.addWidget(self.plug_tag_cmb)
 
-        top.addStretch()
+        self.plug_status_cmb = QComboBox()
+        self.plug_status_cmb.setMinimumWidth(155)
+        self.plug_status_cmb.currentIndexChanged.connect(self._refresh_plugins_tab)
+        flt.addWidget(self.plug_status_cmb)
 
-        self.btn_add_github = QPushButton(tr(self.lang, "plug_add_github"))
-        self.btn_add_github.clicked.connect(self._open_add_repo_dialog)
-        top.addWidget(self.btn_add_github)
-        lay.addLayout(top)
+        lay.addLayout(flt)
 
+        # 2. SUMMARY & WORKSPACE UPDATE BAR
         banner = QFrame()
         banner.setObjectName("card")
         b_lay = QHBoxLayout(banner)
         b_lay.setContentsMargins(12, 7, 12, 7)
-        self.plugins_banner_lbl = QLabel(tr(self.lang, "plug_banner_checking"))
+        b_lay.setSpacing(8)
+
+        self.plugins_banner_lbl = QLabel("")
         self.plugins_banner_lbl.setStyleSheet("font-weight: 600;")
         b_lay.addWidget(self.plugins_banner_lbl, stretch=1)
 
@@ -84,23 +97,93 @@ class PluginsTabMixin:
         self.btn_jump_err_logs.hide()
         self.btn_jump_err_logs.clicked.connect(self._jump_to_error_logs)
         b_lay.addWidget(self.btn_jump_err_logs)
+
+        self.btn_plugins_check = QPushButton(tr(self.lang, "plug_check"))
+        self.btn_plugins_check.clicked.connect(lambda: self.run_plugin_update_check(manual=True))
+        b_lay.addWidget(self.btn_plugins_check)
+
+        self.btn_plugins_update_all = QPushButton(tr(self.lang, "plug_upd_avail", n=0))
+        self.btn_plugins_update_all.setObjectName("successBtn")
+        self.btn_plugins_update_all.setEnabled(False)
+        self.btn_plugins_update_all.clicked.connect(self._handle_start_available_updates)
+        b_lay.addWidget(self.btn_plugins_update_all)
+
+        self.btn_add_github = QPushButton(tr(self.lang, "plug_add_github"))
+        self.btn_add_github.clicked.connect(self._open_add_repo_dialog)
+        b_lay.addWidget(self.btn_add_github)
+
         lay.addWidget(banner)
 
         self.update_prog = QProgressBar()
         self.update_prog.hide()
         lay.addWidget(self.update_prog)
 
+        # 3. SCROLLABLE CURATED LIBRARY CARDS
         self.plugins_scroll = QScrollArea()
         self.plugins_scroll.setWidgetResizable(True)
         self.plugins_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.plugins_scroll.viewport().setObjectName("cellBox")
         self.plugins_host = QWidget()
+        self.plugins_host.setObjectName("cellBox")
         self.plugins_lay = QVBoxLayout(self.plugins_host)
         self.plugins_lay.setContentsMargins(0, 0, 4, 0)
         self.plugins_lay.setSpacing(6)
         self.plugins_scroll.setWidget(self.plugins_host)
         lay.addWidget(self.plugins_scroll, stretch=1)
 
-        self.tabs.addTab(tab, tr(self.lang, "tab_plugins"))
+        self._rebuild_plugin_filter_combos()
+        self.tabs.addTab(tab, tr(self.lang, "tab_plugins_cnt", n=len(self.tools)))
+
+    def _rebuild_plugin_filter_combos(self) -> None:
+        if not hasattr(self, "plug_cat_cmb"):
+            return
+
+        cur_cat = self.plug_cat_cmb.currentData() if self.plug_cat_cmb.count() else "ALL"
+        cat_counts: dict[str, int] = {}
+        for t in self.tools:
+            c = getattr(t, "category", "coding_dev")
+            cat_counts[c] = cat_counts.get(c, 0) + 1
+
+        self.plug_cat_cmb.blockSignals(True)
+        self.plug_cat_cmb.clear()
+        self.plug_cat_cmb.addItem(f"{tr(self.lang, 'cat_all')} ({len(self.tools)})", "ALL")
+        for cid in LIBRARY_CATEGORY_IDS:
+            cnt = cat_counts.get(cid, 0)
+            self.plug_cat_cmb.addItem(f"{category_label(cid, self.lang)} ({cnt})", cid)
+        idx_c = self.plug_cat_cmb.findData(cur_cat)
+        self.plug_cat_cmb.setCurrentIndex(max(0, idx_c))
+        self.plug_cat_cmb.blockSignals(False)
+
+        cur_tag = self.plug_tag_cmb.currentData() if self.plug_tag_cmb.count() else "ALL"
+        self.plug_tag_cmb.blockSignals(True)
+        self.plug_tag_cmb.clear()
+        self.plug_tag_cmb.addItem(tr(self.lang, "tag_all"), "ALL")
+        for tid in ALL_TAG_IDS:
+            self.plug_tag_cmb.addItem(tag_label(tid, self.lang), tid)
+        idx_t = self.plug_tag_cmb.findData(cur_tag)
+        self.plug_tag_cmb.setCurrentIndex(max(0, idx_t))
+        self.plug_tag_cmb.blockSignals(False)
+
+        cur_st = self.plug_status_cmb.currentData() if self.plug_status_cmb.count() else "ALL"
+        ws_cnt = sum(1 for t in self.tools if getattr(t, "in_workspace", True))
+        lib_cnt = len(self.tools) - ws_cnt
+        self.plug_status_cmb.blockSignals(True)
+        self.plug_status_cmb.clear()
+        self.plug_status_cmb.addItem(tr(self.lang, "plug_flt_all"), "ALL")
+        self.plug_status_cmb.addItem(f"{tr(self.lang, 'plug_flt_workspace')} ({ws_cnt})", "WORKSPACE")
+        self.plug_status_cmb.addItem(f"{tr(self.lang, 'plug_flt_library')} ({lib_cnt})", "LIBRARY")
+        self.plug_status_cmb.addItem(tr(self.lang, "plug_flt_free"), "FREE")
+        self.plug_status_cmb.addItem(tr(self.lang, "plug_flt_updates"), "UPDATES")
+        idx_s = self.plug_status_cmb.findData(cur_st)
+        self.plug_status_cmb.setCurrentIndex(max(0, idx_s))
+        self.plug_status_cmb.blockSignals(False)
+
+    def _filter_plugins_by_tag(self, tag_code: str) -> None:
+        cur = str(self.plug_tag_cmb.currentData() or "ALL")
+        target = "ALL" if cur == tag_code else tag_code
+        idx = self.plug_tag_cmb.findData(target)
+        if idx >= 0:
+            self.plug_tag_cmb.setCurrentIndex(idx)
 
     def _open_add_repo_dialog(self) -> None:
         dlg = AddRepoDialog(self)
@@ -109,88 +192,217 @@ class PluginsTabMixin:
             self.tools.append(new_tool)
             self._save_state()
             self._rebuild_tag_filter_combo()
+            self._rebuild_plugin_filter_combos()
             self._update_tab_titles()
             self._refresh_table()
             self._refresh_plugins_tab()
             self.tabs.setCurrentIndex(0)
             self.set_status(tr(self.lang, "msg_repo_added", name=new_tool.name))
 
-    def _set_all_plugin_checks(self, state: bool) -> None:
-        for cb in self.plugin_checks.values():
-            cb.blockSignals(True)
-            cb.setChecked(state)
-            cb.blockSignals(False)
-        self._sync_plugin_checks_to_meta()
-        self._save_state()
+    def _filtered_plugin_tools(self) -> list[ToolSpec]:
+        q = self.plug_search_inp.text().strip().lower()
+        cat_f = str(self.plug_cat_cmb.currentData() or "ALL")
+        tag_f = str(self.plug_tag_cmb.currentData() or "ALL")
+        st_f = str(self.plug_status_cmb.currentData() or "ALL")
 
-    def _sync_plugin_checks_to_meta(self) -> None:
-        self.meta["plugin_checked_ids"] = [tid for tid, cb in self.plugin_checks.items() if cb.isChecked()]
+        out: list[ToolSpec] = []
+        for t in self.tools:
+            in_ws = bool(getattr(t, "in_workspace", True))
+            t_cat = getattr(t, "category", "coding_dev")
+            if cat_f != "ALL" and t_cat != cat_f:
+                continue
+            if tag_f != "ALL" and tag_f not in t.tags:
+                continue
+            if st_f == "WORKSPACE" and not in_ws:
+                continue
+            if st_f == "LIBRARY" and in_ws:
+                continue
+            if st_f == "FREE" and bool(t.vault_key_required):
+                continue
+            if st_f == "UPDATES" and not (in_ws and t.has_update):
+                continue
+            if q:
+                summary = localized_tool_text(t, "summary", self.lang).lower()
+                cat_lbl = category_label(t_cat, self.lang).lower()
+                tags_joined = " ".join(tag_label(tg, self.lang).lower() for tg in t.tags)
+                if (
+                    q not in t.name.lower()
+                    and q not in t.id.lower()
+                    and q not in summary
+                    and q not in cat_lbl
+                    and q not in tags_joined
+                    and q not in t.install_cmd.lower()
+                    and q not in t.vault_key_name.lower()
+                ):
+                    continue
+            out.append(t)
 
-    def _on_single_plugin_check_changed(self) -> None:
-        self._sync_plugin_checks_to_meta()
-        self._save_state()
+        out.sort(
+            key=lambda x: (
+                0 if (getattr(x, "in_workspace", True) and x.has_update) else 1,
+                0 if getattr(x, "in_workspace", True) else 1,
+                x.name.lower(),
+            )
+        )
+        return out
 
     def _refresh_plugins_tab(self) -> None:
-        saved_checked_list = self.meta.get("plugin_checked_ids")
-        if isinstance(saved_checked_list, list):
-            checked_set = set(saved_checked_list)
-        else:
-            checked_set = {t.id for t in self.tools if t.enabled}
+        if not hasattr(self, "plugins_lay"):
+            return
 
-        self.plugin_checks.clear()
+        # Keep status combo counts fresh without re-triggering signal recursion
+        ws_cnt = sum(1 for t in self.tools if getattr(t, "in_workspace", True))
+        lib_cnt = len(self.tools) - ws_cnt
+        if self.plug_status_cmb.count() >= 3:
+            self.plug_status_cmb.setItemText(1, f"{tr(self.lang, 'plug_flt_workspace')} ({ws_cnt})")
+            self.plug_status_cmb.setItemText(2, f"{tr(self.lang, 'plug_flt_library')} ({lib_cnt})")
+
         while self.plugins_lay.count():
             item = self.plugins_lay.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()
 
-        upd_count = sum(1 for t in self.tools if t.has_update)
+        upd_count = sum(1 for t in self.tools if getattr(t, "in_workspace", True) and t.has_update)
         self.btn_plugins_update_all.setText(tr(self.lang, "plug_upd_avail", n=upd_count))
         self.btn_plugins_update_all.setEnabled(upd_count > 0 and not self.updating_busy)
 
-        for t in self.tools:
+        filtered = self._filtered_plugin_tools()
+        is_light = self.meta.get("theme", "dark") == "light"
+        muted_col = "#64748b" if is_light else "#94a3b8"
+
+        if not self.checking_plugins_busy:
+            base_txt = tr(
+                self.lang,
+                "plug_banner_library",
+                shown=len(filtered),
+                tot=len(self.tools),
+                ws=ws_cnt,
+            )
+            if upd_count > 0:
+                upd_txt = tr(self.lang, "plug_banner_updates", n=upd_count)
+                self.plugins_banner_lbl.setText(f"{base_txt}  |  {upd_txt}")
+                self.plugins_banner_lbl.setStyleSheet("color: #f59e0b; font-weight: 600;")
+            else:
+                self.plugins_banner_lbl.setText(base_txt)
+                self.plugins_banner_lbl.setStyleSheet(f"color: {muted_col}; font-weight: 600;")
+
+        cat_pill_style = (
+            "background-color: #eff6ff; color: #1d4ed8; border: 1px solid #bfdbfe; border-radius: 4px; padding: 1px 6px; font-size: 10px; font-weight: 600;"
+            if is_light
+            else "background-color: #132036; color: #93c5fd; border: 1px solid #1e3a5f; border-radius: 4px; padding: 1px 6px; font-size: 10px; font-weight: 600;"
+        )
+        kind_pill_style = (
+            "background-color: #e2e8f0; color: #475569; border-radius: 4px; padding: 1px 6px; font-size: 10px; font-weight: 600;"
+            if is_light
+            else "background-color: #1a2434; color: #94a3b8; border: 1px solid #263549; border-radius: 4px; padding: 1px 6px; font-size: 10px; font-weight: 600;"
+        )
+        ws_badge_style = (
+            "background-color: #ecfdf5; color: #047857; border: 1px solid #a7f3d0; border-radius: 4px; padding: 2px 7px; font-size: 10px; font-weight: 700;"
+            if is_light
+            else "background-color: #0d281e; color: #6ee7b7; border: 1px solid #14533c; border-radius: 4px; padding: 2px 7px; font-size: 10px; font-weight: 700;"
+        )
+
+        if not filtered:
+            empty_card = QFrame()
+            empty_card.setObjectName("card")
+            e_lay = QVBoxLayout(empty_card)
+            e_lay.setContentsMargins(16, 22, 16, 22)
+            e_lbl = QLabel(tr(self.lang, "plug_empty_match"))
+            e_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            e_lbl.setStyleSheet(f"color: {muted_col};")
+            e_lay.addWidget(e_lbl)
+            self.plugins_lay.addWidget(empty_card)
+            self.plugins_lay.addStretch()
+            return
+
+        for t in filtered:
+            in_ws = bool(getattr(t, "in_workspace", True))
             card = QFrame()
             card.setObjectName("card")
             row = QHBoxLayout(card)
             row.setContentsMargins(12, 8, 12, 8)
             row.setSpacing(10)
 
-            cb = QCheckBox()
-            cb.setChecked(t.id in checked_set)
-            cb.toggled.connect(lambda _checked: self._on_single_plugin_check_changed())
-            self.plugin_checks[t.id] = cb
-            row.addWidget(cb)
-
-            cur_v = t.version.strip().lstrip("vV")
-            lat_v = (t.latest_version or t.version).strip().lstrip("vV")
-            if t.has_update and lat_v != cur_v:
-                ver_html = f"<span style='color:#f59e0b; font-weight:700;'>{tr(self.lang, 'plug_ver_update', cur=cur_v, lat=lat_v)}</span>"
-            else:
-                ver_html = f"<span style='color:#22c55e; font-weight:600;'>{tr(self.lang, 'plug_ver_up_to_date', ver=cur_v)}</span>"
-
             info_col = QVBoxLayout()
-            info_col.setSpacing(2)
+            info_col.setSpacing(3)
+
             title_row = QHBoxLayout()
-            title_row.setSpacing(8)
-            name_btn = QPushButton(t.name)
+            title_row.setSpacing(7)
+
+            name_btn = QPushButton(t.name.replace("&", "&&"))
             name_btn.setObjectName("ghostBtn")
             name_btn.setStyleSheet("font-weight: 700; padding: 0px; text-align: left;")
             name_btn.setCursor(Qt.CursorShape.PointingHandCursor)
             name_btn.clicked.connect(lambda _=False, tool_obj=t: ToolInfoDialog(self, tool_obj).exec())
             title_row.addWidget(name_btn)
-            title_row.addWidget(QLabel(f"<span style='color:#94a3b8;'>{tool_kind_label(t.kind, self.lang)}</span>"))
+
+            cat_lbl = QLabel(category_label(getattr(t, "category", "coding_dev"), self.lang))
+            cat_lbl.setStyleSheet(cat_pill_style)
+            title_row.addWidget(cat_lbl)
+
+            kind_lbl = QLabel(tool_kind_label(t.kind, self.lang))
+            kind_lbl.setStyleSheet(kind_pill_style)
+            title_row.addWidget(kind_lbl)
+
+            tok_lbl = QLabel(f"~{fmt_tokens(t.schema_tokens)}")
+            tok_lbl.setStyleSheet(f"color: {muted_col}; font-family: Consolas, monospace; font-size: 10.5px;")
+            title_row.addWidget(tok_lbl)
+
+            cur_v = t.version.strip().lstrip("vV")
+            lat_v = (t.latest_version or t.version).strip().lstrip("vV")
+            if in_ws and t.has_update and lat_v != cur_v:
+                ver_html = (
+                    f"<span style='color:#f59e0b; font-weight:700;'>"
+                    f"{tr(self.lang, 'plug_ver_update', cur=cur_v, lat=lat_v)}</span>"
+                )
+            else:
+                ver_html = f"<span style='color:{muted_col}; font-size:11px;'>v{cur_v}</span>"
             title_row.addWidget(QLabel(ver_html))
+
+            if t.vault_key_name:
+                has_secret = self.vault.has_secret(t.vault_key_name)
+                if has_secret:
+                    k_txt = tr(self.lang, "plug_key_ready")
+                    k_col = "#10b981"
+                elif t.vault_key_required:
+                    k_txt = tr(self.lang, "plug_key_req", key=t.vault_key_name)
+                    k_col = "#f59e0b"
+                else:
+                    k_txt = tr(self.lang, "plug_key_opt")
+                    k_col = muted_col
+                k_lbl = QLabel(k_txt)
+                k_lbl.setStyleSheet(f"color: {k_col}; font-size: 10.5px; font-weight: 600;")
+                title_row.addWidget(k_lbl)
+
             title_row.addStretch()
             info_col.addLayout(title_row)
 
             summary = localized_tool_text(t, "summary", self.lang)
             if summary:
                 desc_lbl = QLabel(summary)
-                desc_lbl.setStyleSheet("color: #94a3b8; font-size: 11px;")
+                desc_lbl.setStyleSheet(f"color: {muted_col}; font-size: 11px;")
                 desc_lbl.setWordWrap(True)
                 info_col.addWidget(desc_lbl)
+
+            if t.tags:
+                tg_row = QHBoxLayout()
+                tg_row.setContentsMargins(0, 0, 0, 0)
+                tg_row.setSpacing(5)
+                for tg in t.tags[:3]:
+                    tg_txt = tag_label(tg, self.lang)
+                    tg_btn = QPushButton(tg_txt.replace("&", "&&"))
+                    tg_btn.setObjectName("tagBenefitBtn" if is_benefit_tag(tg) else "tagDomainBtn")
+                    tg_btn.setFixedHeight(16)
+                    tg_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+                    tg_btn.setToolTip(tr(self.lang, "tag_filter_tip", tag=tg_txt))
+                    tg_btn.clicked.connect(lambda _=False, code=tg: self._filter_plugins_by_tag(code))
+                    tg_row.addWidget(tg_btn)
+                tg_row.addStretch()
+                info_col.addLayout(tg_row)
+
             row.addLayout(info_col, stretch=1)
 
-            if t.release_notes_url:
+            if in_ws and t.release_notes_url:
                 notes_lbl = QLabel(
                     f"<a style='color:#60a5fa;' href='{t.release_notes_url}'>{tr(self.lang, 'plug_release_notes')}</a>"
                 )
@@ -198,15 +410,9 @@ class PluginsTabMixin:
                 notes_lbl.setToolTip(t.release_notes_url)
                 row.addWidget(notes_lbl)
 
-            if t.has_update:
-                upd_one = QPushButton(tr(self.lang, "plug_btn_update"))
-                upd_one.setObjectName("warnBtn")
-            else:
-                upd_one = QPushButton(tr(self.lang, "plug_btn_reinstall"))
-            upd_one.clicked.connect(lambda _=False, tool_obj=t: self._run_batch_update([tool_obj], install_if_missing=True))
-            row.addWidget(upd_one)
-
             copy_cmd = QPushButton(tr(self.lang, "plug_btn_copy_cmd"))
+            copy_cmd.setCursor(Qt.CursorShape.PointingHandCursor)
+            copy_cmd.setToolTip(t.install_cmd or t.repo_url)
             copy_cmd.clicked.connect(
                 lambda _=False, c=(t.install_cmd or t.repo_url), nm=t.name: (
                     QApplication.clipboard().setText(c),
@@ -214,6 +420,36 @@ class PluginsTabMixin:
                 )
             )
             row.addWidget(copy_cmd)
+
+            if not in_ws:
+                add_btn = QPushButton(tr(self.lang, "plug_btn_add_ws").replace("&", "&&"))
+                add_btn.setObjectName("primaryBtn")
+                add_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+                add_btn.setToolTip(tr(self.lang, "plug_btn_add_ws_tip"))
+                add_btn.clicked.connect(lambda _=False, tool_obj=t: self.add_tool_to_workspace(tool_obj))
+                row.addWidget(add_btn)
+            else:
+                ws_lbl = QLabel(tr(self.lang, "plug_badge_in_ws"))
+                ws_lbl.setFixedHeight(26)
+                ws_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                ws_lbl.setStyleSheet(ws_badge_style)
+                row.addWidget(ws_lbl, alignment=Qt.AlignmentFlag.AlignVCenter)
+
+                if t.has_update:
+                    upd_one = QPushButton(tr(self.lang, "plug_btn_update"))
+                    upd_one.setObjectName("warnBtn")
+                    upd_one.setCursor(Qt.CursorShape.PointingHandCursor)
+                    upd_one.clicked.connect(
+                        lambda _=False, tool_obj=t: self._run_batch_update([tool_obj], install_if_missing=True)
+                    )
+                    row.addWidget(upd_one)
+
+                rem_btn = QPushButton(tr(self.lang, "plug_btn_remove_ws"))
+                rem_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+                rem_btn.setToolTip(tr(self.lang, "plug_btn_remove_ws_tip"))
+                rem_btn.clicked.connect(lambda _=False, tool_obj=t: self.remove_tool_from_workspace(tool_obj))
+                row.addWidget(rem_btn)
+
             self.plugins_lay.addWidget(card)
         self.plugins_lay.addStretch()
 
@@ -221,11 +457,16 @@ class PluginsTabMixin:
         if self.checking_plugins_busy or self.updating_busy:
             return
 
+        ws_tools = [t for t in self.tools if getattr(t, "in_workspace", True)]
+        if not ws_tools:
+            self._refresh_plugins_tab()
+            return
+
         if not manual:
             last_ts = float(self.meta.get("last_plugin_check_ts", 0.0) or 0.0)
             cached = self.meta.get("plugin_update_cache")
             if isinstance(cached, dict) and cached and (time.time() - last_ts) < 1800:
-                for t in self.tools:
+                for t in ws_tools:
                     entry = cached.get(t.id)
                     if isinstance(entry, dict):
                         lat = str(entry.get("latest_version", "") or "").strip()
@@ -235,13 +476,6 @@ class PluginsTabMixin:
                         notes = str(entry.get("release_notes_url", "") or "").strip()
                         if notes:
                             t.release_notes_url = notes
-                upd_cnt = sum(1 for t in self.tools if t.has_update)
-                if upd_cnt == 0:
-                    self.plugins_banner_lbl.setText(tr(self.lang, "plug_banner_all_ok"))
-                    self.plugins_banner_lbl.setStyleSheet("color: #22c55e; font-weight: 600;")
-                else:
-                    self.plugins_banner_lbl.setText(tr(self.lang, "plug_banner_updates", n=upd_cnt))
-                    self.plugins_banner_lbl.setStyleSheet("color: #f59e0b; font-weight: 600;")
                 self._update_tab_titles()
                 self._refresh_table()
                 self._refresh_plugins_tab()
@@ -254,7 +488,7 @@ class PluginsTabMixin:
         if manual:
             self.set_status(tr(self.lang, "msg_plug_checking"))
 
-        snap = copy.deepcopy(self.tools)
+        snap = copy.deepcopy(ws_tools)
         tok = self.vault.get_secret("GITHUB_TOKEN")
         lang_snap = self.lang
 
@@ -294,20 +528,17 @@ class PluginsTabMixin:
                     "release_notes_url": t.release_notes_url,
                 }
                 for t in self.tools
+                if getattr(t, "in_workspace", True)
             }
             self._save_state()
 
-        upd_count = sum(1 for t in self.tools if t.has_update)
+        upd_count = sum(1 for t in self.tools if getattr(t, "in_workspace", True) and t.has_update)
         self._refresh_logs_tab()
 
         if upd_count == 0:
-            self.plugins_banner_lbl.setText(tr(self.lang, "plug_banner_all_ok"))
-            self.plugins_banner_lbl.setStyleSheet("color: #22c55e; font-weight: 600;")
             if manual:
                 self.set_status(tr(self.lang, "msg_plug_all_ok"))
         else:
-            self.plugins_banner_lbl.setText(tr(self.lang, "plug_banner_updates", n=upd_count))
-            self.plugins_banner_lbl.setStyleSheet("color: #f59e0b; font-weight: 600;")
             self.set_status(tr(self.lang, "msg_plug_updates_found", n=upd_count))
             if manual:
                 self.tabs.setCurrentIndex(1)
@@ -317,22 +548,11 @@ class PluginsTabMixin:
         self._refresh_plugins_tab()
 
     def _handle_start_available_updates(self) -> None:
-        targets = [t for t in self.tools if t.has_update]
+        targets = [t for t in self.tools if getattr(t, "in_workspace", True) and t.has_update]
         if not targets:
             self.set_status(tr(self.lang, "msg_plug_all_ok"))
             return
         self._run_batch_update(targets, install_if_missing=True)
-
-    def _handle_update_selected_plugins(self) -> None:
-        selected = [t for t in self.tools if self.plugin_checks.get(t.id) and self.plugin_checks[t.id].isChecked()]
-        if not selected:
-            QMessageBox.information(
-                self,
-                tr(self.lang, "plug_none_selected_title"),
-                tr(self.lang, "plug_none_selected_msg"),
-            )
-            return
-        self._run_batch_update(selected, install_if_missing=True)
 
     def _run_batch_update(self, target_tools: list[ToolSpec], install_if_missing: bool = False) -> None:
         if self.updating_busy or not target_tools:
@@ -340,7 +560,6 @@ class PluginsTabMixin:
         self.updating_busy = True
         self.btn_plugins_check.setEnabled(False)
         self.btn_plugins_update_all.setEnabled(False)
-        self.btn_plugins_install_sel.setEnabled(False)
 
         total = len(target_tools)
         self.update_prog.setMaximum(total)
@@ -400,7 +619,6 @@ class PluginsTabMixin:
     def _on_update_all_done(self, ok_cnt: int, fail_cnt: int, _summary_text: str) -> None:
         self.updating_busy = False
         self.btn_plugins_check.setEnabled(True)
-        self.btn_plugins_install_sel.setEnabled(True)
         self.update_prog.setValue(self.update_prog.maximum())
         self.update_prog.setFormat(tr(self.lang, "plug_prog_done", ok=ok_cnt, fail=fail_cnt))
         QTimer.singleShot(3500, self.update_prog.hide)

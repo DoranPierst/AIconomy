@@ -118,7 +118,7 @@ def sync_caveman_on_disk(
         )
         return False, msg
 
-    if not caveman_tool.enabled:
+    if not (getattr(caveman_tool, "in_workspace", True) and caveman_tool.enabled):
         if active_dir.is_dir():
             disabled_dir.parent.mkdir(parents=True, exist_ok=True)
             if disabled_dir.exists():
@@ -293,14 +293,23 @@ def build_effective_stdio_spec(
             env[t.vault_key_name] = secret
 
     p_val = t.param_value.strip()
-    if t.id == "elevenlabs_mcp" and p_val:
-        env["ELEVENLABS_MCP_OUTPUT_PATH"] = p_val
-    elif t.id == "blender_mcp":
+    if t.id == "blender_mcp":
         b_port = int(t.port or (int(p_val) if p_val.isdigit() else 9876))
         if b_port != 9876:
             env["BLENDER_PORT"] = str(b_port)
+    elif t.id == "elevenlabs_mcp" and p_val:
+        env["ELEVENLABS_MCP_OUTPUT_PATH"] = p_val
     elif t.id == "renderdoc_mcp" and p_val:
         env["RENDERDOC_CAPTURE_DIR"] = p_val
+    else:
+        if p_val and getattr(t, "param_env_var", ""):
+            env[t.param_env_var] = p_val
+        if p_val and getattr(t, "param_arg_flag", ""):
+            if t.param_arg_flag == "__POSITIONAL__":
+                if p_val not in args:
+                    args.append(p_val)
+            elif t.param_arg_flag not in args:
+                args.extend([t.param_arg_flag, p_val])
 
     cmd = t.mcp_command
     if wrap_windows_npx and os.name == "nt" and cmd.lower() == "npx":
@@ -413,7 +422,7 @@ def _sync_mcp_json_clients_impl(
     for code, cfg_path in client_paths.items():
         wanted: dict[str, dict[str, Any]] = {}
         for t in tools:
-            if not t.mcp_server_key or not (t.enabled and t.clients.get(code, False)):
+            if not t.mcp_server_key or not (getattr(t, "in_workspace", True) and t.enabled and t.clients.get(code, False)):
                 continue
             if code in ("CLD", "CUR") and t.scope_selectable and t.project_scope != "GLOBAL":
                 continue
@@ -436,7 +445,11 @@ def _sync_mcp_json_clients_impl(
         scoped_tools = [
             t
             for t in tools
-            if t.mcp_server_key and t.enabled and t.scope_selectable and t.project_scope == proj_name
+            if t.mcp_server_key
+            and getattr(t, "in_workspace", True)
+            and t.enabled
+            and t.scope_selectable
+            and t.project_scope == proj_name
         ]
         for target_code, rel_cfg in [("CLD", ".mcp.json"), ("CUR", ".cursor/mcp.json")]:
             p_wanted: dict[str, dict[str, Any]] = {}
@@ -497,7 +510,12 @@ def _sync_mcp_json_clients_impl(
                     and t_obj.vault_key_name
                     and not vault.has_secret(t_obj.vault_key_name)
                 )
-                want_cdx = bool(t_obj.enabled and t_obj.clients.get("CDX", False) and has_req_key)
+                want_cdx = bool(
+                    getattr(t_obj, "in_workspace", True)
+                    and t_obj.enabled
+                    and t_obj.clients.get("CDX", False)
+                    and has_req_key
+                )
                 cleaned, found_sec = _sync_existing_codex_section(sec_key, want_cdx, cleaned)
                 if found_sec:
                     handled_existing.add(t_obj.id)
@@ -505,7 +523,9 @@ def _sync_mcp_json_clients_impl(
             cdx_lines: list[str] = [CODEX_BEGIN_TAG]
             cdx_added = 0
             for t in tools:
-                if not t.mcp_server_key or not (t.enabled and t.clients.get("CDX", False)):
+                if not t.mcp_server_key or not (
+                    getattr(t, "in_workspace", True) and t.enabled and t.clients.get("CDX", False)
+                ):
                     continue
                 entry = _build_mcp_entry(t, vault)
                 if entry is None:

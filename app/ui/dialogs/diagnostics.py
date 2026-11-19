@@ -34,7 +34,7 @@ class DiagnosticsDialog(QDialog):
         super().__init__(parent)
         self.main_win = parent
         self.lang = parent.lang
-        self.tools = [copy.deepcopy(t) for t in parent.tools if t.enabled]
+        self.tools = [copy.deepcopy(t) for t in parent.tools if getattr(t, "in_workspace", True) and t.enabled]
         self._running = False
         self._bridge = WorkerBridge()
         self._bridge.conn_test_row.connect(self._on_row_result)
@@ -129,7 +129,7 @@ class DiagnosticsDialog(QDialog):
     def start_tests(self) -> None:
         if self._running:
             return
-        self.tools = [copy.deepcopy(t) for t in self.main_win.tools if t.enabled]
+        self.tools = [copy.deepcopy(t) for t in self.main_win.tools if getattr(t, "in_workspace", True) and t.enabled]
         self.tbl.setRowCount(len(self.tools))
         self._running = True
         self._ok_count = 0

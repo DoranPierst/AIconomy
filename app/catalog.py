@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from .i18n import tr
+from .library_catalog import _TR_LIBRARY_TEXT, build_library_catalog
 
 BLENDER_SKILLS_94: list[str] = [
     "analog-found-footage-horror", "animation", "anime-style", "apocalypse-worlds", "archviz", "asset-optimization",
@@ -73,6 +74,19 @@ DOMAIN_TAG_IDS: tuple[str, ...] = (
 )
 
 ALL_TAG_IDS: tuple[str, ...] = BENEFIT_TAG_IDS + DOMAIN_TAG_IDS
+
+LIBRARY_CATEGORY_IDS: tuple[str, ...] = (
+    "coding_dev",
+    "git_vcs",
+    "web_browser",
+    "database_data",
+    "cloud_devops",
+    "game_3d",
+    "design_ui",
+    "productivity_docs",
+    "security_qa",
+    "ai_memory",
+)
 
 BLENDER_SKILL_GROUP_IDS: tuple[str, ...] = (
     "modeling",
@@ -149,6 +163,10 @@ def is_benefit_tag(tag_id: str) -> bool:
 
 def tag_label(tag_id: str, lang: str = "en") -> str:
     return tr(lang, f"tag_{tag_id}")
+
+
+def category_label(cat_id: str, lang: str = "en") -> str:
+    return tr(lang, f"cat_{cat_id}")
 
 
 def blender_skill_group(skill_name: str) -> str:
@@ -293,8 +311,13 @@ class ToolSpec:
     param_label: str = ""
     param_value: str = ""
     param_help: str = ""
+    param_arg_flag: str = ""
+    param_env_var: str = ""
     vault_key_name: str = ""
     vault_key_required: bool = False
+    vault_key_desc: str = ""
+    in_workspace: bool = True
+    category: str = "coding_dev"
     install_cmd: str = ""
     mcp_server_key: str = ""
     mcp_command: str = ""
@@ -314,10 +337,11 @@ def build_default_catalog() -> list[ToolSpec]:
     u_audio = str(u_proj / "Assets" / "Audio") if u_proj else ""
     t_dir = _detect_local_trellis_dir()
 
-    return [
+    starter_tools = [
         ToolSpec(
             id="blender_skills",
             name="Blender Skills",
+            category="game_3d",
             kind="skill_pack",
             version="v1.3.0",
             repo_url="https://github.com/arjun988/blender-skills",
@@ -337,6 +361,7 @@ def build_default_catalog() -> list[ToolSpec]:
         ToolSpec(
             id="bla",
             name="BLA (Blind LLM Agents)",
+            category="security_qa",
             kind="stdio",
             version="v3.4.3",
             repo_url="https://github.com/qybaihe/bla",
@@ -358,6 +383,7 @@ def build_default_catalog() -> list[ToolSpec]:
         ToolSpec(
             id="caveman",
             name="Caveman",
+            category="ai_memory",
             kind="rule",
             version="v1.4.1",
             repo_url="https://github.com/JuliusBrussee/caveman",
@@ -378,6 +404,7 @@ def build_default_catalog() -> list[ToolSpec]:
         ToolSpec(
             id="serena",
             name="Serena",
+            category="coding_dev",
             kind="http",
             version="v0.9.2",
             repo_url="https://github.com/oraios/serena",
@@ -411,6 +438,7 @@ def build_default_catalog() -> list[ToolSpec]:
         ToolSpec(
             id="unity_mcp",
             name="Unity MCP",
+            category="game_3d",
             kind="http",
             version="v2.2.0",
             repo_url="https://github.com/CoplayDev/unity-mcp",
@@ -434,6 +462,7 @@ def build_default_catalog() -> list[ToolSpec]:
         ToolSpec(
             id="unity_pipeline",
             name="Unity Pipeline",
+            category="game_3d",
             kind="cli",
             version="v0.8.0-exp.1",
             repo_url="https://docs.unity3d.com/",
@@ -454,6 +483,7 @@ def build_default_catalog() -> list[ToolSpec]:
         ToolSpec(
             id="renderdoc_mcp",
             name="RenderDoc MCP",
+            category="game_3d",
             kind="stdio",
             version="v0.3.2",
             repo_url="https://github.com/Linkingooo/renderdoc-mcp",
@@ -469,6 +499,7 @@ def build_default_catalog() -> list[ToolSpec]:
             param_label="Default .rdc Folder",
             param_value=u_parent,
             param_help="Default directory where your RenderDoc frame capture (.rdc) files are saved.",
+            param_env_var="RENDERDOC_CAPTURE_DIR",
             install_cmd="uvx renderdoc-mcp",
             mcp_server_key="renderdoc-mcp",
             mcp_command="uvx",
@@ -478,6 +509,7 @@ def build_default_catalog() -> list[ToolSpec]:
         ToolSpec(
             id="blender_mcp",
             name="Blender MCP",
+            category="game_3d",
             kind="http",
             version="v1.2.4",
             repo_url="https://github.com/ahujasid/blender-mcp",
@@ -503,6 +535,7 @@ def build_default_catalog() -> list[ToolSpec]:
         ToolSpec(
             id="trellis",
             name="TRELLIS (local GPU)",
+            category="game_3d",
             kind="cli",
             version="v1.1.0",
             repo_url="https://github.com/microsoft/TRELLIS",
@@ -525,6 +558,7 @@ def build_default_catalog() -> list[ToolSpec]:
         ToolSpec(
             id="gltf_transform",
             name="glTF-Transform MCP",
+            category="game_3d",
             kind="stdio",
             version="v4.0.2",
             repo_url="https://github.com/GeoLibra/3d-asset-processing-mcp",
@@ -546,6 +580,7 @@ def build_default_catalog() -> list[ToolSpec]:
         ToolSpec(
             id="elevenlabs_mcp",
             name="ElevenLabs MCP",
+            category="game_3d",
             kind="stdio",
             version="v0.9.1",
             repo_url="https://github.com/elevenlabs/elevenlabs-mcp",
@@ -561,8 +596,10 @@ def build_default_catalog() -> list[ToolSpec]:
             param_label="Audio Output Folder",
             param_value=u_audio,
             param_help="Directory passed via ELEVENLABS_MCP_OUTPUT_PATH where generated audio files are saved.",
+            param_env_var="ELEVENLABS_MCP_OUTPUT_PATH",
             vault_key_name="ELEVENLABS_API_KEY",
             vault_key_required=True,
+            vault_key_desc="ElevenLabs Voice & SFX API key",
             install_cmd="uvx elevenlabs-mcp",
             mcp_server_key="elevenlabs",
             mcp_command="uvx",
@@ -572,6 +609,7 @@ def build_default_catalog() -> list[ToolSpec]:
         ToolSpec(
             id="meshy",
             name="Meshy MCP",
+            category="game_3d",
             kind="stdio",
             version="v0.4.1",
             repo_url="https://github.com/meshyai/meshy-mcp-server",
@@ -586,6 +624,7 @@ def build_default_catalog() -> list[ToolSpec]:
             has_gear=True,
             vault_key_name="MESHY_API_KEY",
             vault_key_required=True,
+            vault_key_desc="Meshy 3D Cloud API key",
             install_cmd="uvx meshy-mcp",
             mcp_server_key="meshy",
             mcp_command="uvx",
@@ -595,6 +634,7 @@ def build_default_catalog() -> list[ToolSpec]:
         ToolSpec(
             id="context7",
             name="Context7 Docs MCP",
+            category="productivity_docs",
             kind="stdio",
             version="v1.0.8",
             repo_url="https://github.com/upstash/context7",
@@ -609,6 +649,7 @@ def build_default_catalog() -> list[ToolSpec]:
             has_gear=True,
             vault_key_name="CONTEXT7_API_KEY",
             vault_key_required=False,
+            vault_key_desc="Context7 Docs API key (optional)",
             install_cmd="npx -y @upstash/context7-mcp",
             mcp_server_key="context7",
             mcp_command="npx",
@@ -618,6 +659,7 @@ def build_default_catalog() -> list[ToolSpec]:
         ToolSpec(
             id="chrome_devtools",
             name="Chrome DevTools MCP",
+            category="web_browser",
             kind="stdio",
             version="v0.18.0",
             repo_url="https://github.com/ChromeDevTools/chrome-devtools-mcp",
@@ -651,6 +693,7 @@ def build_default_catalog() -> list[ToolSpec]:
             ],
         ),
     ]
+    return starter_tools + build_library_catalog()
 
 
 def get_default_tool_spec(tool_id: str) -> ToolSpec | None:
@@ -739,16 +782,19 @@ _TR_TOOL_TEXT: dict[str, dict[str, Any]] = {
         "when_to_use": "Ses efekti veya dublaj üretirken açın; sonrasında kredi ve token tasarrufu için kapatın.",
         "param_label": "Ses Çıktı Klasörü",
         "param_help": "Üretilen ses dosyalarının kaydedileceği klasör (ELEVENLABS_MCP_OUTPUT_PATH ortam değişkeni olarak iletilir).",
+        "vault_key_desc": "ElevenLabs Ses & SFX API anahtarı",
     },
     "meshy": {
         "summary": "Bulut üzerinden metin/görselden 3D model üretimi, PBR doku kaplama ve temiz Quad topoloji dönüşümü.",
         "details": "Yerel GPU üretimi uygun olmadığında Meshy bulut API'si ile 3D üretim, otomatik PBR kaplama ve animasyona uygun Quad remesh yapar. MESHY_API_KEY gerektirir.",
         "when_to_use": "Yalnızca bilinçli olarak Meshy bulut kredisi kullanacağınız zaman açın; normalde kapalı tutun.",
+        "vault_key_desc": "Meshy 3D Bulut API anahtarı",
     },
     "context7": {
         "summary": "Güncel kütüphane ve framework'ler için canlı resmi doküman ve çalışan API örnekleri çeker.",
         "details": "Unity, PySide6, React, Next.js, Tailwind ve Vite gibi araçların en son sürüm dokümanlarını getirerek eski bilgiyle uydurma kod yazılmasını önler. Anahtarsız ücretsiz çalışır (isteğe bağlı CONTEXT7_API_KEY limit artırır).",
         "when_to_use": "Aktif yazılım geliştirilen neredeyse tüm projelerde açık tutulabilir (~1.6K düşük şema yükü).",
+        "vault_key_desc": "Context7 Docs API anahtarı (isteğe bağlı)",
     },
     "chrome_devtools": {
         "summary": "Gerçek Chrome tarayıcısı üzerinden konsol hatalarını, DOM düzenini, ağ isteklerini ve Lighthouse hızını denetler.",
@@ -768,25 +814,29 @@ _TR_TOOL_TEXT: dict[str, dict[str, Any]] = {
 }
 
 
+def _tr_tool_bucket(tool_id: str) -> dict[str, Any]:
+    return _TR_TOOL_TEXT.get(tool_id) or _TR_LIBRARY_TEXT.get(tool_id) or {}
+
+
 def localized_tool_text(tool: ToolSpec, field_name: str, lang: str = "en") -> str:
     if lang == "tr":
-        tr_entry = _TR_TOOL_TEXT.get(tool.id)
-        if tr_entry and field_name in tr_entry and isinstance(tr_entry[field_name], str):
+        tr_entry = _tr_tool_bucket(tool.id)
+        if field_name in tr_entry and isinstance(tr_entry[field_name], str):
             return tr_entry[field_name]
     return str(getattr(tool, field_name, "") or "")
 
 
 def localized_tool_modes(tool: ToolSpec, lang: str = "en") -> list[str]:
     if lang == "tr":
-        tr_entry = _TR_TOOL_TEXT.get(tool.id)
-        if tr_entry and "modes" in tr_entry:
+        tr_entry = _tr_tool_bucket(tool.id)
+        if "modes" in tr_entry:
             return list(tr_entry["modes"])
     return list(tool.modes)
 
 
 def localized_option_text(tool_id: str, opt: CheckOption, lang: str = "en") -> tuple[str, str]:
     if lang == "tr":
-        tr_opts = _TR_TOOL_TEXT.get(tool_id, {}).get("options", {})
+        tr_opts = _tr_tool_bucket(tool_id).get("options", {})
         if opt.key in tr_opts:
             return tr_opts[opt.key]
     return opt.label, opt.help_text

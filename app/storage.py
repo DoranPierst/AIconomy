@@ -323,7 +323,11 @@ class StateStore:
         for tid, tdata in raw.get("tools", {}).items():
             if tid in by_id:
                 t = by_id[tid]
+                if "in_workspace" in tdata:
+                    t.in_workspace = bool(tdata["in_workspace"])
                 t.enabled = bool(tdata.get("enabled", t.enabled))
+                if not t.in_workspace:
+                    t.enabled = False
                 if isinstance(tdata.get("clients"), dict):
                     t.clients.update({k: bool(v) for k, v in tdata["clients"].items()})
                 if t.scope_selectable and "project_scope" in tdata:
@@ -366,6 +370,13 @@ class StateStore:
                         param_label=tdata.get("param_label", ""),
                         param_value=tdata.get("param_value", ""),
                         param_help=tdata.get("param_help", ""),
+                        param_arg_flag=str(tdata.get("param_arg_flag", "")),
+                        param_env_var=str(tdata.get("param_env_var", "")),
+                        vault_key_name=str(tdata.get("vault_key_name", "")),
+                        vault_key_required=bool(tdata.get("vault_key_required", False)),
+                        vault_key_desc=str(tdata.get("vault_key_desc", "")),
+                        in_workspace=bool(tdata.get("in_workspace", True)),
+                        category=str(tdata.get("category", "coding_dev")),
                         install_cmd=tdata.get("install_cmd", ""),
                         mcp_server_key=tdata.get("mcp_server_key", tid),
                         mcp_command=tdata.get("mcp_command", ""),
@@ -391,7 +402,8 @@ class StateStore:
             entry: dict[str, Any] = {
                 "name": t.name,
                 "version": t.version,
-                "enabled": t.enabled,
+                "in_workspace": bool(getattr(t, "in_workspace", True)),
+                "enabled": bool(t.enabled and getattr(t, "in_workspace", True)),
                 "clients": dict(t.clients),
                 "project_scope": t.project_scope,
                 "mode_index": t.mode_index,
@@ -403,6 +415,7 @@ class StateStore:
                     {
                         "_custom": True,
                         "kind": normalize_tool_kind(t.kind),
+                        "category": getattr(t, "category", "coding_dev"),
                         "version": t.version,
                         "repo_url": t.repo_url,
                         "schema_tokens": t.schema_tokens,
@@ -416,6 +429,11 @@ class StateStore:
                         "param_label": t.param_label,
                         "param_value": t.param_value,
                         "param_help": t.param_help,
+                        "param_arg_flag": getattr(t, "param_arg_flag", ""),
+                        "param_env_var": getattr(t, "param_env_var", ""),
+                        "vault_key_name": t.vault_key_name,
+                        "vault_key_required": t.vault_key_required,
+                        "vault_key_desc": getattr(t, "vault_key_desc", ""),
                         "install_cmd": t.install_cmd,
                         "mcp_server_key": t.mcp_server_key,
                         "mcp_command": t.mcp_command,

@@ -225,7 +225,7 @@ class ToolGearDialog(QDialog):
         )
 
     def _open_api_keys(self) -> None:
-        self.main_win.open_settings(initial_tab=1)
+        self.main_win.open_settings(initial_tab=1, focus_key=self.tool.vault_key_name)
         self._refresh_key_status()
 
     def _show_option_help(self, title: str, help_body: str) -> None:

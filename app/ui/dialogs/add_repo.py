@@ -125,11 +125,28 @@ class AddRepoDialog(QDialog):
         info = self.detected_candidate
         if not info:
             return
-        if any(t.repo_url.lower() == info["repo_url"].lower() for t in self.main_win.tools):
+        shared_monorepos = ("modelcontextprotocol/servers", "awslabs/mcp")
+        existing = next(
+            (
+                t
+                for t in self.main_win.tools
+                if t.id == info["id"]
+                or (
+                    t.repo_url.lower() == info["repo_url"].lower()
+                    and not any(m in t.repo_url.lower() for m in shared_monorepos)
+                )
+            ),
+            None,
+        )
+        if existing is not None:
+            if not getattr(existing, "in_workspace", True):
+                self.main_win.add_tool_to_workspace(existing)
+                self.accept()
+                return
             QMessageBox.information(
                 self,
                 tr(self.lang, "repo_exists_title"),
-                tr(self.lang, "repo_exists_msg", name=info["name"]),
+                tr(self.lang, "repo_exists_msg", name=existing.name),
             )
             return
         has_real_gear = bool(info["needs_api_key"])
@@ -137,6 +154,8 @@ class AddRepoDialog(QDialog):
         self.added_tool = ToolSpec(
             id=info["id"],
             name=info["name"],
+            category="coding_dev",
+            in_workspace=True,
             kind=normalize_tool_kind(info["kind"]),
             version="v1.0.0",
             repo_url=info["repo_url"],
@@ -144,11 +163,12 @@ class AddRepoDialog(QDialog):
             summary=str(info.get("description") or f"{info['name']} custom tool."),
             details=f"Added from GitHub ({info['repo_url']}).",
             when_to_use="",
-            enabled=True,
+            enabled=False,
             scope_selectable=True,
             project_scope="GLOBAL",
             has_gear=has_real_gear,
             param_label="Extra arguments / path" if has_real_gear else "",
+            param_arg_flag="__POSITIONAL__" if has_real_gear else "",
             install_cmd=info["install_cmd"],
             mcp_server_key=info["id"] if info["mcp_command"] else "",
             mcp_command=info["mcp_command"],

@@ -44,10 +44,15 @@ class ProfileWizardDialog(QDialog):
         super().__init__(parent)
         self.main_win = parent
         self.lang = parent.lang
+        self.all_tools: list[ToolSpec] = list(parent.tools)
         self.workspace_tools: list[ToolSpec] = [
             t for t in parent.tools if getattr(t, "in_workspace", True)
         ]
-        self.missing_keys: set[str] = parent._missing_required_vault_keys()
+        self.missing_keys: set[str] = {
+            t.vault_key_name
+            for t in parent.tools
+            if t.vault_key_required and t.vault_key_name and not parent.vault.has_secret(t.vault_key_name)
+        }
 
         self.selected_tags: list[str] = []
         self.checked_tool_ids: set[str] = set()
@@ -128,6 +133,11 @@ class ProfileWizardDialog(QDialog):
         self.show_all_cb.toggled.connect(lambda _v: self._rebuild_tools_list())
         mid_hdr.addWidget(self.show_all_cb)
 
+        self.include_lib_cb = QCheckBox(tr(self.lang, "wiz_include_lib_cb", n=len(self.all_tools)))
+        self.include_lib_cb.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.include_lib_cb.toggled.connect(self._on_include_lib_toggled)
+        mid_hdr.addWidget(self.include_lib_cb)
+
         mid_hdr.addStretch()
         self.live_tok_lbl = QLabel()
         mid_hdr.addWidget(self.live_tok_lbl)
@@ -177,6 +187,24 @@ class ProfileWizardDialog(QDialog):
 
         self._rebuild_tools_list()
 
+    def _active_pool(self) -> list[ToolSpec]:
+        if hasattr(self, "include_lib_cb") and self.include_lib_cb.isChecked():
+            return self.all_tools
+        return self.workspace_tools
+
+    def _refresh_tag_chip_labels(self) -> None:
+        pool = self._active_pool()
+        for tid, btn in self.tag_buttons.items():
+            cnt = sum(1 for t in pool if tid in t.tags)
+            lbl = f"{tag_label(tid, self.lang)} ({cnt})" if cnt else tag_label(tid, self.lang)
+            btn.setText(lbl.replace("&", "&&"))
+            btn.setToolTip(tr(self.lang, "wiz_tag_empty_tip") if cnt == 0 else "")
+
+    def _on_include_lib_toggled(self, _checked: bool) -> None:
+        self._refresh_tag_chip_labels()
+        self._sync_auto_checked_from_tags()
+        self._rebuild_tools_list()
+
     def _on_name_edited(self, _txt: str) -> None:
         self.name_touched = bool(self.name_inp.text().strip())
 
@@ -196,7 +224,7 @@ class ProfileWizardDialog(QDialog):
     def _sync_auto_checked_from_tags(self) -> None:
         sel_set = set(self.selected_tags)
         new_checked: set[str] = set()
-        for t in self.workspace_tools:
+        for t in self._active_pool():
             if t.id in self.manual_overrides:
                 if self.manual_overrides[t.id]:
                     new_checked.add(t.id)
@@ -243,8 +271,9 @@ class ProfileWizardDialog(QDialog):
         self._rebuild_tools_list()
 
     def _estimate_budget(self) -> tuple[int, float]:
-        sim_tools = copy.deepcopy(self.workspace_tools)
+        sim_tools = copy.deepcopy(self._active_pool())
         for t in sim_tools:
+            t.in_workspace = True
             t.enabled = t.id in self.checked_tool_ids
             if t.enabled and not any(t.clients.values()):
                 t.clients["AGY"] = True
@@ -260,11 +289,12 @@ class ProfileWizardDialog(QDialog):
         return bd.active_tokens, pct
 
     def _update_header_and_budget(self) -> None:
+        pool = self._active_pool()
         sel_set = set(self.selected_tags)
         match_cnt = (
-            sum(1 for t in self.workspace_tools if sel_set & set(t.tags))
+            sum(1 for t in pool if sel_set & set(t.tags))
             if sel_set
-            else len(self.workspace_tools)
+            else len(pool)
         )
         self.tools_hdr_lbl.setText(
             f"<b>{tr(self.lang, 'wiz_tools_hdr', sel=len(self.checked_tool_ids), match=match_cnt)}</b>"
@@ -301,17 +331,19 @@ class ProfileWizardDialog(QDialog):
             h_lay.addWidget(h_lbl)
             self.list_lay.addWidget(hint_card)
 
+        pool = self._active_pool()
         if sel_set and not self.show_all_cb.isChecked():
             shown_tools = [
-                t for t in self.workspace_tools if (sel_set & set(t.tags)) or (t.id in self.checked_tool_ids)
+                t for t in pool if (sel_set & set(t.tags)) or (t.id in self.checked_tool_ids)
             ]
         else:
-            shown_tools = list(self.workspace_tools)
+            shown_tools = list(pool)
 
         shown_tools.sort(
             key=lambda t: (
                 0 if t.id in self.checked_tool_ids else 1,
                 -len(sel_set & set(t.tags)),
+                0 if getattr(t, "in_workspace", True) else 1,
                 t.name.lower(),
             )
         )
@@ -348,6 +380,15 @@ class ProfileWizardDialog(QDialog):
                 nm_lbl = QLabel(f"<b>{t.name}</b>")
                 nm_lbl.setToolTip(localized_tool_text(t, "summary", self.lang))
                 top_r.addWidget(nm_lbl)
+
+                if not getattr(t, "in_workspace", True):
+                    lib_pill = QLabel(tr(self.lang, "wiz_lib_badge"))
+                    lib_pill.setStyleSheet(
+                        "background-color: #eff6ff; color: #1d4ed8; border: 1px solid #bfdbfe; border-radius: 4px; padding: 1px 6px; font-size: 9.5px; font-weight: 700;"
+                        if is_light
+                        else "background-color: #132036; color: #93c5fd; border: 1px solid #1e3a5f; border-radius: 4px; padding: 1px 6px; font-size: 9.5px; font-weight: 700;"
+                    )
+                    top_r.addWidget(lib_pill)
 
                 for tg in t.tags:
                     t_pill = QLabel(tag_label(tg, self.lang))

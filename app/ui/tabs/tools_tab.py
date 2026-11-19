@@ -147,7 +147,8 @@ class ToolsTabMixin:
         self._rebuild_kind_filter_combo()
         self._rebuild_tag_filter_combo()
         self._refresh_first_run_banner()
-        self.tabs.addTab(tab, tr(self.lang, "tab_tools", n=len(self.tools)))
+        ws_init_cnt = sum(1 for t in self.tools if getattr(t, "in_workspace", True))
+        self.tabs.addTab(tab, tr(self.lang, "tab_tools", n=ws_init_cnt))
 
     def _rebuild_kind_filter_combo(self) -> None:
         cur_data = self.kind_cmb.currentData() if self.kind_cmb.count() else "ALL"
@@ -607,6 +608,10 @@ class ToolsTabMixin:
         act_reset.triggered.connect(lambda: self.reset_tool_to_defaults(t))
         menu.addAction(act_reset)
 
+        act_remove_ws = QAction(tr(self.lang, "row_ctx_remove_ws"), self)
+        act_remove_ws.triggered.connect(lambda: self.remove_tool_from_workspace(t))
+        menu.addAction(act_remove_ws)
+
         if t.has_update and t.latest_version:
             menu.addSeparator()
             lat_v = t.latest_version.strip().lstrip("vV")
@@ -618,7 +623,11 @@ class ToolsTabMixin:
 
     def copy_tools_status_report(self, enabled_only: bool = False) -> None:
         """Build and copy a clean plaintext status report (invoked from Diagnostics)."""
-        target_tools = [t for t in self.tools if (not enabled_only or t.enabled)]
+        target_tools = [
+            t
+            for t in self.tools
+            if getattr(t, "in_workspace", True) and (not enabled_only or t.enabled)
+        ]
         target_tools.sort(key=lambda x: (0 if x.enabled else 1, x.name.lower()))
         active_tok, saved_tok = self._calculate_token_economy()
         en_cnt = sum(1 for t in target_tools if t.enabled)
