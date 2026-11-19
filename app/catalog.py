@@ -54,26 +54,65 @@ TOOL_KINDS: tuple[str, ...] = ("http", "stdio", "skill_pack", "rule", "cli")
 
 BENEFIT_TAG_IDS: tuple[str, ...] = ("token_saver", "free_local")
 
-DOMAIN_TAG_IDS: tuple[str, ...] = (
+GENERAL_TAG_IDS: tuple[str, ...] = (
     "coding_lsp",
     "desktop_ui",
     "git_repo",
-    "unity",
+    "web_browser",
+    "docs_search",
     "modeling_3d",
     "style_3d",
     "shader_gpu",
     "audio_sfx",
-    "web_browser",
+    "design_ui",
     "database",
     "cloud_devops",
-    "docs_search",
-    "design_ui",
     "security",
     "testing_qa",
     "automation",
 )
 
-ALL_TAG_IDS: tuple[str, ...] = BENEFIT_TAG_IDS + DOMAIN_TAG_IDS
+APP_SCOPE_IDS: tuple[str, ...] = (
+    "unity",
+    "blender",
+    "chrome",
+    "godot",
+    "unreal",
+    "figma",
+    "blockbench",
+    "docker",
+    "obsidian",
+    "notion",
+    "jupyter",
+)
+
+SCOPED_APP_TAG_IDS: tuple[str, ...] = (
+    "unity:automation",
+    "unity:testing_qa",
+    "unity:coding_lsp",
+    "unity:shader_gpu",
+    "blender:modeling_3d",
+    "blender:style_3d",
+    "chrome:testing_qa",
+    "godot:modeling_3d",
+    "godot:automation",
+    "unreal:modeling_3d",
+    "unreal:shader_gpu",
+    "figma:design_ui",
+    "blockbench:modeling_3d",
+    "blockbench:style_3d",
+    "docker:automation",
+    "obsidian:docs_search",
+    "notion:docs_search",
+    "notion:automation",
+    "jupyter:coding_lsp",
+)
+
+DOMAIN_TAG_IDS: tuple[str, ...] = GENERAL_TAG_IDS + ("unity",)
+
+BASE_TAG_IDS: tuple[str, ...] = BENEFIT_TAG_IDS + DOMAIN_TAG_IDS
+
+ALL_TAG_IDS: tuple[str, ...] = BENEFIT_TAG_IDS + GENERAL_TAG_IDS + SCOPED_APP_TAG_IDS
 
 LIBRARY_CATEGORY_IDS: tuple[str, ...] = (
     "coding_dev",
@@ -161,8 +200,29 @@ def is_benefit_tag(tag_id: str) -> bool:
     return tag_id in BENEFIT_TAG_IDS
 
 
+def split_scoped_tag(tag_id: str) -> tuple[str, str]:
+    """Split 'app_id:sub_tag' into ('app_id', 'sub_tag'), or ('', tag_id) for general tags."""
+    if ":" in tag_id:
+        app_id, sub_id = tag_id.split(":", 1)
+        return app_id, sub_id
+    return "", tag_id
+
+
+def app_scope_label(app_id: str, lang: str = "en") -> str:
+    return tr(lang, f"tag_app_{app_id}")
+
+
+def tag_sub_label(tag_id: str, lang: str = "en") -> str:
+    """Return only the capability label part (e.g. 'Test & Kalite' for 'unity:testing_qa')."""
+    _app_id, sub_id = split_scoped_tag(tag_id)
+    return tr(lang, f"tag_{sub_id}")
+
+
 def tag_label(tag_id: str, lang: str = "en") -> str:
-    return tr(lang, f"tag_{tag_id}")
+    app_id, sub_id = split_scoped_tag(tag_id)
+    if app_id:
+        return f"{app_scope_label(app_id, lang)}: {tr(lang, f'tag_{sub_id}')}"
+    return tr(lang, f"tag_{sub_id}")
 
 
 def category_label(cat_id: str, lang: str = "en") -> str:
@@ -190,9 +250,13 @@ def blender_group_label(group_id: str, lang: str = "en") -> str:
 def recommended_blender_skills_for_tags(selected_tags: set[str]) -> set[str]:
     """Build a focused subset of Blender skills matching the user's selected task tags."""
     chosen: set[str] = set()
-    if "modeling_3d" in selected_tags:
+    has_mod = bool(selected_tags & {"modeling_3d", "blender:modeling_3d"})
+    has_sty = bool(selected_tags & {"style_3d", "blender:style_3d"})
+    has_uni = any(tg == "unity" or tg.startswith("unity:") for tg in selected_tags)
+    has_shd = bool(selected_tags & {"shader_gpu", "unity:shader_gpu", "unreal:shader_gpu"})
+    if has_mod:
         chosen.update(DEFAULT_ACTIVE_BLENDER_SKILLS)
-    if "style_3d" in selected_tags:
+    if has_sty:
         chosen.update(
             {
                 "blender-director",
@@ -205,9 +269,9 @@ def recommended_blender_skills_for_tags(selected_tags: set[str]) -> set[str]:
                 "lowpoly-style",
             }
         )
-    if "unity" in selected_tags and ("modeling_3d" in selected_tags or "style_3d" in selected_tags):
+    if has_uni and (has_mod or has_sty):
         chosen.update({"unity-export", "export-pipeline", "asset-optimization", "collision-proxy", "lod-pipeline"})
-    if "shader_gpu" in selected_tags and ("modeling_3d" in selected_tags or "style_3d" in selected_tags):
+    if has_shd and (has_mod or has_sty):
         chosen.update({"materials", "lighting", "rendering", "lookdev"})
     return chosen if chosen else set(DEFAULT_ACTIVE_BLENDER_SKILLS)
 
@@ -317,6 +381,7 @@ class ToolSpec:
     vault_key_required: bool = False
     vault_key_desc: str = ""
     in_workspace: bool = True
+    installed: bool = True
     category: str = "coding_dev"
     install_cmd: str = ""
     mcp_server_key: str = ""
@@ -346,7 +411,7 @@ def build_default_catalog() -> list[ToolSpec]:
             version="v1.3.0",
             repo_url="https://github.com/arjun988/blender-skills",
             schema_tokens=len(BLENDER_SKILLS_94) * BLENDER_SKILL_INDEX_TOKENS,
-            summary="Library of 94 specialist Blender SKILL.md guides (modeling, UV, materials, lighting, engine export).",
+            summary="Exclusively for Blender: 94 specialist SKILL.md guides (modeling, UV, materials, lighting, engine export).",
             details="Teaches AI coding agents clean topology, hard-surface rules, PBR shading, lighting, and Unity/Unreal/Godot export standards. Use Configure to enable only the skills needed right now and save context tokens.",
             when_to_use="Enable while creating 3D assets, scenes, or materials in Blender; disable for pure software or web projects.",
             enabled=False,
@@ -356,7 +421,7 @@ def build_default_catalog() -> list[ToolSpec]:
             has_gear=True,
             gear_kind="skills94",
             install_cmd="git clone https://github.com/arjun988/blender-skills.git",
-            tags=["modeling_3d", "style_3d", "free_local"],
+            tags=["blender:modeling_3d", "blender:style_3d", "free_local"],
         ),
         ToolSpec(
             id="bla",
@@ -443,7 +508,7 @@ def build_default_catalog() -> list[ToolSpec]:
             version="v2.2.0",
             repo_url="https://github.com/CoplayDev/unity-mcp",
             schema_tokens=4600,
-            summary="Connects AI agents to a running Unity Editor to inspect and edit scenes, prefabs, materials, and components.",
+            summary="Works exclusively inside an open Unity Editor: inspects and edits scenes, prefabs, materials, and components.",
             details="Communicates over a local HTTP bridge (:8080) with the MCP for Unity Editor package so agents can inspect hierarchies, edit GameObjects, read console errors, and automate scene setup.",
             when_to_use="Enable when Unity Editor is open and you want scene/editor automation; disable when Unity is closed to save ~4.6K schema tokens.",
             enabled=False,
@@ -457,7 +522,7 @@ def build_default_catalog() -> list[ToolSpec]:
             param_help="Local HTTP port matching the MCP for Unity window inside Unity Editor (default: 8080).",
             install_cmd="uv tool install --python 3.12 mcpforunityserver",
             mcp_server_key="unity-mcp",
-            tags=["unity", "automation", "free_local"],
+            tags=["unity:automation", "free_local"],
         ),
         ToolSpec(
             id="unity_pipeline",
@@ -467,7 +532,7 @@ def build_default_catalog() -> list[ToolSpec]:
             version="v0.8.0-exp.1",
             repo_url="https://docs.unity3d.com/",
             schema_tokens=900,
-            summary="Fast background C# method-reload, compilation, test execution, and Play verification for Unity 6.",
+            summary="Exclusively for Unity 6 projects: fast background C# method-reload, compilation, test execution, and Play verification.",
             details="Uses Unity's pipeline automation CLI to reload modified C# methods without full Domain Reload stalls and capture background camera screenshots.",
             when_to_use="Enable during active C# iteration in Unity 6 projects; disable for non-Unity work.",
             enabled=False,
@@ -478,7 +543,7 @@ def build_default_catalog() -> list[ToolSpec]:
             param_label="Unity Project Path",
             param_value=u_path,
             param_help="Root directory of your Unity project (containing Assets and Packages).",
-            tags=["unity", "testing_qa", "free_local"],
+            tags=["unity:testing_qa", "unity:coding_lsp", "free_local"],
         ),
         ToolSpec(
             id="renderdoc_mcp",
@@ -488,7 +553,7 @@ def build_default_catalog() -> list[ToolSpec]:
             version="v0.3.2",
             repo_url="https://github.com/Linkingooo/renderdoc-mcp",
             schema_tokens=2900,
-            summary="Inspects RenderDoc frame captures (.rdc) for draw calls, HLSL shaders, CBuffers, and SRP Batcher issues.",
+            summary="Inspects RenderDoc (.rdc) frame captures for draw calls, HLSL shaders, CBuffers, and GPU bottlenecks.",
             details="Allows AI agents to read real GPU pipeline state, constant buffer values, depth/normal passes, and draw-call bottlenecks directly from .rdc captures.",
             when_to_use="Enable only when debugging graphics, custom shaders (HLSL/URP/HDRP), or draw-call performance.",
             enabled=False,
@@ -504,7 +569,7 @@ def build_default_catalog() -> list[ToolSpec]:
             mcp_server_key="renderdoc-mcp",
             mcp_command="uvx",
             mcp_args=["renderdoc-mcp"],
-            tags=["shader_gpu", "unity", "free_local"],
+            tags=["shader_gpu", "unity:shader_gpu", "free_local"],
         ),
         ToolSpec(
             id="blender_mcp",
@@ -514,7 +579,7 @@ def build_default_catalog() -> list[ToolSpec]:
             version="v1.2.4",
             repo_url="https://github.com/ahujasid/blender-mcp",
             schema_tokens=2800,
-            summary="Connects AI agents directly to a running Blender session over socket (:9876) for live 3D modeling.",
+            summary="Works exclusively with an open Blender session over socket (:9876) for live 3D modeling and scene editing.",
             details="Runs bpy commands inside an open Blender scene for modeling, UV unwrapping, material assignment, camera/light setup, and optional PolyHaven asset import.",
             when_to_use="Enable while Blender is open and you want live scene manipulation; disable when Blender is closed.",
             enabled=False,
@@ -530,7 +595,7 @@ def build_default_catalog() -> list[ToolSpec]:
             mcp_server_key="blender",
             mcp_command="uvx",
             mcp_args=["blender-mcp"],
-            tags=["modeling_3d", "free_local"],
+            tags=["blender:modeling_3d", "free_local"],
         ),
         ToolSpec(
             id="trellis",
@@ -553,7 +618,7 @@ def build_default_catalog() -> list[ToolSpec]:
             param_label="TRELLIS Install Folder",
             param_value=t_dir,
             param_help="Local installation directory containing TRELLIS runtime and model weights.",
-            tags=["modeling_3d", "shader_gpu", "free_local"],
+            tags=["modeling_3d", "free_local"],
         ),
         ToolSpec(
             id="gltf_transform",
@@ -575,7 +640,7 @@ def build_default_catalog() -> list[ToolSpec]:
             mcp_server_key="3d-asset-processing",
             mcp_command="npx",
             mcp_args=["-y", "3d-asset-processing-mcp"],
-            tags=["modeling_3d", "unity", "free_local"],
+            tags=["modeling_3d", "free_local"],
         ),
         ToolSpec(
             id="elevenlabs_mcp",
@@ -654,7 +719,7 @@ def build_default_catalog() -> list[ToolSpec]:
             mcp_server_key="context7",
             mcp_command="npx",
             mcp_args=["-y", "@upstash/context7-mcp"],
-            tags=["docs_search", "token_saver", "desktop_ui"],
+            tags=["docs_search", "token_saver", "coding_lsp"],
         ),
         ToolSpec(
             id="chrome_devtools",
@@ -664,7 +729,7 @@ def build_default_catalog() -> list[ToolSpec]:
             version="v0.18.0",
             repo_url="https://github.com/ChromeDevTools/chrome-devtools-mcp",
             schema_tokens=3400,
-            summary="Automates Chrome to inspect console errors, DOM layout, network requests, and Lighthouse performance.",
+            summary="For Chrome / Web projects only: inspects console errors, DOM layout, network requests, and Lighthouse performance.",
             details="Drives a live browser instance to verify responsive mobile layouts, Core Web Vitals, SEO metadata, broken links, and interactive UI flows.",
             when_to_use="Enable during web frontend debugging or pre-release Lighthouse/SEO audits; disable for desktop/game work.",
             enabled=False,
@@ -676,7 +741,7 @@ def build_default_catalog() -> list[ToolSpec]:
             mcp_server_key="chrome-devtools",
             mcp_command="npx",
             mcp_args=["-y", "chrome-devtools-mcp@latest"],
-            tags=["web_browser", "testing_qa", "free_local"],
+            tags=["web_browser", "chrome:testing_qa", "free_local"],
             options=[
                 CheckOption(
                     "headless_mode",
@@ -707,7 +772,7 @@ def get_default_tool_spec(tool_id: str) -> ToolSpec | None:
 # Turkish translations for built-in catalog entries (100% parity with English defaults above)
 _TR_TOOL_TEXT: dict[str, dict[str, Any]] = {
     "blender_skills": {
-        "summary": "Blender için 94 uzman SKILL.md rehberi kütüphanesi (modelleme, UV, materyal, ışıklandırma, motor dışa aktarımı).",
+        "summary": "Sadece Blender üretimi içindir: 94 uzman SKILL.md rehberi (modelleme, UV, materyal, ışıklandırma, motor dışa aktarımı).",
         "details": "Yapay zeka ajanlarına temiz topoloji, hard-surface, PBR materyal, ışıklandırma ve Unity/Unreal/Godot dışa aktarım standartlarını öğretir. Ayarlar penceresinden yalnızca o an gereken skill'leri seçerek bağlam tokenı tasarruf edebilirsiniz.",
         "when_to_use": "Blender'da 3D modelleme, sahne kurulumu veya materyal hazırlarken açın; yalnızca yazılım/web geliştirirken kapatın.",
     },
@@ -737,28 +802,28 @@ _TR_TOOL_TEXT: dict[str, dict[str, Any]] = {
         },
     },
     "unity_mcp": {
-        "summary": "Açık Unity Editörüne bağlanarak sahne hiyerarşisi, prefab, materyal ve bileşenleri yönetir.",
+        "summary": "Sadece açık Unity Editörü üzerinde çalışır: sahne hiyerarşisi, prefab, materyal ve bileşenleri yönetir.",
         "details": "Unity içindeki yerel HTTP köprüsü (:8080) üzerinden çalışır; yapay zekanın objeleri incelemesini, bileşen düzenlemesini ve konsol hatalarını okumasını sağlar.",
         "when_to_use": "Unity Editör açıkken sahne/editör otomasyonu için açın; Unity kapalıyken ~4.6K şema tokenı harcamaması için kapatın.",
         "param_label": "Unity HTTP Portu",
         "param_help": "Unity Editör içindeki MCP for Unity penceresiyle eşleşen yerel port (varsayılan: 8080).",
     },
     "unity_pipeline": {
-        "summary": "Unity 6 için arka planda hızlı C# Method-Reload, derleme, test ve Play doğrulaması.",
+        "summary": "Sadece Unity 6 projeleri içindir: arka planda hızlı C# Method-Reload, derleme, test ve Play doğrulaması yapar.",
         "details": "Tam Domain Reload beklemeleri yerine yalnızca değişen C# metotlarını yenileyip arka planda sahne ekran görüntüsü doğrulaması yapılmasını sağlar.",
         "when_to_use": "Unity 6 projelerinde sık C# iterasyonu yaparken açın; Unity dışı işlerde kapatın.",
         "param_label": "Unity Proje Klasörü",
         "param_help": "İçinde Assets ve Packages bulunan Unity proje kök klasörü.",
     },
     "renderdoc_mcp": {
-        "summary": "RenderDoc kare yakalama (.rdc) dosyalarından draw call, HLSL shader, CBuffer ve SRP Batcher analizi yapar.",
+        "summary": "RenderDoc (.rdc) kare kayıtlarında draw call, HLSL shader, CBuffer ve GPU darboğazlarını analiz eder.",
         "details": "Yapay zeka ajanlarının tahmin yürütmek yerine gerçek GPU durumunu, Constant Buffer değerlerini ve ara pass dokularını doğrudan .rdc kaydından okumasını sağlar.",
         "when_to_use": "Yalnızca grafik hatası, özel shader (HLSL/URP/HDRP) veya draw-call darboğazı incelerken açın.",
         "param_label": "Varsayılan .rdc Klasörü",
         "param_help": "RenderDoc kare yakalama (.rdc) dosyalarınızın bulunduğu varsayılan klasör.",
     },
     "blender_mcp": {
-        "summary": "Açık Blender oturumuna soket (:9876) üzerinden bağlanarak canlı 3D model üretir ve düzenler.",
+        "summary": "Sadece açık Blender oturumu üzerinde çalışır: soket (:9876) üzerinden canlı 3D model üretir ve sahneyi düzenler.",
         "details": "Açık Blender sahnesinde bpy komutları çalıştırarak modelleme, UV açma, materyal atama, kamera/ışık kurulumu ve isteğe bağlı PolyHaven indirmesi yapar.",
         "when_to_use": "Blender açıkken canlı sahne düzenlemesi yaptıracağınız zaman açın; Blender kapalıyken kapalı tutun.",
         "param_label": "Blender Soket Portu",
@@ -797,7 +862,7 @@ _TR_TOOL_TEXT: dict[str, dict[str, Any]] = {
         "vault_key_desc": "Context7 Docs API anahtarı (isteğe bağlı)",
     },
     "chrome_devtools": {
-        "summary": "Gerçek Chrome tarayıcısı üzerinden konsol hatalarını, DOM düzenini, ağ isteklerini ve Lighthouse hızını denetler.",
+        "summary": "Sadece Chrome / Web projeleri içindir: konsol hatalarını, DOM düzenini, ağ isteklerini ve Lighthouse hızını denetler.",
         "details": "Canlı tarayıcıda mobil uyumluluk, Core Web Vitals, SEO meta etiketleri, kırık linkler ve etkileşimli UI akışlarını test eder.",
         "when_to_use": "Web arayüzü ayıklarken veya yayın öncesi Lighthouse/SEO denetiminde açın; masaüstü/oyun projelerinde kapatın.",
         "options": {
@@ -945,25 +1010,25 @@ PROFILES: dict[str, dict[str, Any]] = {
         "title_key": "prof_desktop_coding_title",
         "desc_key": "prof_desktop_coding_desc",
         "enable": {"serena", "context7", "caveman"},
-        "tags": ["coding_lsp", "desktop_ui"],
+        "tags": ["coding_lsp", "desktop_ui", "docs_search"],
     },
     "unity_shader": {
         "title_key": "prof_unity_shader_title",
         "desc_key": "prof_unity_shader_desc",
         "enable": {"unity_mcp", "unity_pipeline", "renderdoc_mcp", "serena", "context7", "caveman"},
-        "tags": ["unity", "shader_gpu"],
+        "tags": ["unity:automation", "unity:testing_qa", "unity:coding_lsp", "unity:shader_gpu", "shader_gpu"],
     },
     "modeling_3d": {
         "title_key": "prof_modeling_3d_title",
         "desc_key": "prof_modeling_3d_desc",
         "enable": {"blender_mcp", "blender_skills", "trellis", "gltf_transform", "elevenlabs_mcp", "caveman"},
-        "tags": ["modeling_3d", "style_3d"],
+        "tags": ["blender:modeling_3d", "blender:style_3d", "modeling_3d", "audio_sfx"],
     },
     "web_security": {
         "title_key": "prof_web_security_title",
         "desc_key": "prof_web_security_desc",
         "enable": {"chrome_devtools", "bla", "serena", "context7", "caveman"},
-        "tags": ["web_browser", "security"],
+        "tags": ["web_browser", "chrome:testing_qa", "security"],
     },
     "token_saver_only": {
         "title_key": "prof_token_saver_only_title",

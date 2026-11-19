@@ -960,10 +960,28 @@ def _mix_hex(base_hex: str, tint_hex: str, ratio: float) -> str:
     return f"#{r:02x}{g:02x}{bl:02x}"
 
 
+APP_COLOR_ANCHORS: dict[str, tuple[str, str, str, str]] = {
+    "unity": ("#06b6d4", "#67e8f9", "#0891b2", "#155e75"),
+    "blender": ("#f59e0b", "#fde68a", "#d97706", "#92400e"),
+    "chrome": ("#0ea5e9", "#7dd3fc", "#0369a1", "#0c4a6e"),
+    "godot": ("#38bdf8", "#bae6fd", "#0284c7", "#075985"),
+    "unreal": ("#8b5cf6", "#c4b5fd", "#7c3aed", "#5b21b6"),
+    "figma": ("#d946ef", "#f0abfc", "#c026d3", "#86198f"),
+    "blockbench": ("#14b8a6", "#5eead4", "#0d9488", "#115e59"),
+    "docker": ("#2563eb", "#93c5fd", "#1d4ed8", "#1e3a8a"),
+    "obsidian": ("#a855f7", "#d8b4fe", "#9333ea", "#6b21a8"),
+    "notion": ("#6366f1", "#a5b4fc", "#4f46e5", "#3730a3"),
+    "jupyter": ("#f97316", "#fdba74", "#ea580c", "#9a3412"),
+}
+
+
+def _resolve_tag_anchor(tag_id: str) -> tuple[str, str, str, str]:
+    base_id = tag_id.split(":", 1)[1] if ":" in tag_id else tag_id
+    return TAG_COLOR_ANCHORS.get(base_id, ("#3b82f6", "#93c5fd", "#2563eb", "#1e40af"))
+
+
 def _tag_visual_tokens(tag_id: str, is_highlighted: bool, is_light: bool) -> tuple[str, str, str, str, str, int]:
-    acc_d, txt_d, acc_l, txt_l = TAG_COLOR_ANCHORS.get(
-        tag_id, ("#3b82f6", "#93c5fd", "#2563eb", "#1e40af")
-    )
+    acc_d, txt_d, acc_l, txt_l = _resolve_tag_anchor(tag_id)
     if is_light:
         if is_highlighted:
             bg = _mix_hex("#ffffff", acc_l, 0.17)
@@ -1018,7 +1036,10 @@ def tag_pill_qss(tag_id: str, is_highlighted: bool = False, is_light: bool = Fal
 
 def active_tag_combo_qss(tag_id: str, is_light: bool = False) -> str:
     """Highlight the top tag filter QComboBox in the selected tag's signature color when filtered."""
-    if not tag_id or tag_id == "ALL" or tag_id not in TAG_COLOR_ANCHORS:
+    if not tag_id or tag_id == "ALL":
+        return ""
+    base_id = tag_id.split(":", 1)[1] if ":" in tag_id else tag_id
+    if base_id not in TAG_COLOR_ANCHORS:
         return ""
     bg, border, fg, _h_bg, _h_border, _w = _tag_visual_tokens(tag_id, True, is_light)
     url = _resolve_asset_url("chevron_light.png" if is_light else "chevron_dark.png")
@@ -1040,10 +1061,8 @@ def active_tag_combo_qss(tag_id: str, is_light: bool = False) -> str:
 
 def wizard_chip_qss(tag_id: str, is_light: bool, is_benefit: bool = False) -> str:
     """Return checkable QPushButton QSS for ProfileWizardDialog: calm muted idle, glowing when checked."""
-    acc_d, txt_d, acc_l, txt_l = TAG_COLOR_ANCHORS.get(
-        tag_id, ("#3b82f6", "#93c5fd", "#2563eb", "#1e40af")
-    )
-    pad = "5px 14px" if is_benefit else "5px 9px"
+    acc_d, txt_d, acc_l, txt_l = _resolve_tag_anchor(tag_id)
+    pad = "5px 15px" if is_benefit else "4px 12px"
     if is_light:
         idle_bg = _mix_hex("#f8fafc", acc_l, 0.035)
         idle_bd = _mix_hex("#dbe2ec", acc_l, 0.18)
@@ -1064,8 +1083,38 @@ def wizard_chip_qss(tag_id: str, is_light: bool, is_benefit: bool = False) -> st
         chk_fg = txt_d
     return (
         f"QPushButton {{ background-color: {idle_bg}; border: 1px solid {idle_bd}; border-radius: 6px; "
-        f"color: {idle_fg}; padding: {pad}; font-size: 11px; font-weight: 500; }}"
+        f"color: {idle_fg}; padding: {pad}; font-size: 11px; font-weight: 600; }}"
         f"QPushButton:hover {{ background-color: {hov_bg}; border-color: {chk_bd}; color: {hov_fg}; }}"
+        f"QPushButton:checked {{ background-color: {chk_bg}; border: 1px solid {chk_bd}; "
+        f"color: {chk_fg}; font-weight: 600; }}"
+    )
+
+
+def app_chip_qss(app_id: str, is_light: bool) -> str:
+    """Return checkable header button QSS for an App-Specific row (e.g. Unity, Blender, Chrome)."""
+    acc_d, txt_d, acc_l, txt_l = APP_COLOR_ANCHORS.get(
+        app_id, ("#3b82f6", "#93c5fd", "#2563eb", "#1e40af")
+    )
+    if is_light:
+        idle_bg = _mix_hex("#f1f5f9", acc_l, 0.07)
+        idle_bd = _mix_hex("#cbd5e1", acc_l, 0.28)
+        idle_fg = _mix_hex("#334155", txt_l, 0.40)
+        hov_bg = _mix_hex("#f8fafc", acc_l, 0.15)
+        chk_bg = _mix_hex("#ffffff", acc_l, 0.22)
+        chk_bd = acc_l
+        chk_fg = txt_l
+    else:
+        idle_bg = _mix_hex("#121b28", acc_d, 0.08)
+        idle_bd = _mix_hex("#223044", acc_d, 0.28)
+        idle_fg = _mix_hex("#94a3b8", txt_d, 0.38)
+        hov_bg = _mix_hex("#162234", acc_d, 0.18)
+        chk_bg = _mix_hex("#0b1017", acc_d, 0.36)
+        chk_bd = acc_d
+        chk_fg = txt_d
+    return (
+        f"QPushButton {{ background-color: {idle_bg}; border: 1px solid {idle_bd}; border-radius: 6px; "
+        f"color: {idle_fg}; padding: 4px 12px; font-size: 11px; font-weight: 600; }}"
+        f"QPushButton:hover {{ background-color: {hov_bg}; border-color: {chk_bd}; }}"
         f"QPushButton:checked {{ background-color: {chk_bg}; border: 1px solid {chk_bd}; "
         f"color: {chk_fg}; font-weight: 700; }}"
     )

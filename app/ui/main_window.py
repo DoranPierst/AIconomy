@@ -137,6 +137,10 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, QMainWindow):
         self.bridge.dcc_done.connect(self._on_dcc_done)
         self.bridge.port_kill_done.connect(self._on_port_kill_done)
         self.bridge.runtime_transition_done.connect(self._on_runtime_transition_done)
+        self.bridge.lib_install_progress.connect(self._on_lib_install_progress)
+        self.bridge.lib_install_item_done.connect(self._on_lib_install_item_done)
+        self.bridge.lib_install_all_done.connect(self._on_lib_install_all_done)
+        self._installing_tool_ids: set[str] = set()
 
         self.runtime_started = False
         self._runtime_state = "probing"  # probing | stopped | starting | running | stopping
@@ -1366,10 +1370,20 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, QMainWindow):
             restart_running=(tool.id in ("serena", "unity_mcp") and tool.enabled),
         )
 
-    def add_tool_to_workspace(self, tool: ToolSpec) -> None:
-        """Add a curated library tool to the active Tools workspace with ZERO external downloads."""
+    def install_and_add_tool(self, tool: ToolSpec) -> None:
+        """Download & install an uninstalled library plugin onto the PC, then add it to the Tools workspace."""
         if getattr(tool, "in_workspace", True):
             return
+        if getattr(tool, "installed", False):
+            self.add_tool_to_workspace(tool)
+            return
+        self._run_library_install([tool], enable_after=False)
+
+    def add_tool_to_workspace(self, tool: ToolSpec) -> None:
+        """Add an installed tool to the active Tools workspace."""
+        if getattr(tool, "in_workspace", True):
+            return
+        tool.installed = True
         tool.in_workspace = True
         tool.enabled = False
         tool.health_state = "off"
@@ -1498,13 +1512,18 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, QMainWindow):
         blender_skills: set[str],
         selected_tags: list[str] | None = None,
     ) -> None:
-        """Save a task-wizard profile to custom presets and immediately activate it (0 downloads)."""
+        """Save a task-wizard profile, activate installed tools, and download any newly selected library tools."""
+        need_download: list[ToolSpec] = []
         for t in self.tools:
             if t.id in enabled_tool_ids and not getattr(t, "in_workspace", True):
-                t.in_workspace = True
-                t.live_location_detail = resolve_disk_location(
-                    t, self.projects_map, self._latest_live_map, lang=self.lang
-                )
+                if not getattr(t, "installed", False) and self.sync_live_environment:
+                    need_download.append(t)
+                else:
+                    t.installed = True
+                    t.in_workspace = True
+                    t.live_location_detail = resolve_disk_location(
+                        t, self.projects_map, self._latest_live_map, lang=self.lang
+                    )
 
         missing_keys = self._missing_required_vault_keys()
         for t in self.tools:
@@ -1569,6 +1588,9 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, QMainWindow):
         self._refresh_plugins_tab()
         self._refresh_logs_tab()
         self._sync_live_environment_async(target_tools=list(self.tools))
+        if need_download:
+            self.tabs.setCurrentIndex(1)
+            self._run_library_install(need_download, enable_after=True)
 
     # --- PERIODIC WATCHERS & HEALTH SCAN ---
     def _on_second_tick(self) -> None:

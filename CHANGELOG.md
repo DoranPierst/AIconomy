@@ -13,11 +13,11 @@ Major feature, UX, and catalog release introducing passive runtime control, a cu
 
 ### Token Analytics, Priority Tags & Task Profile Wizard
 - **Clickable Token Usage Breakdown:** Clicking the footer token badge opens an interactive breakdown dialog showing per-client 200K context load (`AGY`, `CDX`, `CLD`, `CUR`), aligned percentage share bars, **Token Saver** vs **Capability Schema** roles, and instant inline toggles.
-- **Priority-Ordered 18-Color Capability Tags:** Every tool's tags are ordered strictly by core capability (e.g. `3D Modeling` first on Blender, `Unity` first on Unity MCP, `Shader & GPU` first on RenderDoc, `Coding & LSP` first on Serena, `Token Saver` first on Caveman), with 18 distinct muted semantic colors that **glow only when selected from the top profile, tag filter, or profile wizard**.
-- **`+ Create Profile` Task Wizard & Refreshed Profiles:** Select what you are working on by tag to auto-filter matching tools (from your workspace or all 100 library tools), preview live schema token impact, and save/apply custom profiles in one click, alongside 5 refreshed built-in profiles and 6 Blender 94-skill subgroups.
+- **General vs. Dynamic App-Specific Scoped Tags:** Separated general cross-project tags (`Coding & LSP`, `Desktop & UI`, `Testing & QA`, `Automation`, etc.) from host-application scoped tags (`Unity: Testing & QA`, `Unity: Automation`, `Blender: 3D Modeling`, `Chrome: Testing & QA`, `Godot`, `Unreal`, `Figma`, etc.) in calm muted per-tag hues that glow only when selected.
+- **`+ Create Profile` 3-Tier Task Wizard:** Organizes filters into **Advantage**, **General Tags**, and dynamic **App-Specific Rows** built from your installed plugins (click an app name like `Unity` or `Blender` to toggle its entire row at once, or pick individual sub-tags with zero cross-engine false positives).
 
-### Curated 100-Tool Library & Dynamic DPAPI Vault
-- **Two-Tier Workspace + 100 Curated Tools (Zero Downloads):** `Tools` displays only your active workspace tools (`14` starter tools out of the box), while `Plugins` offers a searchable, category/tag/status-filterable library of **100** Windows-compatible MCP/Skill/Rule tools across 10 categories. Clicking **+ Add to Workspace** adds the config definition with **zero background package downloads**.
+### Curated 100-Tool Library & On-Demand Installer
+- **Uninstalled 86-Tool Library + One-Click `Download & Install`:** `Tools` displays your installed workspace tools (`14` starter tools out of the box), while `Plugins` lists **86** additional Windows-compatible MCP/Skill/Rule tools in an uninstalled library state (`Not downloaded`). Clicking **Download & Install** downloads and installs the package (`npm` / `uv` / `git`) in the background with live progress and adds it to `Tools`.
 - **Dynamic Windows DPAPI Vault:** `Settings > API Keys` automatically surfaces encrypted DPAPI inputs in a scrollable view for any workspace tool that supports an API key while preserving previously saved keys.
 
 ## [1.4.0] - 2026-11-19

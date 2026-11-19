@@ -31,7 +31,12 @@ from ...catalog import (
     tool_kind_label,
 )
 from ...i18n import tr
-from ...plugins import PluginCheckResult, check_all_tools_updates_parallel, update_single_tool
+from ...plugins import (
+    PluginCheckResult,
+    check_all_tools_updates_parallel,
+    install_library_tool,
+    update_single_tool,
+)
 from ...tokens import fmt_tokens
 from ...updater import parse_semver
 from ..dialogs.add_repo import AddRepoDialog
@@ -155,11 +160,13 @@ class PluginsTabMixin:
         self.plug_cat_cmb.blockSignals(False)
 
         cur_tag = self.plug_tag_cmb.currentData() if self.plug_tag_cmb.count() else "ALL"
+        present_lib_tags = {tg for t in self.tools for tg in t.tags}
         self.plug_tag_cmb.blockSignals(True)
         self.plug_tag_cmb.clear()
         self.plug_tag_cmb.addItem(tr(self.lang, "tag_all"), "ALL")
         for tid in ALL_TAG_IDS:
-            self.plug_tag_cmb.addItem(tag_label(tid, self.lang), tid)
+            if tid in present_lib_tags:
+                self.plug_tag_cmb.addItem(tag_label(tid, self.lang), tid)
         idx_t = self.plug_tag_cmb.findData(cur_tag)
         self.plug_tag_cmb.setCurrentIndex(max(0, idx_t))
         self.plug_tag_cmb.blockSignals(False)
@@ -279,6 +286,7 @@ class PluginsTabMixin:
                 shown=len(filtered),
                 tot=len(self.tools),
                 ws=ws_cnt,
+                lib=lib_cnt,
             )
             if upd_count > 0:
                 upd_txt = tr(self.lang, "plug_banner_updates", n=upd_count)
@@ -302,6 +310,11 @@ class PluginsTabMixin:
             "background-color: #ecfdf5; color: #047857; border: 1px solid #a7f3d0; border-radius: 4px; padding: 2px 7px; font-size: 10px; font-weight: 700;"
             if is_light
             else "background-color: #0d281e; color: #6ee7b7; border: 1px solid #14533c; border-radius: 4px; padding: 2px 7px; font-size: 10px; font-weight: 700;"
+        )
+        not_dl_badge_style = (
+            "background-color: #f1f5f9; color: #64748b; border: 1px solid #cbd5e1; border-radius: 4px; padding: 2px 7px; font-size: 10px; font-weight: 600;"
+            if is_light
+            else "background-color: #141c28; color: #94a3b8; border: 1px solid #263549; border-radius: 4px; padding: 2px 7px; font-size: 10px; font-weight: 600;"
         )
 
         if not filtered:
@@ -425,12 +438,31 @@ class PluginsTabMixin:
             row.addWidget(copy_cmd)
 
             if not in_ws:
-                add_btn = QPushButton(tr(self.lang, "plug_btn_add_ws").replace("&", "&&"))
-                add_btn.setObjectName("primaryBtn")
-                add_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-                add_btn.setToolTip(tr(self.lang, "plug_btn_add_ws_tip"))
-                add_btn.clicked.connect(lambda _=False, tool_obj=t: self.add_tool_to_workspace(tool_obj))
-                row.addWidget(add_btn)
+                is_inst = bool(getattr(t, "installed", False))
+                installing_ids = getattr(self, "_installing_tool_ids", set())
+                is_busy_this = t.id in installing_ids
+                if not is_inst:
+                    nd_lbl = QLabel(tr(self.lang, "plug_badge_not_dl"))
+                    nd_lbl.setFixedHeight(26)
+                    nd_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                    nd_lbl.setStyleSheet(not_dl_badge_style)
+                    row.addWidget(nd_lbl, alignment=Qt.AlignmentFlag.AlignVCenter)
+
+                    dl_txt = tr(self.lang, "plug_btn_installing" if is_busy_this else "plug_btn_install_add")
+                    dl_btn = QPushButton(dl_txt.replace("&", "&&"))
+                    dl_btn.setObjectName("primaryBtn")
+                    dl_btn.setEnabled(not self.updating_busy and not is_busy_this)
+                    dl_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+                    dl_btn.setToolTip(tr(self.lang, "plug_btn_install_add_tip"))
+                    dl_btn.clicked.connect(lambda _=False, tool_obj=t: self.install_and_add_tool(tool_obj))
+                    row.addWidget(dl_btn)
+                else:
+                    add_btn = QPushButton(tr(self.lang, "plug_btn_add_ws").replace("&", "&&"))
+                    add_btn.setObjectName("primaryBtn")
+                    add_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+                    add_btn.setToolTip(tr(self.lang, "plug_btn_add_ws_tip"))
+                    add_btn.clicked.connect(lambda _=False, tool_obj=t: self.add_tool_to_workspace(tool_obj))
+                    row.addWidget(add_btn)
             else:
                 ws_lbl = QLabel(tr(self.lang, "plug_badge_in_ws"))
                 ws_lbl.setFixedHeight(26)
@@ -635,5 +667,138 @@ class PluginsTabMixin:
         else:
             self.set_status(tr(self.lang, "msg_plug_update_ok", n=ok_cnt))
         self._save_state()
+        self._refresh_logs_tab()
+
+    def _run_library_install(self, target_tools: list[ToolSpec], enable_after: bool = False) -> None:
+        """Download & install library tools on demand (never runs subprocesses when sync_live_environment=False)."""
+        if not target_tools:
+            return
+        if not self.sync_live_environment:
+            for t in target_tools:
+                t.installed = True
+                self.add_tool_to_workspace(t)
+                if enable_after:
+                    t.enabled = True
+                    if not any(t.clients.values()):
+                        t.clients["AGY"] = True
+            self._save_state()
+            self._refresh_table()
+            self._refresh_plugins_tab()
+            return
+
+        if self.updating_busy:
+            return
+        self.updating_busy = True
+        self.btn_plugins_check.setEnabled(False)
+        self.btn_plugins_update_all.setEnabled(False)
+        self.btn_jump_err_logs.hide()
+        for t in target_tools:
+            self._installing_tool_ids.add(t.id)
+
+        total = len(target_tools)
+        self.update_prog.setMaximum(total)
+        self.update_prog.setValue(0)
+        self.update_prog.setFormat(tr(self.lang, "plug_prog_dl_init", tot=total))
+        self.update_prog.show()
+        self.set_status(tr(self.lang, "msg_lib_installing", n=total))
+        self._refresh_plugins_tab()
+
+        wanted_skills = set(self.active_skills)
+        items = copy.deepcopy(target_tools)
+        lang_snap = self.lang
+
+        def worker() -> None:
+            ok_cnt = 0
+            fail_cnt = 0
+            for idx, tool_snap in enumerate(items, start=1):
+                safe_emit(self.bridge.lib_install_progress, idx, total, tool_snap.name)
+                ok, new_ver, msg, raw_log = install_library_tool(
+                    tool_snap, wanted_skills, lang=lang_snap
+                )
+                safe_emit(
+                    self.bridge.lib_install_item_done,
+                    tool_snap.id,
+                    ok,
+                    new_ver,
+                    msg,
+                    raw_log,
+                    enable_after,
+                )
+                if ok:
+                    ok_cnt += 1
+                else:
+                    fail_cnt += 1
+            safe_emit(self.bridge.lib_install_all_done, ok_cnt, fail_cnt)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_lib_install_progress(self, idx: int, total: int, tool_name: str) -> None:
+        self.update_prog.setValue(idx - 1)
+        step = tr(self.lang, "plug_prog_dl_step", idx=idx, tot=total, name=tool_name)
+        self.update_prog.setFormat(step)
+        self.set_status(step)
+
+    def _on_lib_install_item_done(
+        self,
+        tool_id: str,
+        ok: bool,
+        new_ver: str,
+        msg: str,
+        raw_log: str,
+        enable_after: bool,
+    ) -> None:
+        self._installing_tool_ids.discard(tool_id)
+        tool_obj = next((t for t in self.tools if t.id == tool_id), None)
+        t_name = tool_obj.name if tool_obj else tool_id
+        if ok and tool_obj is not None:
+            if new_ver:
+                clean_v = new_ver.strip().lstrip("vV")
+                if clean_v:
+                    tool_obj.version = f"v{clean_v}"
+            tool_obj.installed = True
+            self.add_tool_to_workspace(tool_obj)
+            if enable_after:
+                missing_keys = self._missing_required_vault_keys()
+                tool_obj.enabled = True
+                if not any(tool_obj.clients.values()):
+                    tool_obj.clients["AGY"] = True
+                if tool_obj.vault_key_required and tool_obj.vault_key_name and tool_obj.vault_key_name in missing_keys:
+                    tool_obj.health_state = "warn"
+                    tool_obj.last_ping = tr(self.lang, "st_missing_key")
+                else:
+                    tool_obj.health_state = "ok"
+                    tool_obj.last_ping = tr(self.lang, "st_ready")
+                self._sync_live_environment_async(target_tools=[tool_obj])
+            self.logs.add(
+                "INFO",
+                t_name,
+                tr(self.lang, "log_plug_installed", ver=tool_obj.version, msg=msg),
+                raw_log,
+            )
+        else:
+            self.logs.add("ERR", t_name, tr(self.lang, "log_plug_inst_fail", msg=msg), raw_log)
+
+    def _on_lib_install_all_done(self, ok_cnt: int, fail_cnt: int) -> None:
+        self.updating_busy = False
+        self._installing_tool_ids.clear()
+        self.btn_plugins_check.setEnabled(True)
+        self.update_prog.setValue(self.update_prog.maximum())
+        self.update_prog.setFormat(tr(self.lang, "plug_prog_dl_done", ok=ok_cnt, fail=fail_cnt))
+        QTimer.singleShot(3500, self.update_prog.hide)
+
+        if fail_cnt > 0:
+            self.plugins_banner_lbl.setText(tr(self.lang, "plug_banner_err", fail=fail_cnt, ok=ok_cnt))
+            self.plugins_banner_lbl.setStyleSheet("color: #ef4444; font-weight: 600;")
+            self.btn_jump_err_logs.show()
+            self.set_status(tr(self.lang, "msg_lib_install_err", fail=fail_cnt))
+        elif ok_cnt > 1:
+            self.set_status(tr(self.lang, "msg_lib_install_ok", n=ok_cnt))
+
+        self._save_state()
+        self._rebuild_tag_filter_combo()
+        self._rebuild_plugin_filter_combos()
+        self._update_tab_titles()
+        self._refresh_table()
+        self._refresh_plugins_tab()
         self._refresh_logs_tab()
         self.run_health_scan()

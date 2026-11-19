@@ -325,6 +325,10 @@ class StateStore:
                 t = by_id[tid]
                 if "in_workspace" in tdata:
                     t.in_workspace = bool(tdata["in_workspace"])
+                if "installed" in tdata:
+                    t.installed = bool(tdata["installed"])
+                elif t.in_workspace:
+                    t.installed = True
                 t.enabled = bool(tdata.get("enabled", t.enabled))
                 if not t.in_workspace:
                     t.enabled = False
@@ -376,6 +380,7 @@ class StateStore:
                         vault_key_required=bool(tdata.get("vault_key_required", False)),
                         vault_key_desc=str(tdata.get("vault_key_desc", "")),
                         in_workspace=bool(tdata.get("in_workspace", True)),
+                        installed=bool(tdata.get("installed", True)),
                         category=str(tdata.get("category", "coding_dev")),
                         install_cmd=tdata.get("install_cmd", ""),
                         mcp_server_key=tdata.get("mcp_server_key", tid),
@@ -403,6 +408,7 @@ class StateStore:
                 "name": t.name,
                 "version": t.version,
                 "in_workspace": bool(getattr(t, "in_workspace", True)),
+                "installed": bool(getattr(t, "installed", getattr(t, "in_workspace", True))),
                 "enabled": bool(t.enabled and getattr(t, "in_workspace", True)),
                 "clients": dict(t.clients),
                 "project_scope": t.project_scope,

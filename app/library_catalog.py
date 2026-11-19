@@ -12,6 +12,7 @@ def _spec(**kwargs: Any) -> "ToolSpec":
     from .catalog import ToolSpec
 
     kwargs.setdefault("in_workspace", False)
+    kwargs.setdefault("installed", False)
     kwargs.setdefault("enabled", False)
     kwargs.setdefault("has_gear", bool(kwargs.get("param_label") or kwargs.get("vault_key_name")))
     return ToolSpec(**kwargs)
@@ -219,7 +220,7 @@ def build_library_catalog() -> list["ToolSpec"]:
             mcp_server_key="jupyter",
             mcp_command="uvx",
             mcp_args=["jupyter-mcp-server"],
-            tags=["coding_lsp", "database"],
+            tags=["jupyter:coding_lsp", "database"],
         ),
         _spec(
             id="nx_mcp",
@@ -369,7 +370,7 @@ def build_library_catalog() -> list["ToolSpec"]:
             mcp_server_key="github-actions",
             mcp_command="npx",
             mcp_args=["-y", "github-actions-mcp-server"],
-            tags=["git_repo", "cloud_devops", "testing_qa"],
+            tags=["git_repo", "cloud_devops"],
         ),
         _spec(
             id="git_ingest_mcp",
@@ -407,7 +408,7 @@ def build_library_catalog() -> list["ToolSpec"]:
             mcp_server_key="playwright",
             mcp_command="npx",
             mcp_args=["-y", "@playwright/mcp@latest"],
-            tags=["web_browser", "token_saver", "free_local"],
+            tags=["web_browser", "chrome:testing_qa", "free_local"],
         ),
         _spec(
             id="puppeteer_mcp",
@@ -424,7 +425,7 @@ def build_library_catalog() -> list["ToolSpec"]:
             mcp_server_key="puppeteer",
             mcp_command="npx",
             mcp_args=["-y", "@modelcontextprotocol/server-puppeteer"],
-            tags=["web_browser", "testing_qa", "free_local"],
+            tags=["web_browser", "chrome:testing_qa", "free_local"],
         ),
         _spec(
             id="fetch_mcp",
@@ -980,7 +981,7 @@ def build_library_catalog() -> list["ToolSpec"]:
             mcp_server_key="docker",
             mcp_command="uvx",
             mcp_args=["mcp-server-docker"],
-            tags=["cloud_devops", "automation", "free_local"],
+            tags=["cloud_devops", "docker:automation", "free_local"],
         ),
         _spec(
             id="kubernetes_mcp",
@@ -1062,7 +1063,7 @@ def build_library_catalog() -> list["ToolSpec"]:
             mcp_server_key="godot",
             mcp_command="npx",
             mcp_args=["-y", "@coding-solo/godot-mcp"],
-            tags=["modeling_3d", "automation", "free_local"],
+            tags=["godot:modeling_3d", "godot:automation", "free_local"],
         ),
         _spec(
             id="unreal_mcp",
@@ -1072,14 +1073,14 @@ def build_library_catalog() -> list["ToolSpec"]:
             version="v0.2.4",
             repo_url="https://github.com/chongdashu/unreal-mcp",
             schema_tokens=2900,
-            summary="Controls Unreal Engine 5 Editor actors, Blueprints, materials, and Python editor scripts.",
+            summary="Exclusively for Unreal Engine 5: controls Editor actors, Blueprints, materials, and Python scripts.",
             details="Connects over TCP to the UnrealMCP Editor plugin for spawning actors, inspecting level hierarchies, and automating UE5 Blueprints.",
             when_to_use="Enable while Unreal Engine 5 Editor is open for level or Blueprint automation.",
             install_cmd="uvx unreal-mcp",
             mcp_server_key="unreal-engine",
             mcp_command="uvx",
             mcp_args=["unreal-mcp"],
-            tags=["modeling_3d", "shader_gpu", "free_local"],
+            tags=["unreal:modeling_3d", "unreal:shader_gpu", "free_local"],
         ),
         _spec(
             id="sketchfab_mcp",
@@ -1116,7 +1117,7 @@ def build_library_catalog() -> list["ToolSpec"]:
             mcp_server_key="blockbench",
             mcp_command="npx",
             mcp_args=["-y", "blockbench-mcp"],
-            tags=["modeling_3d", "style_3d", "free_local"],
+            tags=["blockbench:modeling_3d", "blockbench:style_3d", "free_local"],
         ),
         _spec(
             id="ffmpeg_media_mcp",
@@ -1177,7 +1178,7 @@ def build_library_catalog() -> list["ToolSpec"]:
             mcp_server_key="figma-context",
             mcp_command="npx",
             mcp_args=["-y", "figma-developer-mcp", "--stdio"],
-            tags=["design_ui", "desktop_ui", "token_saver"],
+            tags=["figma:design_ui", "token_saver"],
         ),
         _spec(
             id="shadcn_ui_mcp",
@@ -1313,7 +1314,7 @@ def build_library_catalog() -> list["ToolSpec"]:
             mcp_server_key="notion",
             mcp_command="npx",
             mcp_args=["-y", "@notionhq/notion-mcp-server"],
-            tags=["docs_search", "automation"],
+            tags=["notion:docs_search", "notion:automation"],
         ),
         _spec(
             id="linear_mcp",
@@ -1402,7 +1403,7 @@ def build_library_catalog() -> list["ToolSpec"]:
             mcp_server_key="obsidian",
             mcp_command="npx",
             mcp_args=["-y", "mcp-obsidian"],
-            tags=["docs_search", "free_local"],
+            tags=["obsidian:docs_search", "free_local"],
         ),
         _spec(
             id="todoist_mcp",
@@ -1443,7 +1444,7 @@ def build_library_catalog() -> list["ToolSpec"]:
             mcp_server_key="arxiv",
             mcp_command="uvx",
             mcp_args=["arxiv-mcp-server"],
-            tags=["docs_search", "shader_gpu", "free_local"],
+            tags=["docs_search", "free_local"],
         ),
         _spec(
             id="wikipedia_mcp",
@@ -1600,7 +1601,7 @@ def build_library_catalog() -> list["ToolSpec"]:
             mcp_server_key="grafana",
             mcp_command="uvx",
             mcp_args=["mcp-grafana"],
-            tags=["testing_qa", "cloud_devops"],
+            tags=["cloud_devops", "testing_qa"],
         ),
         _spec(
             id="datadog_mcp",
@@ -1620,7 +1621,7 @@ def build_library_catalog() -> list["ToolSpec"]:
             mcp_server_key="datadog",
             mcp_command="npx",
             mcp_args=["-y", "@winor30/mcp-server-datadog"],
-            tags=["testing_qa", "cloud_devops"],
+            tags=["cloud_devops", "testing_qa"],
         ),
         _spec(
             id="stripe_mcp",
@@ -1640,7 +1641,7 @@ def build_library_catalog() -> list["ToolSpec"]:
             mcp_server_key="stripe",
             mcp_command="npx",
             mcp_args=["-y", "@stripe/mcp", "--tools=all"],
-            tags=["web_browser", "security", "testing_qa"],
+            tags=["web_browser", "security"],
         ),
         _spec(
             id="vitest_qa_mcp",

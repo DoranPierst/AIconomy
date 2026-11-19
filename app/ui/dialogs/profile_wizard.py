@@ -1,4 +1,4 @@
-"""Task-based Profile Creation Wizard ('Yapacağınız İşi Seçin' / 'Pick Your Task', emoji-free, EN & TR)."""
+"""Task-based Profile Creation Wizard with General + Dynamic App-Specific Tags (emoji-free, EN & TR)."""
 from __future__ import annotations
 
 import copy
@@ -21,25 +21,30 @@ from PySide6.QtWidgets import (
 )
 
 from ...catalog import (
+    APP_SCOPE_IDS,
     BENEFIT_TAG_IDS,
     BLENDER_SKILL_INDEX_TOKENS,
-    DOMAIN_TAG_IDS,
+    GENERAL_TAG_IDS,
+    SCOPED_APP_TAG_IDS,
     ToolSpec,
+    app_scope_label,
     is_benefit_tag,
     localized_tool_text,
     recommended_blender_skills_for_tags,
+    split_scoped_tag,
     tag_label,
+    tag_sub_label,
 )
 from ...i18n import tr
 from ...tokens import CONTEXT_WINDOW_TOKENS, compute_token_breakdown, fmt_tokens
-from ..theme import tag_pill_qss, wizard_chip_qss
+from ..theme import app_chip_qss, tag_pill_qss, wizard_chip_qss
 
 if TYPE_CHECKING:
     from ..main_window import MainWindow
 
 
 class ProfileWizardDialog(QDialog):
-    """Build, name, save, and apply a custom profile by selecting task and advantage tags."""
+    """Build, name, save, and apply a custom profile by selecting general or app-specific tags."""
 
     def __init__(self, parent: "MainWindow") -> None:
         super().__init__(parent)
@@ -66,33 +71,32 @@ class ProfileWizardDialog(QDialog):
         self.result_tags: list[str] = []
 
         self.setWindowTitle(tr(self.lang, "wiz_title"))
-        self.setMinimumSize(820, 580)
-        self.resize(900, 660)
+        self.setMinimumSize(860, 620)
+        self.resize(940, 710)
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(14, 14, 14, 12)
-        root.setSpacing(10)
+        root.setContentsMargins(14, 12, 14, 12)
+        root.setSpacing(9)
 
-        # 1. TAG SELECTION CARD
+        # 1. THREE-TIER TAG SELECTION CARD (Advantage -> General -> App-Specific)
         tags_card = QFrame()
         tags_card.setObjectName("card")
         tc_lay = QVBoxLayout(tags_card)
-        tc_lay.setContentsMargins(12, 10, 12, 10)
-        tc_lay.setSpacing(8)
+        tc_lay.setContentsMargins(12, 9, 12, 9)
+        tc_lay.setSpacing(7)
 
+        is_light_init = parent.meta.get("theme", "dark") == "light"
+        self.tag_buttons: dict[str, QPushButton] = {}
+        self.app_header_buttons: dict[str, QPushButton] = {}
+        self.app_subtags_map: dict[str, list[str]] = {}
+
+        # Tier A: Advantage tags
         adv_row = QHBoxLayout()
         adv_row.setSpacing(8)
         adv_row.addWidget(QLabel(f"<b>{tr(self.lang, 'wiz_adv_lbl')}</b>"))
 
-        is_light_init = parent.meta.get("theme", "dark") == "light"
-        self.tag_buttons: dict[str, QPushButton] = {}
-        tag_counts = {
-            tid: sum(1 for t in self.workspace_tools if tid in t.tags)
-            for tid in (BENEFIT_TAG_IDS + DOMAIN_TAG_IDS)
-        }
-
         for tid in BENEFIT_TAG_IDS:
-            cnt = tag_counts[tid]
+            cnt = sum(1 for t in self.workspace_tools if tid in t.tags)
             lbl = f"{tag_label(tid, self.lang)} ({cnt})" if cnt else tag_label(tid, self.lang)
             btn = QPushButton(lbl.replace("&", "&&"))
             btn.setStyleSheet(wizard_chip_qss(tid, is_light=is_light_init, is_benefit=True))
@@ -104,13 +108,13 @@ class ProfileWizardDialog(QDialog):
         adv_row.addStretch()
         tc_lay.addLayout(adv_row)
 
+        # Tier B: General cross-project tags (3 rows x 5 cols)
         tc_lay.addWidget(QLabel(f"<b>{tr(self.lang, 'wiz_task_lbl')}</b>"))
-
-        dom_grid = QGridLayout()
-        dom_grid.setSpacing(6)
-        cols = 4
-        for idx, tid in enumerate(DOMAIN_TAG_IDS):
-            cnt = tag_counts[tid]
+        gen_grid = QGridLayout()
+        gen_grid.setSpacing(5)
+        cols = 5
+        for idx, tid in enumerate(GENERAL_TAG_IDS):
+            cnt = sum(1 for t in self.workspace_tools if tid in t.tags)
             lbl = f"{tag_label(tid, self.lang)} ({cnt})" if cnt else tag_label(tid, self.lang)
             btn = QPushButton(lbl.replace("&", "&&"))
             btn.setStyleSheet(wizard_chip_qss(tid, is_light=is_light_init, is_benefit=False))
@@ -120,8 +124,26 @@ class ProfileWizardDialog(QDialog):
                 btn.setToolTip(tr(self.lang, "wiz_tag_empty_tip"))
             btn.clicked.connect(lambda checked, tag_code=tid: self._on_tag_clicked(tag_code, checked))
             self.tag_buttons[tid] = btn
-            dom_grid.addWidget(btn, idx // cols, idx % cols)
-        tc_lay.addLayout(dom_grid)
+            gen_grid.addWidget(btn, idx // cols, idx % cols)
+        tc_lay.addLayout(gen_grid)
+
+        # Tier C: Dynamic App-Specific rows built from installed/active pool plugins
+        self.app_sec_lbl = QLabel(f"<b>{tr(self.lang, 'wiz_app_lbl')}</b>")
+        tc_lay.addWidget(self.app_sec_lbl)
+
+        self.app_scroll = QScrollArea()
+        self.app_scroll.setWidgetResizable(True)
+        self.app_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.app_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.app_scroll.viewport().setObjectName("cellBox")
+        self.app_host = QWidget()
+        self.app_host.setObjectName("cellBox")
+        self.app_rows_lay = QVBoxLayout(self.app_host)
+        self.app_rows_lay.setContentsMargins(0, 0, 2, 0)
+        self.app_rows_lay.setSpacing(4)
+        self.app_scroll.setWidget(self.app_host)
+        tc_lay.addWidget(self.app_scroll)
+
         root.addWidget(tags_card)
 
         # 2. MATCHED TOOLS HEADER + LIVE TOKEN ESTIMATE
@@ -135,7 +157,8 @@ class ProfileWizardDialog(QDialog):
         self.show_all_cb.toggled.connect(lambda _v: self._rebuild_tools_list())
         mid_hdr.addWidget(self.show_all_cb)
 
-        self.include_lib_cb = QCheckBox(tr(self.lang, "wiz_include_lib_cb", n=len(self.all_tools)))
+        uninst_cnt = sum(1 for t in self.all_tools if not getattr(t, "in_workspace", True))
+        self.include_lib_cb = QCheckBox(tr(self.lang, "wiz_include_lib_cb", n=uninst_cnt))
         self.include_lib_cb.setCursor(Qt.CursorShape.PointingHandCursor)
         self.include_lib_cb.toggled.connect(self._on_include_lib_toggled)
         mid_hdr.addWidget(self.include_lib_cb)
@@ -187,6 +210,7 @@ class ProfileWizardDialog(QDialog):
         bot.addWidget(self.btn_save)
         root.addLayout(bot)
 
+        self._rebuild_app_specific_rows()
         self._rebuild_tools_list()
 
     def _active_pool(self) -> list[ToolSpec]:
@@ -194,16 +218,142 @@ class ProfileWizardDialog(QDialog):
             return self.all_tools
         return self.workspace_tools
 
-    def _refresh_tag_chip_labels(self) -> None:
+    def _rebuild_app_specific_rows(self) -> None:
+        """Dynamically build app rows (Unity, Blender, Chrome, ...) from tools present in _active_pool."""
+        for scoped_tid in list(SCOPED_APP_TAG_IDS):
+            self.tag_buttons.pop(scoped_tid, None)
+        self.app_header_buttons.clear()
+        self.app_subtags_map.clear()
+
+        while self.app_rows_lay.count():
+            item = self.app_rows_lay.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.deleteLater()
+
         pool = self._active_pool()
-        for tid, btn in self.tag_buttons.items():
+        is_light = self.main_win.meta.get("theme", "dark") == "light"
+
+        # Discover present apps & their scoped subtags in canonical order
+        app_to_subtags: dict[str, list[str]] = {}
+        for stid in SCOPED_APP_TAG_IDS:
+            app_id, _sub_id = split_scoped_tag(stid)
+            if any(stid in t.tags for t in pool):
+                app_to_subtags.setdefault(app_id, []).append(stid)
+
+        ordered_apps = [aid for aid in APP_SCOPE_IDS if aid in app_to_subtags]
+        for extra_aid in app_to_subtags:
+            if extra_aid not in ordered_apps:
+                ordered_apps.append(extra_aid)
+
+        # Remove selected scoped tags that are no longer in the active pool
+        valid_scoped = {st for sub_list in app_to_subtags.values() for st in sub_list}
+        self.selected_tags = [
+            tg for tg in self.selected_tags if (":" not in tg) or (tg in valid_scoped)
+        ]
+
+        if not ordered_apps:
+            self.app_sec_lbl.hide()
+            self.app_scroll.hide()
+            return
+
+        self.app_sec_lbl.show()
+        self.app_scroll.show()
+
+        for app_id in ordered_apps:
+            subtags = app_to_subtags[app_id]
+            self.app_subtags_map[app_id] = subtags
+            app_tool_cnt = sum(
+                1 for t in pool if any(tg.startswith(f"{app_id}:") for tg in t.tags)
+            )
+            app_name = app_scope_label(app_id, self.lang)
+
+            row_w = QWidget()
+            row_w.setObjectName("cellBox")
+            r_lay = QHBoxLayout(row_w)
+            r_lay.setContentsMargins(0, 0, 0, 0)
+            r_lay.setSpacing(6)
+
+            app_btn = QPushButton(f"{app_name} ({app_tool_cnt})".replace("&", "&&"))
+            app_btn.setMinimumWidth(110)
+            app_btn.setCheckable(True)
+            app_btn.setChecked(all(st in self.selected_tags for st in subtags))
+            app_btn.setStyleSheet(app_chip_qss(app_id, is_light=is_light))
+            app_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            app_btn.setToolTip(tr(self.lang, "wiz_app_row_tip", app=app_name))
+            app_btn.clicked.connect(
+                lambda checked, a_code=app_id: self._on_app_header_clicked(a_code, checked)
+            )
+            self.app_header_buttons[app_id] = app_btn
+            r_lay.addWidget(app_btn)
+
+            sep_lbl = QLabel("->")
+            sep_lbl.setStyleSheet("color: #64748b; font-weight: 600; font-size: 11px;")
+            r_lay.addWidget(sep_lbl)
+
+            for stid in subtags:
+                sub_cnt = sum(1 for t in pool if stid in t.tags)
+                sub_lbl = f"{tag_sub_label(stid, self.lang)} ({sub_cnt})"
+                s_btn = QPushButton(sub_lbl.replace("&", "&&"))
+                s_btn.setCheckable(True)
+                s_btn.setChecked(stid in self.selected_tags)
+                s_btn.setStyleSheet(wizard_chip_qss(stid, is_light=is_light, is_benefit=False))
+                s_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+                s_btn.setToolTip(tag_label(stid, self.lang))
+                s_btn.clicked.connect(
+                    lambda checked, tag_code=stid: self._on_tag_clicked(tag_code, checked)
+                )
+                self.tag_buttons[stid] = s_btn
+                r_lay.addWidget(s_btn)
+
+            r_lay.addStretch()
+            self.app_rows_lay.addWidget(row_w)
+
+        row_h = 34
+        vis_rows = min(len(ordered_apps), 4)
+        exact_h = vis_rows * row_h + max(0, vis_rows - 1) * 5 + 4
+        self.app_scroll.setFixedHeight(exact_h)
+
+    def _sync_app_header_check_states(self) -> None:
+        for app_id, app_btn in self.app_header_buttons.items():
+            subtags = self.app_subtags_map.get(app_id, [])
+            all_on = bool(subtags) and all(st in self.selected_tags for st in subtags)
+            app_btn.blockSignals(True)
+            app_btn.setChecked(all_on)
+            app_btn.blockSignals(False)
+
+    def _on_app_header_clicked(self, app_id: str, checked: bool) -> None:
+        subtags = self.app_subtags_map.get(app_id, [])
+        for stid in subtags:
+            if checked:
+                if stid not in self.selected_tags:
+                    self.selected_tags.append(stid)
+            else:
+                if stid in self.selected_tags:
+                    self.selected_tags.remove(stid)
+            s_btn = self.tag_buttons.get(stid)
+            if s_btn is not None:
+                s_btn.blockSignals(True)
+                s_btn.setChecked(checked)
+                s_btn.blockSignals(False)
+        self._sync_app_header_check_states()
+        self._sync_auto_checked_from_tags()
+        self._rebuild_tools_list()
+
+    def _refresh_general_chip_labels(self) -> None:
+        pool = self._active_pool()
+        for tid in BENEFIT_TAG_IDS + GENERAL_TAG_IDS:
+            btn = self.tag_buttons.get(tid)
+            if btn is None:
+                continue
             cnt = sum(1 for t in pool if tid in t.tags)
             lbl = f"{tag_label(tid, self.lang)} ({cnt})" if cnt else tag_label(tid, self.lang)
             btn.setText(lbl.replace("&", "&&"))
             btn.setToolTip(tr(self.lang, "wiz_tag_empty_tip") if cnt == 0 else "")
 
     def _on_include_lib_toggled(self, _checked: bool) -> None:
-        self._refresh_tag_chip_labels()
+        self._refresh_general_chip_labels()
+        self._rebuild_app_specific_rows()
         self._sync_auto_checked_from_tags()
         self._rebuild_tools_list()
 
@@ -212,7 +362,14 @@ class ProfileWizardDialog(QDialog):
 
     def _effective_blender_skills(self) -> set[str]:
         sel_set = set(self.selected_tags)
-        if sel_set & {"modeling_3d", "style_3d", "unity", "shader_gpu"}:
+        if sel_set & {
+            "modeling_3d",
+            "blender:modeling_3d",
+            "style_3d",
+            "blender:style_3d",
+            "shader_gpu",
+            "unity:shader_gpu",
+        } or any(tg.startswith("unity:") for tg in sel_set):
             return recommended_blender_skills_for_tags(sel_set)
         return set(self.main_win.active_skills)
 
@@ -222,6 +379,34 @@ class ProfileWizardDialog(QDialog):
         if t.vault_key_required and t.vault_key_name and t.vault_key_name in self.missing_keys:
             return False
         return True
+
+    def _build_smart_profile_name(self) -> str:
+        non_ben = [tid for tid in self.selected_tags if not is_benefit_tag(tid)]
+        ben_only = [tid for tid in self.selected_tags if is_benefit_tag(tid)]
+        source = non_ben if non_ben else ben_only
+        if not source:
+            return ""
+
+        # Condense multiple subtags of the same app (e.g. unity:*) into just "Unity"
+        app_counts: dict[str, int] = {}
+        for tid in source:
+            aid, _ = split_scoped_tag(tid)
+            if aid:
+                app_counts[aid] = app_counts.get(aid, 0) + 1
+
+        parts: list[str] = []
+        seen_apps: set[str] = set()
+        for tid in source:
+            aid, _ = split_scoped_tag(tid)
+            if aid and app_counts.get(aid, 0) >= 2:
+                if aid not in seen_apps:
+                    seen_apps.add(aid)
+                    parts.append(app_scope_label(aid, self.lang))
+            else:
+                parts.append(tag_label(tid, self.lang))
+            if len(parts) >= 2:
+                break
+        return " + ".join(parts)
 
     def _sync_auto_checked_from_tags(self) -> None:
         sel_set = set(self.selected_tags)
@@ -236,11 +421,7 @@ class ProfileWizardDialog(QDialog):
         self.checked_tool_ids = new_checked
 
         if not self.name_touched:
-            dom_chosen = [tid for tid in self.selected_tags if not is_benefit_tag(tid)]
-            ben_chosen = [tid for tid in self.selected_tags if is_benefit_tag(tid)]
-            basis = dom_chosen[:2] if dom_chosen else ben_chosen[:2]
-            auto_nm = " + ".join(tag_label(tid, self.lang) for tid in basis)
-            self.name_inp.setText(auto_nm)
+            self.name_inp.setText(self._build_smart_profile_name())
 
     def _on_tag_clicked(self, tag_code: str, checked: bool) -> None:
         if checked:
@@ -249,6 +430,7 @@ class ProfileWizardDialog(QDialog):
         else:
             if tag_code in self.selected_tags:
                 self.selected_tags.remove(tag_code)
+        self._sync_app_header_check_states()
         self._sync_auto_checked_from_tags()
         self._rebuild_tools_list()
 
@@ -270,6 +452,10 @@ class ProfileWizardDialog(QDialog):
             btn.blockSignals(True)
             btn.setChecked(False)
             btn.blockSignals(False)
+        for abtn in self.app_header_buttons.values():
+            abtn.blockSignals(True)
+            abtn.setChecked(False)
+            abtn.blockSignals(False)
         self._rebuild_tools_list()
 
     def _estimate_budget(self) -> tuple[int, float]:
@@ -384,12 +570,13 @@ class ProfileWizardDialog(QDialog):
                 nm_lbl.setToolTip(localized_tool_text(t, "summary", self.lang))
                 top_r.addWidget(nm_lbl)
 
-                if not getattr(t, "in_workspace", True):
+                is_inst = bool(getattr(t, "installed", getattr(t, "in_workspace", True)))
+                if not is_inst:
                     lib_pill = QLabel(tr(self.lang, "wiz_lib_badge"))
                     lib_pill.setStyleSheet(
-                        "background-color: #eff6ff; color: #1d4ed8; border: 1px solid #bfdbfe; border-radius: 4px; padding: 1px 6px; font-size: 9.5px; font-weight: 700;"
+                        "background-color: #fffbeb; color: #b45309; border: 1px solid #fde68a; border-radius: 4px; padding: 1px 6px; font-size: 9.5px; font-weight: 700;"
                         if is_light
-                        else "background-color: #132036; color: #93c5fd; border: 1px solid #1e3a5f; border-radius: 4px; padding: 1px 6px; font-size: 9.5px; font-weight: 700;"
+                        else "background-color: #291d09; color: #fbbf24; border: 1px solid #78350f; border-radius: 4px; padding: 1px 6px; font-size: 9.5px; font-weight: 700;"
                     )
                     top_r.addWidget(lib_pill)
 

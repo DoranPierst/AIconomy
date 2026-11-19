@@ -30,3 +30,6 @@ class WorkerBridge(QObject):
     app_dl_progress = Signal(int, int)
     app_apply_done = Signal(bool, str, str)
     runtime_transition_done = Signal(str, object, object, str)  # (target_state, health_out, live_map, msg)
+    lib_install_progress = Signal(int, int, str)  # (idx, total, tool_name)
+    lib_install_item_done = Signal(str, bool, str, str, str, bool)  # (tool_id, ok, new_ver, msg, raw_log, enable_after)
+    lib_install_all_done = Signal(int, int)  # (ok_cnt, fail_cnt)

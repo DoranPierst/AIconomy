@@ -523,3 +523,209 @@ def update_single_tool(
         return False, "", msg, traceback.format_exc()
     except Exception as exc:
         return False, "", (f"Beklenmeyen güncelleme hatası: {exc}" if is_tr else f"Unexpected update error: {exc}"), traceback.format_exc()
+
+
+def _extract_npm_package_spec(tool: ToolSpec) -> str:
+    if tool.mcp_command == "npx" and tool.mcp_args:
+        for arg in tool.mcp_args:
+            if not arg.startswith("-"):
+                return arg
+    tokens = tool.install_cmd.strip().split()
+    skip = {"npx", "npm", "npm.cmd", "install", "i", "-g", "-y", "--yes"}
+    for tok in tokens:
+        if tok in skip or tok.startswith("-"):
+            continue
+        return tok
+    return ""
+
+
+def _strip_npm_dist_tag(pkg_spec: str) -> str:
+    if pkg_spec.startswith("@"):
+        slash_idx = pkg_spec.find("/")
+        if slash_idx > 0 and "@" in pkg_spec[slash_idx + 1 :]:
+            return pkg_spec[: pkg_spec.rfind("@")]
+        return pkg_spec
+    if "@" in pkg_spec:
+        return pkg_spec.split("@", 1)[0]
+    return pkg_spec
+
+
+def install_library_tool(
+    tool: ToolSpec,
+    active_skills: set[str],
+    lang: str = "en",
+) -> tuple[bool, str, str, str]:
+    """Download and install an uninstalled library tool onto the user's PC (npm / uv / git).
+
+    Returns (ok, installed_version_tag, short_summary, raw_log_detail). Never mutates ``tool``.
+    """
+    is_tr = lang == "tr"
+    ua = _user_agent()
+    try:
+        if (
+            tool.id in ("blender_skills", "caveman")
+            or tool.id in UV_TOOL_MAP
+            or tool.id in NPM_PACKAGE_MAP
+        ):
+            return update_single_tool(tool, active_skills, install_if_missing=True, lang=lang)
+
+        cmd_text = tool.install_cmd.strip()
+
+        # 1. Node / npm / npx MCP packages
+        if tool.mcp_command == "npx" or cmd_text.startswith(("npx ", "npm ")):
+            pkg_spec = _extract_npm_package_spec(tool)
+            if not pkg_spec:
+                return (
+                    False,
+                    "",
+                    "Geçerli bir npm paket adı bulunamadı." if is_tr else "Could not determine npm package name.",
+                    cmd_text,
+                )
+            npm_exe = shutil.which("npm.cmd") or shutil.which("npm")
+            if not npm_exe:
+                return (
+                    False,
+                    "",
+                    "Node.js / npm bulunamadı. Lütfen Node.js kurun."
+                    if is_tr
+                    else "Node.js / npm not found on PATH. Please install Node.js.",
+                    cmd_text,
+                )
+            cmd = [npm_exe, "install", "-g", "--no-fund", "--no-audit", pkg_spec]
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=120, creationflags=NO_WINDOW)
+            raw = _fmt_cmd_raw(cmd, proc, is_tr)
+            if proc.returncode != 0 and "EEXIST" in (proc.stderr + "\n" + proc.stdout):
+                cache_cmd = [npm_exe, "cache", "add", pkg_spec]
+                proc2 = subprocess.run(cache_cmd, capture_output=True, text=True, timeout=120, creationflags=NO_WINDOW)
+                raw = raw + "\n\n" + _fmt_cmd_raw(cache_cmd, proc2, is_tr)
+                proc = proc2
+
+            if proc.returncode != 0:
+                first_err = (proc.stderr.strip() or proc.stdout.strip() or "npm install error").splitlines()[0]
+                return False, "", f"npm ({pkg_spec}): {first_err}", raw
+
+            ver_tag = tool.version
+            base_pkg = _strip_npm_dist_tag(pkg_spec)
+            try:
+                enc = base_pkg.replace("/", "%2F")
+                req = urllib.request.Request(f"https://registry.npmjs.org/{enc}/latest", headers={"User-Agent": ua})
+                with urllib.request.urlopen(req, timeout=5) as resp:
+                    v_str = json.loads(resp.read().decode("utf-8")).get("version", "")
+                    if v_str:
+                        ver_tag = f"v{v_str}"
+            except Exception:
+                pass
+            msg = (
+                f"npm paketi indirildi ve kuruldu: {base_pkg}"
+                if is_tr
+                else f"Downloaded and installed npm package: {base_pkg}"
+            )
+            return True, ver_tag, msg, raw
+
+        # 2. Python / uv / uvx MCP packages
+        if tool.mcp_command == "uvx" or cmd_text.startswith(("uvx ", "uv ")):
+            uv_exe = shutil.which("uv.exe") or shutil.which("uv")
+            if not uv_exe:
+                return (
+                    False,
+                    "",
+                    "uv paket yöneticisi bulunamadı. Lütfen uv kurun."
+                    if is_tr
+                    else "uv package manager not found on PATH. Please install uv.",
+                    cmd_text,
+                )
+            args_src = list(tool.mcp_args) if tool.mcp_command == "uvx" and tool.mcp_args else cmd_text.split()[1:]
+            from_spec = ""
+            pkg_spec = ""
+            idx = 0
+            while idx < len(args_src):
+                tok = args_src[idx]
+                if tok == "--from" and idx + 1 < len(args_src):
+                    from_spec = args_src[idx + 1]
+                    idx += 2
+                    continue
+                if tok.startswith("-"):
+                    idx += 1
+                    continue
+                pkg_spec = tok
+                break
+
+            if not pkg_spec:
+                return (
+                    False,
+                    "",
+                    "Geçerli bir uv paket adı bulunamadı." if is_tr else "Could not determine uv package name.",
+                    cmd_text,
+                )
+
+            clean_pkg = pkg_spec.removesuffix("@latest")
+            if from_spec:
+                cmd = [uv_exe, "tool", "install", "--upgrade", "--from", from_spec, clean_pkg]
+            else:
+                cmd = [uv_exe, "tool", "install", "--upgrade", clean_pkg]
+
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=120, creationflags=NO_WINDOW)
+            combined = (proc.stdout + "\n" + proc.stderr).strip()
+            raw = _fmt_cmd_raw(cmd, proc, is_tr)
+
+            if proc.returncode != 0 and "no executables are provided" in combined.lower():
+                warm_cmd = [uv_exe, "tool", "run", pkg_spec, "--help"]
+                proc2 = subprocess.run(warm_cmd, capture_output=True, text=True, timeout=60, creationflags=NO_WINDOW)
+                raw = raw + "\n\n" + _fmt_cmd_raw(warm_cmd, proc2, is_tr)
+                if proc2.returncode == 0:
+                    proc = proc2
+
+            if proc.returncode == 0 or "already installed" in combined.lower() or "nothing to upgrade" in combined.lower():
+                ver_tag = tool.version
+                if not from_spec:
+                    try:
+                        req = urllib.request.Request(f"https://pypi.org/pypi/{clean_pkg}/json", headers={"User-Agent": ua})
+                        with urllib.request.urlopen(req, timeout=5) as resp:
+                            v_str = json.loads(resp.read().decode("utf-8")).get("info", {}).get("version", "")
+                            if v_str:
+                                ver_tag = f"v{v_str}"
+                    except Exception:
+                        pass
+                msg = (
+                    f"uv aracı indirildi ve kuruldu: {clean_pkg}"
+                    if is_tr
+                    else f"Downloaded and installed uv tool: {clean_pkg}"
+                )
+                return True, ver_tag, msg, raw
+
+            first_err = (proc.stderr.strip() or proc.stdout.strip() or "uv tool install error").splitlines()[0]
+            return False, "", f"uv ({clean_pkg}): {first_err}", raw
+
+        # 3. Git repository skill packs / rules
+        if cmd_text.startswith("git clone ") and tool.repo_url:
+            git_exe = shutil.which("git.exe") or shutil.which("git")
+            if not git_exe:
+                return (
+                    False,
+                    "",
+                    "Git bulunamadı. Lütfen Git kurun." if is_tr else "Git executable not found on PATH.",
+                    cmd_text,
+                )
+            dest_dir = pathlib.Path.home() / ".agents" / "skills" / tool.id
+            dest_dir.parent.mkdir(parents=True, exist_ok=True)
+            if (dest_dir / ".git").is_dir():
+                cmd = [git_exe, "-C", str(dest_dir), "pull", "--ff-only"]
+            else:
+                if dest_dir.exists():
+                    _force_rmtree(dest_dir)
+                cmd = [git_exe, "clone", "--depth", "1", tool.repo_url, str(dest_dir)]
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=90, creationflags=NO_WINDOW)
+            raw = _fmt_cmd_raw(cmd, proc, is_tr)
+            if proc.returncode != 0:
+                first_err = (proc.stderr.strip() or proc.stdout.strip() or "git clone error").splitlines()[0]
+                return False, "", f"git: {first_err}", raw
+            msg = f"Git deposu kuruldu: {dest_dir}" if is_tr else f"Cloned repository to {dest_dir}"
+            return True, tool.version, msg, raw
+
+        return update_single_tool(tool, active_skills, install_if_missing=True, lang=lang)
+    except subprocess.TimeoutExpired:
+        msg = "İndirme zaman aşımına uğradı (120 sn)." if is_tr else "Download timed out (120s)."
+        return False, "", msg, traceback.format_exc()
+    except Exception as exc:
+        msg = f"Kurulum hatası: {exc}" if is_tr else f"Installation error: {exc}"
+        return False, "", msg, traceback.format_exc()
