@@ -49,11 +49,14 @@ from ..processes import (
     enforce_tool_runtime_state,
     find_port_owner,
     free_trellis_vram,
+    has_running_managed_services,
     kill_zombie_port_process,
     probe_tool_health,
     query_gpu_vram,
     resolve_disk_location,
     scan_live_process_locations,
+    stop_all_managed_services,
+    wait_for_started_ports,
 )
 from ..storage import (
     LOG_DB_FILENAME,
@@ -121,7 +124,10 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, QMainWindow):
         self.bridge.vram_done.connect(self._on_vram_done)
         self.bridge.dcc_done.connect(self._on_dcc_done)
         self.bridge.port_kill_done.connect(self._on_port_kill_done)
+        self.bridge.runtime_transition_done.connect(self._on_runtime_transition_done)
 
+        self.runtime_started = False
+        self._runtime_state = "probing"  # probing | stopped | starting | running | stopping
         self._health_busy = False
         self._vram_busy = False
         self._dcc_busy = False
@@ -173,12 +179,8 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, QMainWindow):
         self.tick_timer.timeout.connect(self._on_second_tick)
         self.tick_timer.start(1000)
 
-        if self.sync_live_environment:
-            QTimer.singleShot(
-                250, lambda: self._sync_live_environment_async(target_tools=list(self.tools), allow_stop=False)
-            )
-        else:
-            QTimer.singleShot(250, self.run_health_scan)
+        # Passive startup: never auto-start services on open; probe live state first
+        QTimer.singleShot(200, self._run_initial_runtime_probe)
         QTimer.singleShot(900, lambda: self.run_plugin_update_check(manual=False))
         QTimer.singleShot(1400, self._run_startup_app_update_check)
 
@@ -215,6 +217,14 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, QMainWindow):
         self.profile_cmb.setCursor(Qt.CursorShape.PointingHandCursor)
         self.profile_cmb.activated.connect(self._on_profile_combo_activated)
         top_bar.addWidget(self.profile_cmb)
+
+        self.btn_runtime = QPushButton(tr(self.lang, "btn_start_tools"))
+        self.btn_runtime.setObjectName("runtimeStartBtn")
+        self.btn_runtime.setMinimumWidth(148)
+        self.btn_runtime.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_runtime.setEnabled(False)
+        self.btn_runtime.clicked.connect(self._on_runtime_btn_clicked)
+        top_bar.addWidget(self.btn_runtime)
 
         top_bar.addStretch()
 
@@ -307,6 +317,209 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, QMainWindow):
         self.btn_diagnostics.setIcon(make_icon("activity", col, 15))
         self.btn_settings.setIcon(make_icon("sliders", col, 15))
         self.btn_more.setIcon(make_icon("more", col, 15))
+        self._apply_runtime_button_visuals()
+
+    def _apply_runtime_button_visuals(self) -> None:
+        if not hasattr(self, "btn_runtime"):
+            return
+        is_light = self.meta.get("theme", "dark") == "light"
+        st = self._runtime_state
+        if st == "probing":
+            obj_name = "runtimeStartBtn"
+            text = tr(self.lang, "btn_start_tools")
+            tip = tr(self.lang, "tip_probing_tools")
+            enabled = False
+            icon_name = "play"
+            ic_col = "#047857" if is_light else "#6ee7b7"
+        elif st == "starting":
+            obj_name = "runtimeStartBtn"
+            text = tr(self.lang, "btn_starting_tools")
+            tip = tr(self.lang, "msg_tools_starting")
+            enabled = False
+            icon_name = "play"
+            ic_col = "#047857" if is_light else "#6ee7b7"
+        elif st == "running":
+            obj_name = "runtimeStopBtn"
+            text = tr(self.lang, "btn_stop_tools")
+            tip = tr(self.lang, "tip_stop_tools")
+            enabled = True
+            icon_name = "stop"
+            ic_col = "#ffffff" if is_light else "#fef3c7"
+        elif st == "stopping":
+            obj_name = "runtimeStopBtn"
+            text = tr(self.lang, "btn_stopping_tools")
+            tip = tr(self.lang, "msg_tools_stopping")
+            enabled = False
+            icon_name = "stop"
+            ic_col = "#92400e" if is_light else "#fcd34d"
+        else:  # stopped
+            obj_name = "runtimeStartBtn"
+            text = tr(self.lang, "btn_start_tools")
+            tip = tr(self.lang, "tip_start_tools")
+            enabled = True
+            icon_name = "play"
+            ic_col = "#ffffff"
+
+        prev_obj = self.btn_runtime.objectName()
+        self.btn_runtime.setObjectName(obj_name)
+        self.btn_runtime.setText(text)
+        self.btn_runtime.setToolTip(tip)
+        self.btn_runtime.setEnabled(enabled)
+        self.btn_runtime.setIcon(make_icon(icon_name, ic_col, 14))
+        if prev_obj != obj_name:
+            self.style().unpolish(self.btn_runtime)
+            self.style().polish(self.btn_runtime)
+        self.btn_runtime.update()
+
+    def _set_runtime_ui_state(self, new_state: str) -> None:
+        self._runtime_state = new_state
+        self.runtime_started = new_state == "running"
+        self._apply_runtime_button_visuals()
+        self._rebuild_tray_menu()
+
+    def _run_initial_runtime_probe(self) -> None:
+        """Passive startup probe: checks whether managed services are already active without starting anything."""
+        self._set_runtime_ui_state("probing")
+        snap_tools = copy.deepcopy(self.tools)
+        sk_cnt = len(self.active_skills)
+        proj_snap = dict(self.projects_map)
+        lang_snap = self.lang
+
+        def worker() -> None:
+            live_map = scan_live_process_locations(lang=lang_snap)
+            out = []
+            for t in snap_tools:
+                ok, h_state, ping_str, ms, detail, loc_detail = probe_tool_health(
+                    t, sk_cnt, proj_snap, live_map, lang=lang_snap
+                )
+                out.append((t.id, ok, h_state, ping_str, ms, detail, loc_detail))
+            already_running = has_running_managed_services(snap_tools, live_map)
+            target = "running" if already_running else "stopped"
+            safe_emit(self.bridge.runtime_transition_done, target, out, live_map, "")
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_runtime_btn_clicked(self) -> None:
+        if self._runtime_state == "stopped":
+            self.start_all_tools()
+        elif self._runtime_state == "running":
+            self.stop_all_tools()
+
+    def start_all_tools(self) -> None:
+        """Start all enabled tool servers, sync AI client configs, and lock the button until verified."""
+        if self._runtime_state != "stopped":
+            return
+        enabled_tools = [t for t in self.tools if t.enabled]
+        if not enabled_tools:
+            self.set_status(tr(self.lang, "msg_no_enabled_to_start"))
+            return
+
+        self._sync_debounce.stop()
+        self._sync_pending_ids.clear()
+        self._sync_stop_ids.clear()
+        self._set_runtime_ui_state("starting")
+        self.set_status(tr(self.lang, "msg_tools_starting"))
+
+        tools_snap = copy.deepcopy(self.tools)
+        skills_snap = set(self.active_skills)
+        proj_snap = dict(self.projects_map)
+        lang_snap = self.lang
+
+        def worker() -> None:
+            started_ports: list[int] = []
+            with self._sync_lock:
+                if self.sync_live_environment:
+                    for t_obj in tools_snap:
+                        if t_obj.enabled:
+                            note = enforce_tool_runtime_state(
+                                t_obj, proj_snap, allow_stop=False, allow_start=True, lang=lang_snap
+                            )
+                            if note and t_obj.port:
+                                started_ports.append(int(t_obj.port))
+                    bs_tool = next((x for x in tools_snap if x.id == "blender_skills"), None)
+                    if bs_tool:
+                        sync_blender_skills_on_disk(
+                            skills_snap, bs_tool.enabled, bs_tool.project_scope, proj_snap, lang=lang_snap
+                        )
+                    sync_mcp_json_clients(tools_snap, self.vault, proj_snap, lang=lang_snap)
+                    if started_ports:
+                        wait_for_started_ports(started_ports, timeout=2.5)
+
+                live_map = scan_live_process_locations(lang=lang_snap)
+                out = []
+                for x in tools_snap:
+                    ok, h_state, ping_str, ms, detail, loc_detail = probe_tool_health(
+                        x, len(skills_snap), proj_snap, live_map, lang=lang_snap
+                    )
+                    out.append((x.id, ok, h_state, ping_str, ms, detail, loc_detail))
+
+            en_cnt = sum(1 for x in tools_snap if x.enabled)
+            summary = tr(lang_snap, "msg_tools_started", n=en_cnt)
+            safe_emit(self.bridge.runtime_transition_done, "running", out, live_map, summary)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def stop_all_tools(self) -> None:
+        """Stop all managed tool processes and keep the button locked until processes and ports close."""
+        if self._runtime_state != "running":
+            return
+        self._sync_debounce.stop()
+        self._sync_pending_ids.clear()
+        self._sync_stop_ids.clear()
+        self._set_runtime_ui_state("stopping")
+        self.set_status(tr(self.lang, "msg_tools_stopping"))
+
+        tools_snap = copy.deepcopy(self.tools)
+        skills_snap = set(self.active_skills)
+        proj_snap = dict(self.projects_map)
+        lang_snap = self.lang
+
+        def worker() -> None:
+            detail_msg = ""
+            with self._sync_lock:
+                if self.sync_live_environment:
+                    _cnt, detail_msg = stop_all_managed_services(tools_snap, lang=lang_snap)
+                live_map = scan_live_process_locations(lang=lang_snap)
+                out = []
+                for x in tools_snap:
+                    ok, h_state, ping_str, ms, detail, loc_detail = probe_tool_health(
+                        x, len(skills_snap), proj_snap, live_map, lang=lang_snap
+                    )
+                    out.append((x.id, ok, h_state, ping_str, ms, detail, loc_detail))
+
+            summary = tr(lang_snap, "msg_tools_stopped")
+            if detail_msg:
+                summary = f"{summary} ({detail_msg})"
+            safe_emit(self.bridge.runtime_transition_done, "stopped", out, live_map, summary)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_runtime_transition_done(
+        self,
+        target_state: str,
+        results: list[tuple[str, bool, str, int, str, str]],
+        live_map: dict[str, str] | None,
+        summary_msg: str,
+    ) -> None:
+        if live_map is not None:
+            self._latest_live_map = live_map
+        by_id = {t.id: t for t in self.tools}
+        for tid, _ok, h_state, ping_str, ms, _detail, loc_detail in results:
+            t = by_id.get(tid)
+            if t is not None:
+                t.health_state = h_state
+                t.last_ping = ping_str
+                t.last_latency_ms = ms
+                t.live_location_detail = loc_detail
+
+        self._set_runtime_ui_state(target_state)
+        self._refresh_table()
+        self._refresh_host_dep_banner()
+        self._update_vram_bar()
+        if summary_msg:
+            self.logs.add("INFO", tr(self.lang, "log_src_runtime"), summary_msg)
+            self._refresh_logs_tab()
+            self.set_status(summary_msg)
 
     def _show_more_menu(self) -> None:
         menu = QMenu(self)
@@ -575,6 +788,21 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, QMainWindow):
         act_open = QAction(tr(self.lang, "tray_open"), self)
         act_open.triggered.connect(self._restore_from_tray)
         menu.addAction(act_open)
+
+        st = getattr(self, "_runtime_state", "stopped")
+        if st in ("probing", "starting"):
+            act_rt = QAction(tr(self.lang, "btn_starting_tools"), self)
+            act_rt.setEnabled(False)
+        elif st == "stopping":
+            act_rt = QAction(tr(self.lang, "btn_stopping_tools"), self)
+            act_rt.setEnabled(False)
+        elif st == "running":
+            act_rt = QAction(tr(self.lang, "btn_stop_tools"), self)
+            act_rt.triggered.connect(self.stop_all_tools)
+        else:
+            act_rt = QAction(tr(self.lang, "btn_start_tools"), self)
+            act_rt.triggered.connect(self.start_all_tools)
+        menu.addAction(act_rt)
         menu.addSeparator()
 
         prof_menu = menu.addMenu(tr(self.lang, "tray_profiles"))
@@ -705,6 +933,7 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, QMainWindow):
         app_ver = get_current_app_version()
         self.setWindowTitle(tr(self.lang, "app_title", ver=app_ver))
         self.lbl_profile.setText(tr(self.lang, "profile_lbl"))
+        self._apply_runtime_button_visuals()
         self.btn_diagnostics.setText(tr(self.lang, "btn_diagnostics"))
         self.btn_settings.setText(tr(self.lang, "btn_settings"))
         self.btn_more.setToolTip(tr(self.lang, "btn_more_tip"))
@@ -779,12 +1008,19 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, QMainWindow):
         skills_snap = set(self.active_skills)
         proj_snap = dict(self.projects_map)
         lang_snap = self.lang
+        allow_start_flag = bool(self.runtime_started and self._runtime_state == "running")
 
         def worker() -> None:
             with self._sync_lock:
                 for t_obj in tools_snap:
                     if t_obj.id in target_ids:
-                        enforce_tool_runtime_state(t_obj, proj_snap, allow_stop=(t_obj.id in stop_ids), lang=lang_snap)
+                        enforce_tool_runtime_state(
+                            t_obj,
+                            proj_snap,
+                            allow_stop=(t_obj.id in stop_ids),
+                            allow_start=allow_start_flag,
+                            lang=lang_snap,
+                        )
                 bs_tool = next((x for x in tools_snap if x.id == "blender_skills"), None)
                 if bs_tool:
                     sync_blender_skills_on_disk(
@@ -812,6 +1048,8 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, QMainWindow):
             tool.health_state = "off"
             tool.last_ping = tr(self.lang, "st_disabled")
         self._save_state()
+        if self._runtime_state == "running" and not any(t.enabled for t in self.tools):
+            self._set_runtime_ui_state("stopped")
         state_word = tr(self.lang, "client_on" if tool.enabled else "client_off").lower()
         self.logs.add("DBG", tool.name, tr(self.lang, "log_tool_toggled", state=state_word))
         self.set_status(tr(self.lang, "msg_tool_toggled", name=tool.name, state=state_word))
@@ -1108,7 +1346,12 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, QMainWindow):
                 t.live_location_detail = loc_detail
                 if t.enabled and t.port and not ok and tid != "trellis":
                     now_mono = time.monotonic()
-                    if tid in ("serena", "unity_mcp") and self.sync_live_environment:
+                    if (
+                        tid in ("serena", "unity_mcp")
+                        and self.sync_live_environment
+                        and self.runtime_started
+                        and self._runtime_state == "running"
+                    ):
                         if now_mono - self._auto_heal_cooldown.get(tid, 0.0) > 45.0:
                             self._auto_heal_cooldown[tid] = now_mono
                             self._auto_heal_tool_async(t)
@@ -1140,13 +1383,17 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, QMainWindow):
     def _refresh_host_dep_banner(self) -> None:
         if not hasattr(self, "host_dep_banner"):
             return
-        missing = get_missing_host_dependencies(self.tools, self._latest_live_map, self.projects_map, lang=self.lang)
         while self.host_dep_btns_lay.count():
             item = self.host_dep_btns_lay.takeAt(0)
             w = item.widget()
             if w is not None:
                 w.deleteLater()
 
+        if not self.runtime_started:
+            self.host_dep_banner.hide()
+            return
+
+        missing = get_missing_host_dependencies(self.tools, self._latest_live_map, self.projects_map, lang=self.lang)
         if not missing:
             self.host_dep_banner.hide()
             return

@@ -29,3 +29,4 @@ class WorkerBridge(QObject):
     port_kill_done = Signal(int, bool, str)
     app_dl_progress = Signal(int, int)
     app_apply_done = Signal(bool, str, str)
+    runtime_transition_done = Signal(str, object, object, str)  # (target_state, health_out, live_map, msg)

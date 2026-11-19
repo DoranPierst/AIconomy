@@ -145,6 +145,39 @@ QPushButton#warnBtn {
 QPushButton#warnBtn:hover {
     background-color: #c2410c;
 }
+QPushButton#runtimeStartBtn {
+    background-color: #059669;
+    border: 1px solid #10b981;
+    color: #ffffff;
+    font-weight: 600;
+    padding: 5px 14px;
+}
+QPushButton#runtimeStartBtn:hover {
+    background-color: #047857;
+    border-color: #34d399;
+}
+QPushButton#runtimeStartBtn:disabled {
+    background-color: #0b2e24;
+    border: 1px solid #14533d;
+    color: #6ee7b7;
+}
+QPushButton#runtimeStopBtn {
+    background-color: #b45309;
+    border: 1px solid #f59e0b;
+    color: #fef3c7;
+    font-weight: 600;
+    padding: 5px 14px;
+}
+QPushButton#runtimeStopBtn:hover {
+    background-color: #d97706;
+    border-color: #fbbf24;
+    color: #ffffff;
+}
+QPushButton#runtimeStopBtn:disabled {
+    background-color: #3b2309;
+    border: 1px solid #78350f;
+    color: #fcd34d;
+}
 QPushButton#ghostBtn {
     background-color: transparent;
     border: 1px solid transparent;
@@ -417,6 +450,36 @@ QPushButton#warnBtn {
     border-color: #ea580c;
     color: #ffffff;
     font-weight: 600;
+}
+QPushButton#runtimeStartBtn {
+    background-color: #059669;
+    border: 1px solid #047857;
+    color: #ffffff;
+    font-weight: 600;
+    padding: 5px 14px;
+}
+QPushButton#runtimeStartBtn:hover {
+    background-color: #047857;
+}
+QPushButton#runtimeStartBtn:disabled {
+    background-color: #d1fae5;
+    border: 1px solid #6ee7b7;
+    color: #047857;
+}
+QPushButton#runtimeStopBtn {
+    background-color: #d97706;
+    border: 1px solid #b45309;
+    color: #ffffff;
+    font-weight: 600;
+    padding: 5px 14px;
+}
+QPushButton#runtimeStopBtn:hover {
+    background-color: #b45309;
+}
+QPushButton#runtimeStopBtn:disabled {
+    background-color: #fef3c7;
+    border: 1px solid #fcd34d;
+    color: #92400e;
 }
 QPushButton#ghostBtn {
     background-color: transparent;

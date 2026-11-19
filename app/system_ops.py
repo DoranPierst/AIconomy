@@ -45,11 +45,14 @@ from .processes import (
     find_port_owner,
     free_trellis_vram,
     get_gui_window_titles,
+    has_running_managed_services,
     kill_zombie_port_process,
     probe_tool_health,
     query_gpu_vram,
     resolve_disk_location,
     scan_live_process_locations,
+    stop_all_managed_services,
+    wait_for_started_ports,
 )
 
 __all__ = [
@@ -84,6 +87,7 @@ __all__ = [
     "free_trellis_vram",
     "get_gui_window_titles",
     "get_missing_host_dependencies",
+    "has_running_managed_services",
     "inspect_github_repo",
     "install_or_update_blender_skills",
     "kill_zombie_port_process",
@@ -92,8 +96,10 @@ __all__ = [
     "query_gpu_vram",
     "resolve_disk_location",
     "scan_live_process_locations",
+    "stop_all_managed_services",
     "sync_blender_skills_on_disk",
     "sync_mcp_json_clients",
     "test_tool_connection_e2e",
     "update_single_tool",
+    "wait_for_started_ports",
 ]

@@ -159,6 +159,9 @@ def make_icon(name: str, color: str = "#e2e8f0", size: int = 16) -> QIcon:
         path.closeSubpath()
         p.drawPath(path)
 
+    elif name == "stop":
+        p.drawRoundedRect(QRectF(4.0, 4.0, 8.0, 8.0), 1.4, 1.4)
+
     elif name == "x":
         p.drawLine(QPointF(4.0, 4.0), QPointF(12.0, 12.0))
         p.drawLine(QPointF(12.0, 4.0), QPointF(4.0, 12.0))

@@ -399,21 +399,177 @@ def _find_managed_processes(
     return out
 
 
-def _terminate_all(procs: list[psutil.Process], label: str) -> list[str]:
+def _terminate_all(procs: list[psutil.Process], label: str, wait_timeout: float = 3.5) -> list[str]:
     stopped: list[str] = []
+    targeted: list[psutil.Process] = []
     for p in procs:
         try:
             p.terminate()
+            targeted.append(p)
             stopped.append(f"{label} (PID {p.pid})")
         except (psutil.NoSuchProcess, psutil.AccessDenied):
             continue
+    if targeted:
+        _gone, alive = psutil.wait_procs(targeted, timeout=wait_timeout)
+        still_alive: list[psutil.Process] = []
+        for p in alive:
+            try:
+                p.kill()
+                still_alive.append(p)
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+        if still_alive:
+            psutil.wait_procs(still_alive, timeout=1.5)
     return stopped
+
+
+def wait_for_started_ports(ports: list[int], timeout: float = 2.5) -> None:
+    """Wait until all given local TCP ports accept connections (or ``timeout`` elapses)."""
+    pending = {int(p) for p in ports if p}
+    if not pending:
+        return
+    deadline = time.monotonic() + timeout
+    while pending and time.monotonic() < deadline:
+        ready: set[int] = set()
+        for port in pending:
+            try:
+                with socket.create_connection(("127.0.0.1", port), timeout=0.2):
+                    ready.add(port)
+            except OSError:
+                pass
+        pending -= ready
+        if pending:
+            time.sleep(0.2)
+
+
+def has_running_managed_services(tools: list[ToolSpec], live_map: dict[str, str]) -> bool:
+    """Return True when at least one AIconomy-managed background service is actively running."""
+    managed = _find_managed_processes(
+        {"serena.exe", "serena-agent.exe", "mcp-for-unity.exe", "unity-mcp.exe", "blender-mcp.exe", "trellis-server.exe"},
+        host_keywords=("serena", "mcp-for-unity", "mcpforunityserver", "unity-mcp", "blender-mcp"),
+    )
+    if managed:
+        return True
+    by_id = {t.id: t for t in tools}
+    tr_tool = by_id.get("trellis")
+    if tr_tool and tr_tool.enabled and "trellis" in live_map:
+        return True
+    bm_tool = by_id.get("blender_mcp")
+    if bm_tool and bm_tool.enabled and live_map.get("blender_open") == "1":
+        port = int(bm_tool.port or 9876)
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=0.35):
+                return True
+        except OSError:
+            pass
+    return False
+
+
+def stop_all_managed_services(tools: list[ToolSpec], lang: str = "en") -> tuple[int, str]:
+    """Stop all AIconomy-managed background servers and wait until processes and ports fully close."""
+    is_tr = lang == "tr"
+    stopped_labels: list[str] = []
+    stopped_pids: set[int] = set()
+
+    groups: list[tuple[list[psutil.Process], str]] = [
+        (
+            _find_managed_processes(
+                {"serena.exe", "serena-agent.exe"},
+                host_keywords=("serena",),
+                require_all=("start-mcp-server",),
+            ),
+            "Serena",
+        ),
+        (
+            _find_managed_processes(
+                {"mcp-for-unity.exe", "unity-mcp.exe"},
+                host_keywords=("mcp-for-unity", "mcpforunityserver", "unity-mcp"),
+            ),
+            "Unity MCP",
+        ),
+        (
+            _find_managed_processes({"blender-mcp.exe"}, host_keywords=("blender-mcp",)),
+            "blender-mcp",
+        ),
+        (
+            _find_managed_processes({"trellis-server.exe"}),
+            "TRELLIS",
+        ),
+    ]
+
+    all_procs: list[psutil.Process] = []
+    seen_pids: set[int] = set()
+    for procs, label in groups:
+        for p in procs:
+            if p.pid in seen_pids:
+                continue
+            seen_pids.add(p.pid)
+            try:
+                p.terminate()
+                all_procs.append(p)
+                stopped_pids.add(p.pid)
+                stopped_labels.append(f"{label} (PID {p.pid})")
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+
+    # Also clean windowless non-batch blender.exe holding :9876 (K2 safe: never touches GUI or -b batch jobs)
+    bm_tool = next((t for t in tools if t.id == "blender_mcp"), None)
+    b_port = int(bm_tool.port or 9876) if bm_tool else 9876
+    owner_pid, owner_name = find_port_owner(b_port)
+    if owner_pid and owner_name.lower() == "blender.exe" and owner_pid not in seen_pids:
+        try:
+            bproc = psutil.Process(owner_pid)
+            cmd = [str(x).lower() for x in (bproc.cmdline() or [])]
+            is_batch_job = "-b" in cmd or "--background" in cmd
+            has_window = owner_pid in get_gui_window_titles({"blender.exe": [owner_pid]})
+            if not is_batch_job and not has_window:
+                bproc.terminate()
+                all_procs.append(bproc)
+                stopped_pids.add(owner_pid)
+                stopped_labels.append(f"blender.exe (PID {owner_pid})")
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            pass
+
+    if all_procs:
+        _gone, alive = psutil.wait_procs(all_procs, timeout=3.5)
+        force_list: list[psutil.Process] = []
+        for p in alive:
+            try:
+                p.kill()
+                force_list.append(p)
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+        if force_list:
+            psutil.wait_procs(force_list, timeout=1.5)
+
+    # Confirm OS TCP ports previously held by terminated PIDs are completely released
+    if stopped_pids:
+        deadline = time.monotonic() + 1.5
+        while time.monotonic() < deadline:
+            still_bound = False
+            for p_num in (8080, 9121, 8790, b_port):
+                cur_pid, _ = find_port_owner(p_num)
+                if cur_pid and cur_pid in stopped_pids:
+                    still_bound = True
+                    break
+            if not still_bound:
+                break
+            time.sleep(0.2)
+
+    if not stopped_labels:
+        msg = "Çalışan yönetilen servis yok." if is_tr else "No managed services were running."
+        return 0, msg
+
+    joined = ", ".join(stopped_labels)
+    msg = f"Durduruldu: {joined}." if is_tr else f"Stopped: {joined}."
+    return len(stopped_labels), msg
 
 
 def enforce_tool_runtime_state(
     tool: ToolSpec,
     projects_map: dict[str, str],
     allow_stop: bool = True,
+    allow_start: bool = True,
     lang: str = "en",
 ) -> str:
     """Align managed background bridge processes with a tool's enabled state."""
@@ -434,6 +590,7 @@ def enforce_tool_runtime_state(
                 has_window = owner_pid in get_gui_window_titles({"blender.exe": [owner_pid]})
                 if not is_batch_job and not has_window:
                     bproc.terminate()
+                    psutil.wait_procs([bproc], timeout=2.5)
                     killed.append(f"blender.exe (PID {owner_pid})")
             except (psutil.NoSuchProcess, psutil.AccessDenied):
                 pass
@@ -460,6 +617,8 @@ def enforce_tool_runtime_state(
                 "Unity MCP",
             )
             return f" ({', '.join(killed)} {'durduruldu' if is_tr else 'stopped'})" if killed else ""
+        if not allow_start:
+            return ""
         owner_pid, _owner_name = find_port_owner(port)
         if not owner_pid:
             local_bin = pathlib.Path.home() / ".local" / "bin"
@@ -507,6 +666,8 @@ def enforce_tool_runtime_state(
                 "Serena",
             )
             return f" ({', '.join(killed)} {'durduruldu' if is_tr else 'stopped'})" if killed else ""
+        if not allow_start:
+            return ""
         owner_pid, _ = find_port_owner(port)
         if not owner_pid:
             serena_exe = pathlib.Path.home() / ".local" / "bin" / "serena.exe"
