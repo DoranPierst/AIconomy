@@ -1,5 +1,5 @@
 {
-  "version": "1.4.0",
+  "version": "1.5.0",
   "update_repo": "https://github.com/DoranPierst/AIconomy",
-  "changelog": "Major v1.4.0 overhaul: minimalist emoji-free 3-tab UI (Tools, Plugins, Logs), unified Profile combobox, Settings & Diagnostics dialogs, custom ToggleSwitch & status badges, modular architecture, critical safety & thread-safety fixes (managed-only process control, serialized atomic MCP config sync, QLocalServer single-instance, LOCALAPPDATA storage), and 100% English + Turkish localization."
+  "changelog": "Major v1.5.0 update: passive startup with bidirectional locked Start/Stop Tools, 100 curated Windows-compatible tools across 10 categories (zero auto-downloads), priority-ordered 18-color capability tags (primary glow), Task-Based Profile Wizard (+ Create Profile), clickable Token Usage Breakdown dialog, Dynamic Windows DPAPI API Key Vault, real CLI/disk settings wiring, Windows cmd /c npx wrapper, per-tool Reset to Defaults, and 100% EN/TR parity."
 }

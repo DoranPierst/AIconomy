@@ -26,7 +26,6 @@ from ...catalog import (
     LIBRARY_CATEGORY_IDS,
     ToolSpec,
     category_label,
-    is_benefit_tag,
     localized_tool_text,
     tag_label,
     tool_kind_label,
@@ -37,6 +36,7 @@ from ...tokens import fmt_tokens
 from ...updater import parse_semver
 from ..dialogs.add_repo import AddRepoDialog
 from ..dialogs.tool_info import ToolInfoDialog
+from ..theme import tag_button_qss
 from ..workers import safe_emit
 
 
@@ -388,10 +388,10 @@ class PluginsTabMixin:
                 tg_row = QHBoxLayout()
                 tg_row.setContentsMargins(0, 0, 0, 0)
                 tg_row.setSpacing(5)
-                for tg in t.tags[:3]:
+                for tg_idx, tg in enumerate(t.tags[:3]):
                     tg_txt = tag_label(tg, self.lang)
                     tg_btn = QPushButton(tg_txt.replace("&", "&&"))
-                    tg_btn.setObjectName("tagBenefitBtn" if is_benefit_tag(tg) else "tagDomainBtn")
+                    tg_btn.setStyleSheet(tag_button_qss(tg, is_primary=(tg_idx == 0), is_light=is_light))
                     tg_btn.setFixedHeight(16)
                     tg_btn.setCursor(Qt.CursorShape.PointingHandCursor)
                     tg_btn.setToolTip(tr(self.lang, "tag_filter_tip", tag=tg_txt))

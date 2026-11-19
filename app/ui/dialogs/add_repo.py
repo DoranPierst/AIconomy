@@ -150,7 +150,7 @@ class AddRepoDialog(QDialog):
             )
             return
         has_real_gear = bool(info["needs_api_key"])
-        auto_tags = ["automation"] if info["needs_api_key"] else ["free_local", "automation"]
+        auto_tags = ["automation"] if info["needs_api_key"] else ["automation", "free_local"]
         self.added_tool = ToolSpec(
             id=info["id"],
             name=info["name"],

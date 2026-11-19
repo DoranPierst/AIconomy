@@ -5,8 +5,9 @@ from typing import TYPE_CHECKING
 
 from PySide6.QtWidgets import QDialog, QFrame, QHBoxLayout, QLabel, QPushButton, QVBoxLayout
 
-from ...catalog import ToolSpec, is_benefit_tag, localized_tool_text, tag_label, tool_kind_label
+from ...catalog import ToolSpec, localized_tool_text, tag_label, tool_kind_label
 from ...i18n import tr
+from ..theme import tag_pill_qss
 
 if TYPE_CHECKING:
     from ..main_window import MainWindow
@@ -38,11 +39,13 @@ class ToolInfoDialog(QDialog):
         lay.addLayout(hdr_row)
 
         if tool.tags:
+            is_light = parent.meta.get("theme", "dark") == "light"
             tags_row = QHBoxLayout()
             tags_row.setSpacing(6)
-            for tg in tool.tags:
+            for tg_idx, tg in enumerate(tool.tags):
                 pill = QLabel(tag_label(tg, lang))
-                pill.setObjectName("tagBenefitPill" if is_benefit_tag(tg) else "tagDomainPill")
+                pill.setFixedHeight(18)
+                pill.setStyleSheet(tag_pill_qss(tg, is_primary=(tg_idx == 0), is_light=is_light))
                 tags_row.addWidget(pill)
             tags_row.addStretch()
             lay.addLayout(tags_row)

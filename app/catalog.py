@@ -356,7 +356,7 @@ def build_default_catalog() -> list[ToolSpec]:
             has_gear=True,
             gear_kind="skills94",
             install_cmd="git clone https://github.com/arjun988/blender-skills.git",
-            tags=["free_local", "modeling_3d", "style_3d"],
+            tags=["modeling_3d", "style_3d", "free_local"],
         ),
         ToolSpec(
             id="bla",
@@ -378,7 +378,7 @@ def build_default_catalog() -> list[ToolSpec]:
             mcp_server_key="bla-agents",
             mcp_command="npx",
             mcp_args=["-y", "bla-agents", "mcp"],
-            tags=["free_local", "security", "web_browser"],
+            tags=["security", "web_browser", "free_local"],
         ),
         ToolSpec(
             id="caveman",
@@ -399,7 +399,7 @@ def build_default_catalog() -> list[ToolSpec]:
             mode_index=1,
             has_gear=True,
             install_cmd="git clone https://github.com/JuliusBrussee/caveman.git",
-            tags=["token_saver", "free_local", "coding_lsp"],
+            tags=["token_saver", "coding_lsp", "free_local"],
         ),
         ToolSpec(
             id="serena",
@@ -425,7 +425,7 @@ def build_default_catalog() -> list[ToolSpec]:
             param_help="Local HTTP port for Serena MCP server (default: 9121).",
             install_cmd="uv tool install serena-agent",
             mcp_server_key="serena",
-            tags=["token_saver", "coding_lsp", "desktop_ui"],
+            tags=["coding_lsp", "token_saver", "desktop_ui"],
             options=[
                 CheckOption(
                     "no_dashboard",
@@ -457,7 +457,7 @@ def build_default_catalog() -> list[ToolSpec]:
             param_help="Local HTTP port matching the MCP for Unity window inside Unity Editor (default: 8080).",
             install_cmd="uv tool install --python 3.12 mcpforunityserver",
             mcp_server_key="unity-mcp",
-            tags=["free_local", "unity", "automation"],
+            tags=["unity", "automation", "free_local"],
         ),
         ToolSpec(
             id="unity_pipeline",
@@ -478,7 +478,7 @@ def build_default_catalog() -> list[ToolSpec]:
             param_label="Unity Project Path",
             param_value=u_path,
             param_help="Root directory of your Unity project (containing Assets and Packages).",
-            tags=["free_local", "unity", "testing_qa"],
+            tags=["unity", "testing_qa", "free_local"],
         ),
         ToolSpec(
             id="renderdoc_mcp",
@@ -504,7 +504,7 @@ def build_default_catalog() -> list[ToolSpec]:
             mcp_server_key="renderdoc-mcp",
             mcp_command="uvx",
             mcp_args=["renderdoc-mcp"],
-            tags=["free_local", "shader_gpu", "unity"],
+            tags=["shader_gpu", "unity", "free_local"],
         ),
         ToolSpec(
             id="blender_mcp",
@@ -530,7 +530,7 @@ def build_default_catalog() -> list[ToolSpec]:
             mcp_server_key="blender",
             mcp_command="uvx",
             mcp_args=["blender-mcp"],
-            tags=["free_local", "modeling_3d"],
+            tags=["modeling_3d", "free_local"],
         ),
         ToolSpec(
             id="trellis",
@@ -553,7 +553,7 @@ def build_default_catalog() -> list[ToolSpec]:
             param_label="TRELLIS Install Folder",
             param_value=t_dir,
             param_help="Local installation directory containing TRELLIS runtime and model weights.",
-            tags=["free_local", "modeling_3d", "shader_gpu"],
+            tags=["modeling_3d", "shader_gpu", "free_local"],
         ),
         ToolSpec(
             id="gltf_transform",
@@ -575,7 +575,7 @@ def build_default_catalog() -> list[ToolSpec]:
             mcp_server_key="3d-asset-processing",
             mcp_command="npx",
             mcp_args=["-y", "3d-asset-processing-mcp"],
-            tags=["free_local", "modeling_3d", "unity"],
+            tags=["modeling_3d", "unity", "free_local"],
         ),
         ToolSpec(
             id="elevenlabs_mcp",
@@ -654,7 +654,7 @@ def build_default_catalog() -> list[ToolSpec]:
             mcp_server_key="context7",
             mcp_command="npx",
             mcp_args=["-y", "@upstash/context7-mcp"],
-            tags=["token_saver", "docs_search", "desktop_ui"],
+            tags=["docs_search", "token_saver", "desktop_ui"],
         ),
         ToolSpec(
             id="chrome_devtools",
@@ -676,7 +676,7 @@ def build_default_catalog() -> list[ToolSpec]:
             mcp_server_key="chrome-devtools",
             mcp_command="npx",
             mcp_args=["-y", "chrome-devtools-mcp@latest"],
-            tags=["free_local", "web_browser", "testing_qa"],
+            tags=["web_browser", "testing_qa", "free_local"],
             options=[
                 CheckOption(
                     "headless_mode",

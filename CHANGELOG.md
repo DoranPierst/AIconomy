@@ -2,6 +2,24 @@
 
 All notable changes to **AIconomy** are documented in this file.
 
+## [1.5.0] - 2026-11-19
+
+Major feature, UX, and catalog release introducing passive runtime control, a curated 100-tool library with zero auto-downloads, interactive token share analytics, task-driven profile creation, and dynamic DPAPI key management.
+
+### Runtime Control & Real Settings Wiring
+- **Passive Startup & Locked Start/Stop Control:** AIconomy never auto-starts background servers on launch. A single bidirectional top-bar and tray button (**Start Tools** green <-> **Stop Tools** amber) locks during transitions until `psutil.wait_procs` and TCP port release checks finish cleanly.
+- **100% Real CLI, Env & Disk Settings:** Removed all placeholder modes and options; wired real runtime behaviors including **Caveman** disk rule toggling and `Lite/Full/Ultra` compression directives, **Serena** `--mode` / `--port` / `--open-web-dashboard False`, **Chrome DevTools** `--headless` / `--isolated`, **Blender MCP** `BLENDER_PORT`, **ElevenLabs** `ELEVENLABS_MCP_OUTPUT_PATH`, and declarative `param_arg_flag` / `param_env_var` bindings across library tools.
+- **Windows `cmd /c npx` Compatibility & API Key Guard:** Wraps `npx` stdio MCP servers with `cmd /c npx` on Windows to prevent `spawn npx ENOENT` errors in Claude Code and Cursor, flags missing required API keys (`API key missing`) instead of falsely reporting `Ready`, dims uninstalled AI clients, and adds per-tool **Reset to Defaults**.
+
+### Token Analytics, Priority Tags & Task Profile Wizard
+- **Clickable Token Usage Breakdown:** Clicking the footer token badge opens an interactive breakdown dialog showing per-client 200K context load (`AGY`, `CDX`, `CLD`, `CUR`), aligned percentage share bars, **Token Saver** vs **Capability Schema** roles, and instant inline toggles.
+- **Priority-Ordered 18-Color Capability Tags:** Every tool's tags are ordered strictly by core capability (e.g. `3D Modeling` first on Blender, `Unity` first on Unity MCP, `Shader & GPU` first on RenderDoc, `Coding & LSP` first on Serena, `Token Saver` first on Caveman), with 18 distinct semantic colors where **only each tool's #1 primary tag shines**.
+- **`+ Create Profile` Task Wizard & Refreshed Profiles:** Select what you are working on by tag to auto-filter matching tools (from your workspace or all 100 library tools), preview live schema token impact, and save/apply custom profiles in one click, alongside 5 refreshed built-in profiles and 6 Blender 94-skill subgroups.
+
+### Curated 100-Tool Library & Dynamic DPAPI Vault
+- **Two-Tier Workspace + 100 Curated Tools (Zero Downloads):** `Tools` displays only your active workspace tools (`14` starter tools out of the box), while `Plugins` offers a searchable, category/tag/status-filterable library of **100** Windows-compatible MCP/Skill/Rule tools across 10 categories. Clicking **+ Add to Workspace** adds the config definition with **zero background package downloads**.
+- **Dynamic Windows DPAPI Vault:** `Settings > API Keys` automatically surfaces encrypted DPAPI inputs in a scrollable view for any workspace tool that supports an API key while preserving previously saved keys.
+
 ## [1.4.0] - 2026-11-19
 
 Major public-release overhaul focused on reliability, minimalist UX, modular architecture, and 100% English + Turkish localization.

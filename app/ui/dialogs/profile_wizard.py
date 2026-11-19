@@ -32,6 +32,7 @@ from ...catalog import (
 )
 from ...i18n import tr
 from ...tokens import CONTEXT_WINDOW_TOKENS, compute_token_breakdown, fmt_tokens
+from ..theme import tag_pill_qss, wizard_chip_qss
 
 if TYPE_CHECKING:
     from ..main_window import MainWindow
@@ -65,8 +66,8 @@ class ProfileWizardDialog(QDialog):
         self.result_tags: list[str] = []
 
         self.setWindowTitle(tr(self.lang, "wiz_title"))
-        self.setMinimumSize(780, 580)
-        self.resize(850, 660)
+        self.setMinimumSize(820, 580)
+        self.resize(900, 660)
 
         root = QVBoxLayout(self)
         root.setContentsMargins(14, 14, 14, 12)
@@ -83,6 +84,7 @@ class ProfileWizardDialog(QDialog):
         adv_row.setSpacing(8)
         adv_row.addWidget(QLabel(f"<b>{tr(self.lang, 'wiz_adv_lbl')}</b>"))
 
+        is_light_init = parent.meta.get("theme", "dark") == "light"
         self.tag_buttons: dict[str, QPushButton] = {}
         tag_counts = {
             tid: sum(1 for t in self.workspace_tools if tid in t.tags)
@@ -93,7 +95,7 @@ class ProfileWizardDialog(QDialog):
             cnt = tag_counts[tid]
             lbl = f"{tag_label(tid, self.lang)} ({cnt})" if cnt else tag_label(tid, self.lang)
             btn = QPushButton(lbl.replace("&", "&&"))
-            btn.setObjectName("wizBenefitChip")
+            btn.setStyleSheet(wizard_chip_qss(tid, is_light=is_light_init, is_benefit=True))
             btn.setCheckable(True)
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
             btn.clicked.connect(lambda checked, tag_code=tid: self._on_tag_clicked(tag_code, checked))
@@ -111,7 +113,7 @@ class ProfileWizardDialog(QDialog):
             cnt = tag_counts[tid]
             lbl = f"{tag_label(tid, self.lang)} ({cnt})" if cnt else tag_label(tid, self.lang)
             btn = QPushButton(lbl.replace("&", "&&"))
-            btn.setObjectName("wizDomainChip")
+            btn.setStyleSheet(wizard_chip_qss(tid, is_light=is_light_init, is_benefit=False))
             btn.setCheckable(True)
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
             if cnt == 0:
@@ -342,6 +344,7 @@ class ProfileWizardDialog(QDialog):
         shown_tools.sort(
             key=lambda t: (
                 0 if t.id in self.checked_tool_ids else 1,
+                0 if (t.tags and t.tags[0] in sel_set) else 1,
                 -len(sel_set & set(t.tags)),
                 0 if getattr(t, "in_workspace", True) else 1,
                 t.name.lower(),
@@ -390,9 +393,10 @@ class ProfileWizardDialog(QDialog):
                     )
                     top_r.addWidget(lib_pill)
 
-                for tg in t.tags:
+                for tg_idx, tg in enumerate(t.tags):
                     t_pill = QLabel(tag_label(tg, self.lang))
-                    t_pill.setObjectName("tagBenefitPill" if is_benefit_tag(tg) else "tagDomainPill")
+                    t_pill.setFixedHeight(16)
+                    t_pill.setStyleSheet(tag_pill_qss(tg, is_primary=(tg_idx == 0), is_light=is_light))
                     top_r.addWidget(t_pill)
 
                 if t.id == "blender_skills":

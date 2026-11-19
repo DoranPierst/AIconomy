@@ -30,7 +30,6 @@ from ...catalog import (
     PROFILES,
     TOOL_KINDS,
     ToolSpec,
-    is_benefit_tag,
     localized_tool_modes,
     localized_tool_text,
     normalize_tool_kind,
@@ -43,6 +42,7 @@ from ...processes import probe_tool_health, scan_live_process_locations
 from ...tokens import compute_token_breakdown, fmt_tokens
 from ..dialogs.tool_info import ToolInfoDialog
 from ..icons import icon_color, make_icon
+from ..theme import tag_button_qss
 from ..widgets import AiMatrixHeaderView, HoverTableWidget, StatusBadgeWidget, ToggleSwitch
 
 
@@ -442,10 +442,10 @@ class ToolsTabMixin:
                 tg_l = QHBoxLayout()
                 tg_l.setContentsMargins(0, 0, 0, 0)
                 tg_l.setSpacing(5)
-                for tg in t.tags[:3]:
+                for tg_idx, tg in enumerate(t.tags[:3]):
                     tg_txt = tag_label(tg, self.lang)
                     tg_btn = QPushButton(tg_txt.replace("&", "&&"))
-                    tg_btn.setObjectName("tagBenefitBtn" if is_benefit_tag(tg) else "tagDomainBtn")
+                    tg_btn.setStyleSheet(tag_button_qss(tg, is_primary=(tg_idx == 0), is_light=is_light))
                     tg_btn.setFixedHeight(16)
                     tg_btn.setCursor(Qt.CursorShape.PointingHandCursor)
                     tg_btn.setToolTip(tr(self.lang, "tag_filter_tip", tag=tg_txt))

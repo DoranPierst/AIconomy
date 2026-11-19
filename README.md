@@ -35,14 +35,14 @@ No Python installation required:
 
 ## Key Features
 
-- **Unified Per-Client MCP Matrix (`AGY / CDX / CLD / CUR`):** Enable or disable MCP servers, CLI tools, rules, and skill packs per AI client (**Google Antigravity**, **OpenAI Codex**, **Claude Code**, **Cursor**), or bulk-toggle entire columns from the table header.
-- **Built-In & Custom Profiles:** Switch tool sets with a single top-bar **Profile** dropdown (`Unity & Shader`, `3D Assets`, `Web`, `Minimal`, or your own saved profiles) with JSON export/import support.
-- **Token Schema Budget Tracker:** Tracks active MCP tool schema footprint (`Active` vs `Saved` tokens) in real time as you enable or disable tools.
-- **Live Health, Process & Port Monitor:** Verifies real visible host windows (`IsWindowVisible`) and local TCP ports (`:9121`, `:8080`, `:9876`, `:8790`), safely starts/stops only managed bridges, and offers one-click minimized host launch for Unity, Blender, RenderDoc, or TRELLIS.
-- **Diagnostics Center:** Run end-to-end MCP handshakes (`initialize`, Blender `get_scene_info`, and `stdio` JSON-RPC probes) even when AI IDEs are closed, inspect stuck ports, and copy structured diagnostic reports.
-- **Plugin Updates & GitHub Installer:** Check PyPI / npm / GitHub updates in parallel, update tools individually or in batch, and inspect/add custom MCP servers from any GitHub repository URL.
-- **Persistent SQLite Logs & AI Troubleshooting Export:** Search and filter logs (`ERR`, `WARN`, `INFO`, `DBG`) and copy selected entries with affected tool metadata into a structured prompt for any AI assistant.
-- **100% English & Turkish UI:** Full live language switching with Windows OS locale auto-detection, plus Dark and Light themes and optional minimize-to-tray behavior.
+- **Passive Startup & Locked Start/Stop Control:** Opens with zero unsolicited background server spawns; a single bidirectional **Start Tools** / **Stop Tools** button stays safely locked until managed processes (`psutil.wait_procs`) and local TCP ports settle.
+- **Unified Per-Client MCP Matrix (`AGY / CDX / CLD / CUR`):** Enable or disable MCP servers, CLI tools, rules, and skill packs per AI client (**Google Antigravity**, **OpenAI Codex**, **Claude Code**, **Cursor**), with automatic Windows `cmd /c npx` wrapping and uninstalled-client dimming.
+- **Curated 100-Tool Library (Zero Auto-Downloads):** Keep your **Tools** workspace lean (`14` starter tools by default) and browse **100** verified Windows-compatible MCP/Skill/Rule entries across 10 categories in **Plugins** — **+ Add to Workspace** registers the tool definition with zero disk downloads.
+- **Priority-Ordered 18-Color Tags & `+ Create Profile` Wizard:** Each tool displays up to 3 semantic capability tags ordered by true primary purpose (with only the #1 superpower tag highlighted), powering one-click table filtering and the task-based **+ Create Profile** wizard alongside 5 built-in profiles.
+- **Interactive Token Usage Breakdown:** Click the footer token badge anytime to inspect per-client 200K context load, per-tool schema share bars, **Token Saver** vs **Capability Schema** classifications, and live tool toggles.
+- **Dynamic Windows DPAPI Key Vault:** API key fields appear automatically in **Settings -> API Keys** whenever you add a key-backed tool to your workspace, encrypted at rest via Windows `CryptProtectData`.
+- **Diagnostics Center & SQLite Logs:** Run live end-to-end MCP handshakes (`initialize`, Blender socket, `stdio` JSON-RPC), release stuck local ports safely, reset individual tools to factory defaults, and export structured AI troubleshooting prompts.
+- **100% English & Turkish UI:** Full live language switching with Windows OS locale auto-detection, Dark and Light themes (updated screenshot below), and system tray controls.
 
 ---
 

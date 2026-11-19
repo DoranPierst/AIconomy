@@ -45,7 +45,7 @@ def build_library_catalog() -> list["ToolSpec"]:
             mcp_server_key="filesystem",
             mcp_command="npx",
             mcp_args=["-y", "@modelcontextprotocol/server-filesystem"],
-            tags=["free_local", "coding_lsp", "automation"],
+            tags=["coding_lsp", "automation", "free_local"],
         ),
         _spec(
             id="desktop_commander",
@@ -62,7 +62,7 @@ def build_library_catalog() -> list["ToolSpec"]:
             mcp_server_key="desktop-commander",
             mcp_command="npx",
             mcp_args=["-y", "@wonderwhy-er/desktop-commander@latest"],
-            tags=["free_local", "desktop_ui", "automation"],
+            tags=["desktop_ui", "automation", "free_local"],
         ),
         _spec(
             id="e2b_mcp",
@@ -99,7 +99,7 @@ def build_library_catalog() -> list["ToolSpec"]:
             mcp_server_key="run-python",
             mcp_command="uvx",
             mcp_args=["mcp-run-python", "stdio"],
-            tags=["free_local", "coding_lsp", "security"],
+            tags=["coding_lsp", "security", "free_local"],
         ),
         _spec(
             id="openapi_mcp",
@@ -120,7 +120,7 @@ def build_library_catalog() -> list["ToolSpec"]:
             mcp_server_key="openapi-schema",
             mcp_command="npx",
             mcp_args=["-y", "@snaggle-ai/openapi-mcp-server"],
-            tags=["free_local", "coding_lsp", "web_browser"],
+            tags=["coding_lsp", "web_browser", "free_local"],
         ),
         _spec(
             id="graphql_mcp",
@@ -141,7 +141,7 @@ def build_library_catalog() -> list["ToolSpec"]:
             mcp_server_key="graphql",
             mcp_command="npx",
             mcp_args=["-y", "mcp-graphql"],
-            tags=["free_local", "coding_lsp", "web_browser"],
+            tags=["coding_lsp", "web_browser", "free_local"],
         ),
         _spec(
             id="postman_mcp",
@@ -161,7 +161,7 @@ def build_library_catalog() -> list["ToolSpec"]:
             mcp_server_key="postman",
             mcp_command="npx",
             mcp_args=["-y", "@postman/postman-mcp-server"],
-            tags=["coding_lsp", "testing_qa"],
+            tags=["testing_qa", "coding_lsp"],
         ),
         _spec(
             id="repomix_mcp",
@@ -178,7 +178,7 @@ def build_library_catalog() -> list["ToolSpec"]:
             mcp_server_key="repomix",
             mcp_command="npx",
             mcp_args=["-y", "repomix", "--mcp"],
-            tags=["token_saver", "free_local", "coding_lsp"],
+            tags=["token_saver", "coding_lsp", "free_local"],
         ),
         _spec(
             id="ast_grep_mcp",
@@ -195,7 +195,7 @@ def build_library_catalog() -> list["ToolSpec"]:
             mcp_server_key="ast-grep",
             mcp_command="uvx",
             mcp_args=["ast-grep-mcp"],
-            tags=["token_saver", "free_local", "coding_lsp"],
+            tags=["coding_lsp", "token_saver", "free_local"],
         ),
         _spec(
             id="jupyter_mcp",
@@ -236,7 +236,7 @@ def build_library_catalog() -> list["ToolSpec"]:
             mcp_server_key="nx-monorepo",
             mcp_command="npx",
             mcp_args=["-y", "nx-mcp@latest"],
-            tags=["free_local", "coding_lsp", "automation"],
+            tags=["coding_lsp", "automation", "free_local"],
         ),
 
         # =====================================================================
@@ -281,7 +281,7 @@ def build_library_catalog() -> list["ToolSpec"]:
             mcp_server_key="git-local",
             mcp_command="uvx",
             mcp_args=["mcp-server-git"],
-            tags=["free_local", "git_repo"],
+            tags=["git_repo", "free_local"],
         ),
         _spec(
             id="gitlab_mcp",
@@ -386,7 +386,7 @@ def build_library_catalog() -> list["ToolSpec"]:
             mcp_server_key="git-ingest",
             mcp_command="uvx",
             mcp_args=["--from", "git+https://github.com/adhikasp/mcp-git-ingest", "mcp-git-ingest"],
-            tags=["token_saver", "free_local", "git_repo"],
+            tags=["git_repo", "token_saver", "free_local"],
         ),
 
         # =====================================================================
@@ -407,7 +407,7 @@ def build_library_catalog() -> list["ToolSpec"]:
             mcp_server_key="playwright",
             mcp_command="npx",
             mcp_args=["-y", "@playwright/mcp@latest"],
-            tags=["token_saver", "free_local", "web_browser"],
+            tags=["web_browser", "token_saver", "free_local"],
         ),
         _spec(
             id="puppeteer_mcp",
@@ -424,7 +424,7 @@ def build_library_catalog() -> list["ToolSpec"]:
             mcp_server_key="puppeteer",
             mcp_command="npx",
             mcp_args=["-y", "@modelcontextprotocol/server-puppeteer"],
-            tags=["free_local", "web_browser", "testing_qa"],
+            tags=["web_browser", "testing_qa", "free_local"],
         ),
         _spec(
             id="fetch_mcp",
@@ -441,7 +441,7 @@ def build_library_catalog() -> list["ToolSpec"]:
             mcp_server_key="fetch",
             mcp_command="uvx",
             mcp_args=["mcp-server-fetch"],
-            tags=["token_saver", "free_local", "web_browser"],
+            tags=["web_browser", "token_saver", "free_local"],
         ),
         _spec(
             id="brave_search_mcp",
@@ -481,7 +481,7 @@ def build_library_catalog() -> list["ToolSpec"]:
             mcp_server_key="tavily",
             mcp_command="npx",
             mcp_args=["-y", "tavily-mcp@latest"],
-            tags=["token_saver", "web_browser", "docs_search"],
+            tags=["web_browser", "docs_search", "token_saver"],
         ),
         _spec(
             id="exa_mcp",
@@ -501,7 +501,7 @@ def build_library_catalog() -> list["ToolSpec"]:
             mcp_server_key="exa-search",
             mcp_command="npx",
             mcp_args=["-y", "exa-mcp-server"],
-            tags=["web_browser", "docs_search"],
+            tags=["docs_search", "web_browser"],
         ),
         _spec(
             id="firecrawl_mcp",
@@ -541,7 +541,7 @@ def build_library_catalog() -> list["ToolSpec"]:
             mcp_server_key="perplexity-ask",
             mcp_command="npx",
             mcp_args=["-y", "server-perplexity-ask"],
-            tags=["web_browser", "docs_search"],
+            tags=["docs_search", "web_browser"],
         ),
         _spec(
             id="jina_reader_mcp",
@@ -561,7 +561,7 @@ def build_library_catalog() -> list["ToolSpec"]:
             mcp_server_key="jina-reader",
             mcp_command="npx",
             mcp_args=["-y", "@jina-ai/mcp-server"],
-            tags=["token_saver", "web_browser", "docs_search"],
+            tags=["docs_search", "web_browser", "token_saver"],
         ),
         _spec(
             id="youtube_transcript_mcp",
@@ -578,7 +578,7 @@ def build_library_catalog() -> list["ToolSpec"]:
             mcp_server_key="youtube-transcript",
             mcp_command="npx",
             mcp_args=["-y", "@kimtaeyoon83/mcp-server-youtube-transcript"],
-            tags=["free_local", "docs_search", "web_browser"],
+            tags=["docs_search", "web_browser", "free_local"],
         ),
         _spec(
             id="duckduckgo_mcp",
@@ -595,7 +595,7 @@ def build_library_catalog() -> list["ToolSpec"]:
             mcp_server_key="duckduckgo",
             mcp_command="uvx",
             mcp_args=["duckduckgo-mcp-server"],
-            tags=["free_local", "web_browser", "docs_search"],
+            tags=["web_browser", "docs_search", "free_local"],
         ),
 
         # =====================================================================
@@ -620,7 +620,7 @@ def build_library_catalog() -> list["ToolSpec"]:
             mcp_server_key="postgres",
             mcp_command="npx",
             mcp_args=["-y", "@modelcontextprotocol/server-postgres"],
-            tags=["free_local", "database"],
+            tags=["database", "free_local"],
         ),
         _spec(
             id="sqlite_mcp",
@@ -641,7 +641,7 @@ def build_library_catalog() -> list["ToolSpec"]:
             mcp_server_key="sqlite",
             mcp_command="uvx",
             mcp_args=["mcp-server-sqlite"],
-            tags=["free_local", "database", "desktop_ui"],
+            tags=["database", "desktop_ui", "free_local"],
         ),
         _spec(
             id="mysql_mcp",
@@ -665,7 +665,7 @@ def build_library_catalog() -> list["ToolSpec"]:
             mcp_server_key="mysql",
             mcp_command="uvx",
             mcp_args=["mysql-mcp-server"],
-            tags=["free_local", "database"],
+            tags=["database", "free_local"],
         ),
         _spec(
             id="mongodb_mcp",
@@ -686,7 +686,7 @@ def build_library_catalog() -> list["ToolSpec"]:
             mcp_server_key="mongodb",
             mcp_command="npx",
             mcp_args=["-y", "mongodb-mcp-server@latest"],
-            tags=["free_local", "database"],
+            tags=["database", "free_local"],
         ),
         _spec(
             id="redis_mcp",
@@ -707,7 +707,7 @@ def build_library_catalog() -> list["ToolSpec"]:
             mcp_server_key="redis",
             mcp_command="uvx",
             mcp_args=["redis-mcp-server"],
-            tags=["free_local", "database", "cloud_devops"],
+            tags=["database", "cloud_devops", "free_local"],
         ),
         _spec(
             id="supabase_mcp",
@@ -768,7 +768,7 @@ def build_library_catalog() -> list["ToolSpec"]:
             mcp_server_key="duckdb",
             mcp_command="uvx",
             mcp_args=["mcp-server-motherduck"],
-            tags=["free_local", "database"],
+            tags=["database", "free_local"],
         ),
         _spec(
             id="clickhouse_mcp",
@@ -816,7 +816,7 @@ def build_library_catalog() -> list["ToolSpec"]:
             mcp_server_key="qdrant",
             mcp_command="uvx",
             mcp_args=["mcp-server-qdrant"],
-            tags=["free_local", "database", "docs_search"],
+            tags=["database", "docs_search", "free_local"],
         ),
         _spec(
             id="chroma_mcp",
@@ -837,7 +837,7 @@ def build_library_catalog() -> list["ToolSpec"]:
             mcp_server_key="chroma",
             mcp_command="uvx",
             mcp_args=["chroma-mcp"],
-            tags=["free_local", "database", "docs_search"],
+            tags=["database", "docs_search", "free_local"],
         ),
         _spec(
             id="prisma_mcp",
@@ -854,7 +854,7 @@ def build_library_catalog() -> list["ToolSpec"]:
             mcp_server_key="prisma",
             mcp_command="npx",
             mcp_args=["-y", "prisma", "mcp"],
-            tags=["free_local", "database", "coding_lsp"],
+            tags=["database", "coding_lsp", "free_local"],
         ),
 
         # =====================================================================
@@ -895,7 +895,7 @@ def build_library_catalog() -> list["ToolSpec"]:
             mcp_server_key="aws-docs",
             mcp_command="uvx",
             mcp_args=["awslabs.aws-documentation-mcp-server@latest"],
-            tags=["token_saver", "free_local", "cloud_devops"],
+            tags=["cloud_devops", "token_saver", "free_local"],
         ),
         _spec(
             id="aws_cdk_mcp",
@@ -912,7 +912,7 @@ def build_library_catalog() -> list["ToolSpec"]:
             mcp_server_key="aws-cdk",
             mcp_command="uvx",
             mcp_args=["awslabs.cdk-mcp-server@latest"],
-            tags=["free_local", "cloud_devops", "security"],
+            tags=["cloud_devops", "security", "free_local"],
         ),
         _spec(
             id="terraform_mcp",
@@ -929,7 +929,7 @@ def build_library_catalog() -> list["ToolSpec"]:
             mcp_server_key="terraform",
             mcp_command="uvx",
             mcp_args=["awslabs.terraform-mcp-server@latest"],
-            tags=["token_saver", "free_local", "cloud_devops"],
+            tags=["cloud_devops", "token_saver", "free_local"],
         ),
         _spec(
             id="azure_mcp",
@@ -946,7 +946,7 @@ def build_library_catalog() -> list["ToolSpec"]:
             mcp_server_key="azure",
             mcp_command="npx",
             mcp_args=["-y", "@azure/mcp@latest", "server", "start"],
-            tags=["free_local", "cloud_devops"],
+            tags=["cloud_devops", "free_local"],
         ),
         _spec(
             id="gcloud_run_mcp",
@@ -963,7 +963,7 @@ def build_library_catalog() -> list["ToolSpec"]:
             mcp_server_key="gcloud-run",
             mcp_command="npx",
             mcp_args=["-y", "@google-cloud/cloud-run-mcp"],
-            tags=["free_local", "cloud_devops"],
+            tags=["cloud_devops", "free_local"],
         ),
         _spec(
             id="docker_mcp",
@@ -980,7 +980,7 @@ def build_library_catalog() -> list["ToolSpec"]:
             mcp_server_key="docker",
             mcp_command="uvx",
             mcp_args=["mcp-server-docker"],
-            tags=["free_local", "cloud_devops", "automation"],
+            tags=["cloud_devops", "automation", "free_local"],
         ),
         _spec(
             id="kubernetes_mcp",
@@ -997,7 +997,7 @@ def build_library_catalog() -> list["ToolSpec"]:
             mcp_server_key="kubernetes",
             mcp_command="npx",
             mcp_args=["-y", "mcp-server-kubernetes"],
-            tags=["free_local", "cloud_devops"],
+            tags=["cloud_devops", "free_local"],
         ),
         _spec(
             id="railway_mcp",
@@ -1062,7 +1062,7 @@ def build_library_catalog() -> list["ToolSpec"]:
             mcp_server_key="godot",
             mcp_command="npx",
             mcp_args=["-y", "@coding-solo/godot-mcp"],
-            tags=["free_local", "modeling_3d", "automation"],
+            tags=["modeling_3d", "automation", "free_local"],
         ),
         _spec(
             id="unreal_mcp",
@@ -1079,7 +1079,7 @@ def build_library_catalog() -> list["ToolSpec"]:
             mcp_server_key="unreal-engine",
             mcp_command="uvx",
             mcp_args=["unreal-mcp"],
-            tags=["free_local", "modeling_3d", "shader_gpu"],
+            tags=["modeling_3d", "shader_gpu", "free_local"],
         ),
         _spec(
             id="sketchfab_mcp",
@@ -1116,7 +1116,7 @@ def build_library_catalog() -> list["ToolSpec"]:
             mcp_server_key="blockbench",
             mcp_command="npx",
             mcp_args=["-y", "blockbench-mcp"],
-            tags=["free_local", "modeling_3d", "style_3d"],
+            tags=["modeling_3d", "style_3d", "free_local"],
         ),
         _spec(
             id="ffmpeg_media_mcp",
@@ -1133,7 +1133,7 @@ def build_library_catalog() -> list["ToolSpec"]:
             mcp_server_key="ffmpeg-media",
             mcp_command="uvx",
             mcp_args=["mcp-ffmpeg"],
-            tags=["free_local", "audio_sfx", "automation"],
+            tags=["audio_sfx", "automation", "free_local"],
         ),
         _spec(
             id="replicate_media_mcp",
@@ -1177,7 +1177,7 @@ def build_library_catalog() -> list["ToolSpec"]:
             mcp_server_key="figma-context",
             mcp_command="npx",
             mcp_args=["-y", "figma-developer-mcp", "--stdio"],
-            tags=["token_saver", "design_ui", "desktop_ui"],
+            tags=["design_ui", "desktop_ui", "token_saver"],
         ),
         _spec(
             id="shadcn_ui_mcp",
@@ -1197,7 +1197,7 @@ def build_library_catalog() -> list["ToolSpec"]:
             mcp_server_key="shadcn-ui",
             mcp_command="npx",
             mcp_args=["-y", "@jpisnice/shadcn-ui-mcp-server"],
-            tags=["free_local", "design_ui", "web_browser"],
+            tags=["design_ui", "web_browser", "free_local"],
         ),
         _spec(
             id="magic_ui_mcp",
@@ -1238,7 +1238,7 @@ def build_library_catalog() -> list["ToolSpec"]:
             mcp_server_key="storybook",
             mcp_command="npx",
             mcp_args=["-y", "storybook-mcp"],
-            tags=["token_saver", "free_local", "design_ui"],
+            tags=["design_ui", "token_saver", "free_local"],
         ),
         _spec(
             id="mermaid_mcp",
@@ -1255,7 +1255,7 @@ def build_library_catalog() -> list["ToolSpec"]:
             mcp_server_key="mermaid",
             mcp_command="npx",
             mcp_args=["-y", "@peng-shawn/mermaid-mcp-server"],
-            tags=["free_local", "design_ui", "docs_search"],
+            tags=["design_ui", "docs_search", "free_local"],
         ),
         _spec(
             id="excalidraw_mcp",
@@ -1272,7 +1272,7 @@ def build_library_catalog() -> list["ToolSpec"]:
             mcp_server_key="excalidraw",
             mcp_command="npx",
             mcp_args=["-y", "excalidraw-mcp"],
-            tags=["free_local", "design_ui", "desktop_ui"],
+            tags=["design_ui", "desktop_ui", "free_local"],
         ),
         _spec(
             id="svgo_icon_mcp",
@@ -1289,7 +1289,7 @@ def build_library_catalog() -> list["ToolSpec"]:
             mcp_server_key="svg-vector",
             mcp_command="npx",
             mcp_args=["-y", "svg-mcp-server"],
-            tags=["free_local", "design_ui", "desktop_ui"],
+            tags=["design_ui", "desktop_ui", "free_local"],
         ),
 
         # =====================================================================
@@ -1333,7 +1333,7 @@ def build_library_catalog() -> list["ToolSpec"]:
             mcp_server_key="linear",
             mcp_command="npx",
             mcp_args=["-y", "linear-mcp-server"],
-            tags=["docs_search", "automation"],
+            tags=["automation", "docs_search"],
         ),
         _spec(
             id="slack_mcp",
@@ -1402,7 +1402,7 @@ def build_library_catalog() -> list["ToolSpec"]:
             mcp_server_key="obsidian",
             mcp_command="npx",
             mcp_args=["-y", "mcp-obsidian"],
-            tags=["free_local", "docs_search"],
+            tags=["docs_search", "free_local"],
         ),
         _spec(
             id="todoist_mcp",
@@ -1443,7 +1443,7 @@ def build_library_catalog() -> list["ToolSpec"]:
             mcp_server_key="arxiv",
             mcp_command="uvx",
             mcp_args=["arxiv-mcp-server"],
-            tags=["free_local", "docs_search", "shader_gpu"],
+            tags=["docs_search", "shader_gpu", "free_local"],
         ),
         _spec(
             id="wikipedia_mcp",
@@ -1460,7 +1460,7 @@ def build_library_catalog() -> list["ToolSpec"]:
             mcp_server_key="wikipedia",
             mcp_command="uvx",
             mcp_args=["wikipedia-mcp"],
-            tags=["free_local", "docs_search"],
+            tags=["docs_search", "free_local"],
         ),
         _spec(
             id="time_timezone_mcp",
@@ -1481,7 +1481,7 @@ def build_library_catalog() -> list["ToolSpec"]:
             mcp_server_key="time",
             mcp_command="uvx",
             mcp_args=["mcp-server-time"],
-            tags=["free_local", "automation"],
+            tags=["automation", "free_local"],
         ),
         _spec(
             id="markitdown_mcp",
@@ -1498,7 +1498,7 @@ def build_library_catalog() -> list["ToolSpec"]:
             mcp_server_key="markitdown",
             mcp_command="uvx",
             mcp_args=["markitdown-mcp"],
-            tags=["token_saver", "free_local", "docs_search"],
+            tags=["docs_search", "token_saver", "free_local"],
         ),
 
         # =====================================================================
@@ -1539,7 +1539,7 @@ def build_library_catalog() -> list["ToolSpec"]:
             mcp_server_key="semgrep",
             mcp_command="uvx",
             mcp_args=["semgrep-mcp"],
-            tags=["free_local", "security", "testing_qa"],
+            tags=["security", "testing_qa", "free_local"],
         ),
         _spec(
             id="snyk_mcp",
@@ -1576,7 +1576,7 @@ def build_library_catalog() -> list["ToolSpec"]:
             mcp_server_key="osv-scanner",
             mcp_command="uvx",
             mcp_args=["osv-mcp"],
-            tags=["free_local", "security", "testing_qa"],
+            tags=["security", "testing_qa", "free_local"],
         ),
         _spec(
             id="grafana_mcp",
@@ -1600,7 +1600,7 @@ def build_library_catalog() -> list["ToolSpec"]:
             mcp_server_key="grafana",
             mcp_command="uvx",
             mcp_args=["mcp-grafana"],
-            tags=["cloud_devops", "testing_qa"],
+            tags=["testing_qa", "cloud_devops"],
         ),
         _spec(
             id="datadog_mcp",
@@ -1620,7 +1620,7 @@ def build_library_catalog() -> list["ToolSpec"]:
             mcp_server_key="datadog",
             mcp_command="npx",
             mcp_args=["-y", "@winor30/mcp-server-datadog"],
-            tags=["cloud_devops", "testing_qa"],
+            tags=["testing_qa", "cloud_devops"],
         ),
         _spec(
             id="stripe_mcp",
@@ -1640,7 +1640,7 @@ def build_library_catalog() -> list["ToolSpec"]:
             mcp_server_key="stripe",
             mcp_command="npx",
             mcp_args=["-y", "@stripe/mcp", "--tools=all"],
-            tags=["security", "testing_qa", "web_browser"],
+            tags=["web_browser", "security", "testing_qa"],
         ),
         _spec(
             id="vitest_qa_mcp",
@@ -1657,7 +1657,7 @@ def build_library_catalog() -> list["ToolSpec"]:
             mcp_server_key="vitest",
             mcp_command="npx",
             mcp_args=["-y", "@djankies/vitest-mcp"],
-            tags=["token_saver", "free_local", "testing_qa"],
+            tags=["testing_qa", "token_saver", "free_local"],
         ),
 
         # =====================================================================
@@ -1678,7 +1678,7 @@ def build_library_catalog() -> list["ToolSpec"]:
             mcp_server_key="sequential-thinking",
             mcp_command="npx",
             mcp_args=["-y", "@modelcontextprotocol/server-sequential-thinking"],
-            tags=["free_local", "coding_lsp"],
+            tags=["coding_lsp", "free_local"],
         ),
         _spec(
             id="memory_graph_mcp",
@@ -1699,7 +1699,7 @@ def build_library_catalog() -> list["ToolSpec"]:
             mcp_server_key="memory",
             mcp_command="npx",
             mcp_args=["-y", "@modelcontextprotocol/server-memory"],
-            tags=["token_saver", "free_local", "docs_search"],
+            tags=["docs_search", "token_saver", "free_local"],
         ),
         _spec(
             id="basic_memory_mcp",
@@ -1716,7 +1716,7 @@ def build_library_catalog() -> list["ToolSpec"]:
             mcp_server_key="basic-memory",
             mcp_command="uvx",
             mcp_args=["basic-memory", "mcp"],
-            tags=["token_saver", "free_local", "docs_search"],
+            tags=["docs_search", "token_saver", "free_local"],
         ),
         _spec(
             id="mem0_mcp",
