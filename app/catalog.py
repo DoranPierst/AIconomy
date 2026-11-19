@@ -27,6 +27,8 @@ BLENDER_SKILLS_94: list[str] = [
 ]
 
 # Neutral general-purpose default 3D skills (no genre bias for public releases)
+BLENDER_SKILL_INDEX_TOKENS: int = 60
+
 DEFAULT_ACTIVE_BLENDER_SKILLS: list[str] = [
     "blender-director",
     "blender-modeler",
@@ -176,7 +178,7 @@ def build_default_catalog() -> list[ToolSpec]:
             kind="skill_pack",
             version="v1.3.0",
             repo_url="https://github.com/arjun988/blender-skills",
-            schema_tokens=33000,
+            schema_tokens=len(BLENDER_SKILLS_94) * BLENDER_SKILL_INDEX_TOKENS,
             summary="Library of 94 specialist Blender SKILL.md guides (modeling, UV, materials, lighting, engine export).",
             details="Teaches AI coding agents clean topology, hard-surface rules, PBR shading, lighting, and Unity/Unreal/Godot export standards. Use Configure to enable only the skills needed right now and save context tokens.",
             when_to_use="Enable while creating 3D assets, scenes, or materials in Blender; disable for pure software or web projects.",
@@ -707,8 +709,8 @@ def describe_blender_skill(skill_name: str, lang: str = "en") -> str:
             else:
                 core = f"Blender'da '{readable}' aşaması için uzman kontrol listesi ve üretim kurallarını devreye sokar."
         return (
-            f"AÇIK: {core} (~350 token bağlam yükü).\n"
-            "KAPALI: Bu kural AI bağlamına yüklenmez (~350 token tasarruf)."
+            f"AÇIK: {core} (~{BLENDER_SKILL_INDEX_TOKENS} indeks tokenı başlangıç yükü).\n"
+            f"KAPALI: AI başlangıç indeksine yüklenmez (~{BLENDER_SKILL_INDEX_TOKENS} token tasarruf)."
         )
 
     core = _SKILL_DESC_EN.get(skill_name)
@@ -726,8 +728,8 @@ def describe_blender_skill(skill_name: str, lang: str = "en") -> str:
         else:
             core = f"Enables specialist production guidelines and checklists for '{readable}' in Blender."
     return (
-        f"ON: {core} (~350 tokens context load).\n"
-        "OFF: Excluded from AI context (~350 tokens saved)."
+        f"ON: {core} (~{BLENDER_SKILL_INDEX_TOKENS} index tokens startup load).\n"
+        f"OFF: Excluded from startup skill index (~{BLENDER_SKILL_INDEX_TOKENS} tokens saved)."
     )
 
 

@@ -8,6 +8,7 @@ from .ui.dialogs import (
     DiagnosticsDialog,
     ManageProfilesDialog,
     SettingsDialog,
+    TokenBreakdownDialog,
     ToolGearDialog,
     ToolInfoDialog,
 )
@@ -31,6 +32,7 @@ __all__ = [
     "SettingsDialog",
     "StatusBadgeWidget",
     "ToggleSwitch",
+    "TokenBreakdownDialog",
     "ToolGearDialog",
     "ToolInfoDialog",
     "WorkerBridge",

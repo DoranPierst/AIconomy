@@ -212,6 +212,21 @@ QPushButton#updatePillBtn:hover {
     background-color: #45290d;
     border-color: #f59e0b;
 }
+QPushButton#tokenSummaryBtn {
+    background-color: #0b241d;
+    border: 1px solid #059669;
+    border-radius: 6px;
+    color: #34d399;
+    padding: 3px 10px;
+    font-family: Consolas, 'Segoe UI', monospace;
+    font-size: 11px;
+    font-weight: 700;
+}
+QPushButton#tokenSummaryBtn:hover {
+    background-color: #11382d;
+    border-color: #10b981;
+    color: #6ee7b7;
+}
 
 QLineEdit, QComboBox, QPlainTextEdit {
     background-color: #0c1117;
@@ -272,6 +287,7 @@ QTableWidget {
     border-radius: 8px;
 }
 QWidget#cellBox { background: transparent; }
+QScrollArea { background: transparent; border: none; }
 QHeaderView::section {
     background-color: #141c28;
     color: #94a3b8;
@@ -314,6 +330,11 @@ QProgressBar {
 }
 QProgressBar::chunk {
     background-color: #2563eb;
+    border-radius: 4px;
+}
+QProgressBar#slimBar {
+    min-height: 7px;
+    max-height: 7px;
     border-radius: 4px;
 }
 QListWidget {
@@ -513,6 +534,21 @@ QPushButton#updatePillBtn {
 QPushButton#updatePillBtn:hover {
     background-color: #fde68a;
 }
+QPushButton#tokenSummaryBtn {
+    background-color: #ecfdf5;
+    border: 1px solid #6ee7b7;
+    border-radius: 6px;
+    color: #047857;
+    padding: 3px 10px;
+    font-family: Consolas, 'Segoe UI', monospace;
+    font-size: 11px;
+    font-weight: 700;
+}
+QPushButton#tokenSummaryBtn:hover {
+    background-color: #d1fae5;
+    border-color: #059669;
+    color: #065f46;
+}
 
 QLineEdit, QComboBox, QPlainTextEdit {
     background-color: #ffffff;
@@ -573,6 +609,7 @@ QTableWidget {
     border-radius: 8px;
 }
 QWidget#cellBox { background: transparent; }
+QScrollArea { background: transparent; border: none; }
 QHeaderView::section {
     background-color: #f1f5f9;
     color: #475569;
@@ -615,6 +652,11 @@ QProgressBar {
 }
 QProgressBar::chunk {
     background-color: #2563eb;
+    border-radius: 4px;
+}
+QProgressBar#slimBar {
+    min-height: 7px;
+    max-height: 7px;
     border-radius: 4px;
 }
 QListWidget {

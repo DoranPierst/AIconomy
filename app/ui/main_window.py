@@ -87,6 +87,7 @@ from .dialogs import (
     DiagnosticsDialog,
     ManageProfilesDialog,
     SettingsDialog,
+    TokenBreakdownDialog,
     ToolGearDialog,
 )
 from .icons import icon_color, make_icon
@@ -339,9 +340,13 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, QMainWindow):
         self.btn_do_app_upd.clicked.connect(lambda: self._open_app_update_dialog(self.latest_app_check))
         foot.addWidget(self.btn_do_app_upd)
 
-        self.token_summary_lbl = QLabel()
-        self.token_summary_lbl.setStyleSheet("font-family: Consolas, monospace; font-weight: 600; color: #10b981;")
-        foot.addWidget(self.token_summary_lbl)
+        self.token_summary_btn = QPushButton()
+        self.token_summary_btn.setObjectName("tokenSummaryBtn")
+        self.token_summary_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.token_summary_btn.setToolTip(tr(self.lang, "token_summary_tip"))
+        self.token_summary_btn.clicked.connect(self.open_token_breakdown)
+        self.token_summary_lbl = self.token_summary_btn
+        foot.addWidget(self.token_summary_btn)
         main_lay.addLayout(foot)
 
     def _refresh_toolbar_icons(self) -> None:
@@ -1015,6 +1020,7 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, QMainWindow):
         if not (self.latest_app_check and self.latest_app_check.has_update):
             self.btn_do_app_upd.setText(tr(self.lang, "ver_btn", ver=app_ver))
         self.btn_do_app_upd.setToolTip(tr(self.lang, "ver_btn_tip"))
+        self.token_summary_btn.setToolTip(tr(self.lang, "token_summary_tip"))
 
         self.search_inp.setPlaceholderText(tr(self.lang, "search_ph"))
         self.btn_plug_sel_all.setText(tr(self.lang, "plug_sel_all"))
@@ -1354,6 +1360,10 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, QMainWindow):
 
     def open_diagnostics(self) -> None:
         dlg = DiagnosticsDialog(self)
+        dlg.exec()
+
+    def open_token_breakdown(self) -> None:
+        dlg = TokenBreakdownDialog(self)
         dlg.exec()
 
     # --- PERIODIC WATCHERS & HEALTH SCAN ---

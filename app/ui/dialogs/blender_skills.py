@@ -17,7 +17,12 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ...catalog import BLENDER_SKILLS_94, DEFAULT_ACTIVE_BLENDER_SKILLS, describe_blender_skill
+from ...catalog import (
+    BLENDER_SKILL_INDEX_TOKENS,
+    BLENDER_SKILLS_94,
+    DEFAULT_ACTIVE_BLENDER_SKILLS,
+    describe_blender_skill,
+)
 from ...i18n import tr
 from ..widgets import create_option_help_badge
 
@@ -214,7 +219,7 @@ class BlenderSkillsDialog(QDialog):
         sel_n = len(self.checked_items)
         on_n = len(self.draft_active)
         off_n = len(BLENDER_SKILLS_94) - on_n
-        saved_tok = round(off_n * 0.35, 1)
+        saved_tok = round((off_n * BLENDER_SKILL_INDEX_TOKENS) / 1000.0, 1)
         self.btn_sel_on.setText(tr(self.lang, "skills_sel_on", n=sel_n))
         self.btn_sel_off.setText(tr(self.lang, "skills_sel_off", n=sel_n))
         self.btn_sel_on.setEnabled(sel_n > 0)

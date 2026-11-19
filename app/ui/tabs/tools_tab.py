@@ -37,6 +37,7 @@ from ...catalog import (
 )
 from ...i18n import tr
 from ...processes import probe_tool_health, scan_live_process_locations
+from ...tokens import compute_token_breakdown, fmt_tokens
 from ..dialogs.tool_info import ToolInfoDialog
 from ..icons import icon_color, make_icon
 from ..widgets import AiMatrixHeaderView, HoverTableWidget, StatusBadgeWidget, ToggleSwitch
@@ -254,20 +255,14 @@ class ToolsTabMixin:
         return (1 if item.enabled else 0, item.name.lower())
 
     def _calculate_token_economy(self) -> tuple[int, int]:
-        active_tok = 0
-        saved_tok = 0
-        for t in self.tools:
-            if t.id == "blender_skills":
-                per_skill = 350
-                on_cnt = len(self.active_skills) if t.enabled else 0
-                active_tok += on_cnt * per_skill
-                saved_tok += (len(BLENDER_SKILLS_94) - on_cnt) * per_skill
-            else:
-                if t.enabled:
-                    active_tok += t.schema_tokens
-                else:
-                    saved_tok += t.schema_tokens
-        return round(active_tok / 1000), round(saved_tok / 1000)
+        bd = compute_token_breakdown(
+            self.tools,
+            len(self.active_skills),
+            self.projects_map,
+            missing_required_keys=self._missing_required_vault_keys(),
+            installed_clients=self.installed_clients,
+        )
+        return bd.active_tokens, bd.saved_tokens
 
     def _format_scope_short(self, t: ToolSpec) -> str:
         if not t.scope_selectable:
@@ -505,8 +500,10 @@ class ToolsTabMixin:
             act_l.addWidget(sw)
             self.table.setCellWidget(r_idx, 4, act_w)
 
-        active_k, saved_k = self._calculate_token_economy()
-        self.token_summary_lbl.setText(tr(self.lang, "token_summary", act=active_k, sav=saved_k))
+        active_tok, saved_tok = self._calculate_token_economy()
+        self.token_summary_lbl.setText(
+            tr(self.lang, "token_summary", act=fmt_tokens(active_tok), sav=fmt_tokens(saved_tok))
+        )
         self.table.resizeColumnToContents(1)
         self.table.resizeColumnToContents(2)
         if self.table.columnWidth(1) < 150:
@@ -565,7 +562,7 @@ class ToolsTabMixin:
         """Build and copy a clean plaintext status report (invoked from Diagnostics)."""
         target_tools = [t for t in self.tools if (not enabled_only or t.enabled)]
         target_tools.sort(key=lambda x: (0 if x.enabled else 1, x.name.lower()))
-        active_k, saved_k = self._calculate_token_economy()
+        active_tok, saved_tok = self._calculate_token_economy()
         en_cnt = sum(1 for t in target_tools if t.enabled)
         now_str = dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         gpu_txt = self.vram_lbl.text() if hasattr(self, "vram_lbl") and self.vram_lbl.isVisible() else "N/A"
@@ -573,7 +570,7 @@ class ToolsTabMixin:
         lines = [
             f"=== AIconomy Status Report ({now_str}) ===",
             f"Tools: {len(target_tools)} ({en_cnt} enabled, {len(target_tools) - en_cnt} disabled)",
-            f"Token Budget: Active ~{active_k}K tok | Saved +{saved_k}K tok | GPU: {gpu_txt}",
+            f"Token Budget: Active {fmt_tokens(active_tok)} | Saved +{fmt_tokens(saved_tok)} | GPU: {gpu_txt}",
             "",
         ]
         for idx, t in enumerate(target_tools, start=1):

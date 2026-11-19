@@ -7,6 +7,7 @@ from .blender_skills import BlenderSkillsDialog
 from .diagnostics import DiagnosticsDialog
 from .manage_profiles import ManageProfilesDialog
 from .settings import SettingsDialog
+from .token_breakdown import TokenBreakdownDialog
 from .tool_info import ToolInfoDialog
 from .tool_settings import ToolGearDialog
 
@@ -17,6 +18,7 @@ __all__ = [
     "DiagnosticsDialog",
     "ManageProfilesDialog",
     "SettingsDialog",
+    "TokenBreakdownDialog",
     "ToolGearDialog",
     "ToolInfoDialog",
 ]
