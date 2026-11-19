@@ -26,6 +26,7 @@ from .mcp_config import (
     detect_installed_ai_clients,
     sync_blender_skills_on_disk,
     sync_caveman_on_disk,
+    sync_custom_skill_tools_on_disk,
     sync_mcp_json_clients,
 )
 from .plugins import (
@@ -108,6 +109,7 @@ __all__ = [
     "stop_all_managed_services",
     "sync_blender_skills_on_disk",
     "sync_caveman_on_disk",
+    "sync_custom_skill_tools_on_disk",
     "sync_mcp_json_clients",
     "test_tool_connection_e2e",
     "update_single_tool",

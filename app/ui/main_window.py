@@ -433,13 +433,20 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, ProfilesMixin, Tr
     def _run_initial_runtime_probe(self) -> None:
         """Passive startup probe: checks whether managed services are already active without starting anything."""
         self._set_runtime_ui_state("probing")
-        snap_tools = copy.deepcopy(self.workspace_tools())
+        all_tools_snap = copy.deepcopy(self.tools)
+        snap_tools = [t for t in all_tools_snap if getattr(t, "in_workspace", True)]
         sk_cnt = len(self.active_skills)
         proj_snap = dict(self.projects_map)
         lang_snap = self.lang
         missing_keys = self._missing_required_vault_keys()
 
         def worker() -> None:
+            if self.sync_live_environment:
+                with self._sync_lock:
+                    cv_tool = next((x for x in all_tools_snap if x.id == "caveman"), None)
+                    if cv_tool:
+                        sync_caveman_on_disk(cv_tool, lang=lang_snap)
+                    sync_custom_skill_tools_on_disk(all_tools_snap, lang=lang_snap)
             live_map = scan_live_process_locations(lang=lang_snap)
             out = []
             for t in snap_tools:
@@ -506,6 +513,7 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, ProfilesMixin, Tr
                     cv_tool = next((x for x in tools_snap if x.id == "caveman"), None)
                     if cv_tool:
                         sync_caveman_on_disk(cv_tool, lang=lang_snap)
+                    sync_custom_skill_tools_on_disk(tools_snap, lang=lang_snap)
                     sync_mcp_json_clients(tools_snap, self.vault, proj_snap, lang=lang_snap)
                     if started_ports:
                         wait_for_started_ports(started_ports, timeout=2.5)

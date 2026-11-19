@@ -38,7 +38,8 @@ from ...catalog import (
     tool_kind_label,
 )
 from ...i18n import tr
-from ...processes import probe_tool_health, scan_live_process_locations
+from ...oauth import supports_oauth
+from ...processes import probe_tool_health, query_gpu_vram, scan_live_process_locations
 from ...tokens import compute_token_breakdown, fmt_tokens
 from ..dialogs.tool_info import ToolInfoDialog
 from ..icons import icon_color, make_icon
@@ -637,7 +638,13 @@ class ToolsTabMixin:
         active_tok, saved_tok = self._calculate_token_economy()
         en_cnt = sum(1 for t in target_tools if t.enabled)
         now_str = dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        gpu_txt = self.vram_lbl.text() if hasattr(self, "vram_lbl") and self.vram_lbl.isVisible() else "N/A"
+        gpu_txt = (self.vram_lbl.text().strip() if hasattr(self, "vram_lbl") else "")
+        if not gpu_txt:
+            g_name, g_used, g_tot = query_gpu_vram()
+            if g_tot > 0:
+                short_gpu = g_name.replace("NVIDIA GeForce ", "")
+                gpu_txt = f"{short_gpu}: {g_used / 1024:.1f} / {g_tot / 1024:.1f} GB"
+        gpu_txt = gpu_txt or "N/A"
 
         lines = [
             f"=== AIconomy Status Report ({now_str}) ===",
@@ -651,7 +658,12 @@ class ToolsTabMixin:
             ver_s = f"v{t.version.strip().lstrip('vV')}"
             lines.append(f"{idx}. [{st_tag}] {t.name} ({tool_kind_label(t.kind, self.lang)} · {ver_s}{port_part})")
             scope_str = self._format_scope_display(t)
-            loc_str = f" | {t.live_location_detail}" if t.live_location_detail else ""
+            raw_loc = (t.live_location_detail or "").strip()
+            is_redundant_global = (
+                scope_str.strip().lower() == "global"
+                and raw_loc.lower() in ("scope: global", "kapsam: global")
+            )
+            loc_str = f" | {raw_loc}" if (raw_loc and not is_redundant_global) else ""
             lines.append(f"   - Scope: {scope_str}{loc_str}")
 
             if t.id == "blender_skills":
@@ -669,8 +681,17 @@ class ToolsTabMixin:
                 lines.append(f"   - Active skills ({len(self.active_skills)}): {', '.join(sorted(self.active_skills))}")
 
             if t.vault_key_name:
-                has_k = self.vault.has_secret(t.vault_key_name)
-                lines.append(f"   - API key ({t.vault_key_name}): {'Configured' if has_k else 'Missing'}")
+                if getattr(t, "auth_mode", "key") == "oauth" and supports_oauth(t.id):
+                    lines.append("   - Auth: Browser OAuth")
+                else:
+                    has_k = self.vault.has_secret(t.vault_key_name)
+                    if has_k:
+                        k_status = "Configured"
+                    elif t.vault_key_required:
+                        k_status = "Missing (required)"
+                    else:
+                        k_status = "Not set (optional)"
+                    lines.append(f"   - API key ({t.vault_key_name}): {k_status}")
 
         QApplication.clipboard().setText("\n".join(lines))
         self.set_status(tr(self.lang, "msg_report_copied", n=len(target_tools)))

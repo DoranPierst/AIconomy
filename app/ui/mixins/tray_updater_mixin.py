@@ -13,7 +13,12 @@ from PySide6.QtWidgets import QApplication, QFileDialog, QMenu, QMessageBox, QSy
 from ...catalog import PROFILES, build_default_catalog, profile_title
 from ...i18n import normalize_language, tr
 from ...library_catalog import build_library_catalog, refresh_remote_catalog
-from ...mcp_config import sync_blender_skills_on_disk, sync_caveman_on_disk, sync_mcp_json_clients
+from ...mcp_config import (
+    sync_blender_skills_on_disk,
+    sync_caveman_on_disk,
+    sync_custom_skill_tools_on_disk,
+    sync_mcp_json_clients,
+)
 from ...processes import resolve_disk_location
 from ...updater import (
     UpdateCheckResult,
@@ -172,6 +177,7 @@ class TrayUpdaterMixin:
         cv_tool = next((t for t in self.tools if t.id == "caveman"), None)
         if cv_tool:
             sync_caveman_on_disk(cv_tool, lang=self.lang)
+        sync_custom_skill_tools_on_disk(self.tools, lang=self.lang)
         msgs = sync_mcp_json_clients(self.tools, self.vault, self.projects_map, lang=self.lang)
         summary = " | ".join(msgs) if msgs else tr(self.lang, "log_no_cfg_files")
         self.logs.add("INFO", tr(self.lang, "log_src_cfg_sync"), summary)
@@ -256,6 +262,7 @@ class TrayUpdaterMixin:
             cv_tool = next((t for t in self.tools if t.id == "caveman"), None)
             if cv_tool:
                 sync_caveman_on_disk(cv_tool, lang=self.lang)
+            sync_custom_skill_tools_on_disk(self.tools, lang=self.lang)
 
         self._retranslate_ui()
         self._rebuild_kind_filter_combo()
