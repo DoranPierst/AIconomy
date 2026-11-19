@@ -19,16 +19,22 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v4
 
-      - name: Stamp GitHub repo into version.json & read version
+      - name: Stamp GitHub repo into version.json & extract release notes
         id: meta
         shell: pwsh
         run: |
           $v = Get-Content "version.json" -Raw -Encoding UTF8 | ConvertFrom-Json
           $v | Add-Member -NotePropertyName "update_repo" -NotePropertyValue "https://github.com/${{ github.repository }}" -Force
           $v | ConvertTo-Json -Depth 4 | Set-Content "version.json" -Encoding UTF8
-          $tag = "v" + ($v.version -replace '^[vV]', '')
+          $ver = ($v.version -replace '^[vV]', '')
+          $tag = "v$ver"
           "tag=$tag" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-          "changelog=$($v.changelog)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          $chg = Get-Content "CHANGELOG.md" -Raw -Encoding UTF8
+          if ($chg -match "(?ms)^## \[$([regex]::Escape($ver))\][^\r\n]*\r?\n(.*?)(?=^## \[|\z)") {
+            $Matches[1].Trim() | Set-Content "release_notes.md" -Encoding UTF8
+          } else {
+            $v.changelog | Set-Content "release_notes.md" -Encoding UTF8
+          }
 
       - name: Sync dependencies & Build EXE
         run: |
@@ -49,5 +55,5 @@ jobs:
         with:
           tag_name: ${{ steps.meta.outputs.tag }}
           name: "AIconomy ${{ steps.meta.outputs.tag }}"
-          body: ${{ steps.meta.outputs.changelog }}
+          body_path: release_notes.md
           files: dist/AIconomy.exe
