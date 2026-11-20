@@ -137,6 +137,7 @@ class TokenBreakdownDialog(QDialog):
             missing_required_keys=self.main_win._missing_required_vault_keys(),
             installed_clients=self.main_win.installed_clients,
             schema_token_cache=tok_cache if isinstance(tok_cache, dict) else None,
+            locked_vault_keys=self.main_win._locked_vault_keys(),
         )
 
         # 1. Rebuild 4 AI client cards

@@ -916,6 +916,14 @@ def resolve_disk_location(
         return f"Global plugin dizini: {p}" if is_tr else f"Global plugin path: {p}"
 
     if tool.id == "caveman":
+        if tool.project_scope != "GLOBAL" and tool.project_scope in projects_map:
+            p_base = pathlib.Path(projects_map[tool.project_scope])
+            p_agy = p_base / ".agent" / "skills" / "caveman" / "SKILL.md"
+            p_ag = p_base / ".agents" / "skills" / "caveman" / "SKILL.md"
+            if p_agy.is_file() or p_ag.is_file():
+                p_show = p_ag if p_ag.is_file() else p_agy
+                return f"Proje kuralı: {p_show}" if is_tr else f"Project rule: {p_show}"
+            return f"Proje skill dizini: {p_base / '.agents' / 'skills'}" if is_tr else f"Project skills path: {p_base / '.agents' / 'skills'}"
         active_md = pathlib.Path.home() / ".agents" / "skills" / "caveman" / "SKILL.md"
         agy_md = pathlib.Path.home() / ".gemini" / "config" / "skills" / "caveman" / "SKILL.md"
         disabled_md = pathlib.Path.home() / ".agents" / "skills_disabled" / "caveman" / "SKILL.md"
@@ -934,6 +942,13 @@ def resolve_disk_location(
         and not tool.mcp_server_key
         and (tool.kind in ("skill_pack", "rule") or (tool.install_cmd or "").strip().startswith("git clone "))
     ):
+        if tool.scope_selectable and tool.project_scope != "GLOBAL" and tool.project_scope in projects_map:
+            p_base = pathlib.Path(projects_map[tool.project_scope])
+            return (
+                f"Proje skill dizini: {p_base / '.agents' / 'skills'}"
+                if is_tr
+                else f"Project skills path: {p_base / '.agents' / 'skills'}"
+            )
         home = pathlib.Path.home()
         act_dir = home / ".agents" / "skills" / tool.id
         dis_dir = home / ".agents" / "skills_disabled" / tool.id
@@ -1026,8 +1041,14 @@ def probe_tool_health(
     if tool.id == "caveman":
         if not tool.enabled:
             return False, "off", tr(lang, "st_disabled"), -1, loc_detail, loc_detail
-        active_md = pathlib.Path.home() / ".agents" / "skills" / "caveman" / "SKILL.md"
-        agy_md = pathlib.Path.home() / ".gemini" / "config" / "skills" / "caveman" / "SKILL.md"
+        is_proj_scope = tool.project_scope != "GLOBAL" and tool.project_scope in projects_map
+        if is_proj_scope:
+            p_base = pathlib.Path(projects_map[tool.project_scope])
+            agy_md = p_base / ".agent" / "skills" / "caveman" / "SKILL.md"
+            active_md = p_base / ".agents" / "skills" / "caveman" / "SKILL.md"
+        else:
+            active_md = pathlib.Path.home() / ".agents" / "skills" / "caveman" / "SKILL.md"
+            agy_md = pathlib.Path.home() / ".gemini" / "config" / "skills" / "caveman" / "SKILL.md"
         disabled_md = pathlib.Path.home() / ".agents" / "skills_disabled" / "caveman" / "SKILL.md"
         modes = localized_tool_modes(tool, lang)
         mode_short = modes[min(tool.mode_index, len(modes) - 1)].split()[0] if modes else ""
@@ -1039,8 +1060,8 @@ def probe_tool_health(
         ):
             src_str = str(agy_md if (want_agy and agy_md.is_file()) else active_md)
             return True, "ok", label, 1, src_str, loc_detail
-        if active_md.is_file() or disabled_md.is_file():
-            return True, "idle", label, 1, str(active_md if active_md.is_file() else disabled_md), loc_detail
+        if (pathlib.Path.home() / ".agents" / "skills" / "caveman" / "SKILL.md").is_file() or disabled_md.is_file():
+            return True, "idle", label, 1, str(disabled_md), loc_detail
         return False, "warn", tr(lang, "st_not_installed"), -1, str(active_md), loc_detail
 
     if tool.id == "blender_mcp":

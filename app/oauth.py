@@ -9,6 +9,8 @@ from dataclasses import dataclass
 
 import psutil
 
+from .security import build_isolated_child_env
+
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
 
 
@@ -143,6 +145,7 @@ def resolve_cli_oauth_token(tool_id: str) -> str:
             capture_output=True,
             text=True,
             timeout=4,
+            env=build_isolated_child_env({}),
             creationflags=NO_WINDOW,
         )
         if proc.returncode == 0 and proc.stdout.strip():
@@ -170,6 +173,7 @@ def check_cli_oauth_ready(tool_id: str) -> bool:
             capture_output=True,
             text=True,
             timeout=4,
+            env=build_isolated_child_env({}),
             creationflags=NO_WINDOW,
         )
         return proc.returncode == 0
@@ -200,6 +204,7 @@ def launch_browser_oauth_flow(tool_id: str, lang: str = "en") -> tuple[bool, str
                 stdin=subprocess.PIPE,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
+                env=build_isolated_child_env({}),
                 creationflags=NO_WINDOW,
             )
 
@@ -245,7 +250,7 @@ def launch_browser_oauth_flow(tool_id: str, lang: str = "en") -> tuple[bool, str
 
     try:
         # Open an interactive terminal/browser login for CLI OAuth (`gh auth login --web`, `az login`, etc.)
-        subprocess.Popen([exe, *spec.login_args])
+        subprocess.Popen([exe, *spec.login_args], env=build_isolated_child_env({}))
         msg = (
             f"{spec.provider_label} giriş penceresi açıldı."
             if is_tr

@@ -582,9 +582,18 @@ class SettingsDialog(QDialog):
             for t in self.main_win.tools:
                 if t.project_scope == old_key:
                     t.project_scope = new_key
+            presets = self.main_win.meta.get("custom_presets")
+            if isinstance(presets, dict):
+                for pdata in presets.values():
+                    tmap = pdata.get("tools") if isinstance(pdata, dict) else None
+                    if isinstance(tmap, dict):
+                        for tcfg in tmap.values():
+                            if isinstance(tcfg, dict) and tcfg.get("project_scope") == old_key:
+                                tcfg["project_scope"] = new_key
             self.main_win._save_state()
             self.main_win._rebuild_project_filter_combo()
             self.main_win._refresh_table()
+            self.main_win._sync_live_environment_async(target_tools=list(self.main_win.tools))
             self.main_win.set_status(tr(self.lang, "msg_proj_renamed", name=new_key))
             self._reload_projects()
 
@@ -603,6 +612,16 @@ class SettingsDialog(QDialog):
         for t in self.main_win.tools:
             if t.project_scope == key:
                 t.project_scope = "GLOBAL"
+            if removed_dir_str and t.param_value == removed_dir_str and t.id not in ("serena", "unity_mcp", "blender_mcp"):
+                t.param_value = ""
+        presets = self.main_win.meta.get("custom_presets")
+        if isinstance(presets, dict):
+            for pdata in presets.values():
+                tmap = pdata.get("tools") if isinstance(pdata, dict) else None
+                if isinstance(tmap, dict):
+                    for tcfg in tmap.values():
+                        if isinstance(tcfg, dict) and tcfg.get("project_scope") == key:
+                            tcfg["project_scope"] = "GLOBAL"
         self.main_win._save_state()
         self.main_win._rebuild_project_filter_combo()
         self.main_win._refresh_table()
@@ -614,7 +633,7 @@ class SettingsDialog(QDialog):
                 args=(pathlib.Path(removed_dir_str), tools_snap, lang_snap),
                 daemon=True,
             ).start()
-        self.main_win._sync_live_environment_async(target_tools=[])
+        self.main_win._sync_live_environment_async(target_tools=list(self.main_win.tools))
         self.main_win.set_status(tr(self.lang, "msg_proj_removed", name=key))
         self._reload_projects()
 

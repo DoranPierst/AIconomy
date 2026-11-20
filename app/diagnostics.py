@@ -70,13 +70,16 @@ def _is_custom_skill_tool(tool: ToolSpec) -> bool:
     )
 
 
-def _has_agy_skill_mirror_on_disk(home: pathlib.Path, tool_id: str) -> bool:
-    agy_root = home / ".gemini" / "config" / "skills"
-    if not agy_root.is_dir():
+def _has_skill_mirror_in_root(skills_root: pathlib.Path, tool_id: str) -> bool:
+    if not skills_root.is_dir():
         return False
-    if (agy_root / tool_id / "SKILL.md").is_file() or (agy_root / tool_id).is_dir():
+    if (skills_root / tool_id / "SKILL.md").is_file() or (skills_root / tool_id).is_dir():
         return True
-    return any(c.is_dir() and c.name.startswith(f"{tool_id}__") for c in agy_root.iterdir())
+    return any(c.is_dir() and c.name.startswith(f"{tool_id}__") for c in skills_root.iterdir())
+
+
+def _has_agy_skill_mirror_on_disk(home: pathlib.Path, tool_id: str) -> bool:
+    return _has_skill_mirror_in_root(home / ".gemini" / "config" / "skills", tool_id)
 
 
 def test_tool_connection_e2e(
@@ -219,8 +222,14 @@ def test_tool_connection_e2e(
         return ok, ms, lbl, str(plugin_dir)
 
     if tool.id == "caveman":
-        skill_md = pathlib.Path.home() / ".agents" / "skills" / "caveman" / "SKILL.md"
-        agy_md = pathlib.Path.home() / ".gemini" / "config" / "skills" / "caveman" / "SKILL.md"
+        is_proj = tool.project_scope != "GLOBAL" and bool(projects_map) and tool.project_scope in projects_map
+        if is_proj:
+            p_base = pathlib.Path(projects_map[tool.project_scope])
+            skill_md = p_base / ".agents" / "skills" / "caveman" / "SKILL.md"
+            agy_md = p_base / ".agent" / "skills" / "caveman" / "SKILL.md"
+        else:
+            skill_md = pathlib.Path.home() / ".agents" / "skills" / "caveman" / "SKILL.md"
+            agy_md = pathlib.Path.home() / ".gemini" / "config" / "skills" / "caveman" / "SKILL.md"
         want_agy = bool(tool.clients.get("AGY", False))
         want_agents = bool(tool.clients.get("CDX", False) or tool.clients.get("CLD", False) or tool.clients.get("CUR", False))
         ms = max(1, int((time.perf_counter() - t0) * 1000))
@@ -228,7 +237,7 @@ def test_tool_connection_e2e(
             lbl = "AGY skill senkronu eksik" if is_tr else "AGY skill mirror missing"
             return False, ms, lbl, f"{skill_md} -> {agy_md}"
         if want_agents and not skill_md.is_file():
-            lbl = "SKILL.md eksik (~/.agents/skills)" if is_tr else "SKILL.md missing (~/.agents/skills)"
+            lbl = "SKILL.md eksik" if is_tr else "SKILL.md missing"
             return False, ms, lbl, str(skill_md)
         ok = (want_agy and agy_md.is_file()) or (want_agents and skill_md.is_file())
         lbl = ("SKILL.md doğrulandı" if ok else "SKILL.md eksik") if is_tr else ("SKILL.md verified" if ok else "SKILL.md missing")
@@ -245,18 +254,33 @@ def test_tool_connection_e2e(
 
     if _is_custom_skill_tool(tool):
         home = pathlib.Path.home()
-        act_dir = home / ".agents" / "skills" / tool.id
-        has_agy = _has_agy_skill_mirror_on_disk(home, tool.id)
+        is_proj = (
+            getattr(tool, "scope_selectable", True)
+            and tool.project_scope != "GLOBAL"
+            and bool(projects_map)
+            and tool.project_scope in projects_map
+        )
+        if is_proj:
+            p_base = pathlib.Path(projects_map[tool.project_scope])
+            has_agy = _has_skill_mirror_in_root(p_base / ".agent" / "skills", tool.id)
+            has_agents = _has_skill_mirror_in_root(p_base / ".agents" / "skills", tool.id)
+            act_dir = p_base / ".agents" / "skills" / tool.id
+            agy_ref = p_base / ".agent" / "skills" / tool.id
+        else:
+            act_dir = home / ".agents" / "skills" / tool.id
+            has_agy = _has_agy_skill_mirror_on_disk(home, tool.id)
+            has_agents = act_dir.is_dir()
+            agy_ref = home / ".gemini" / "config" / "skills" / tool.id
         want_agy = bool(tool.clients.get("AGY", False))
         want_agents = bool(tool.clients.get("CDX", False) or tool.clients.get("CLD", False) or tool.clients.get("CUR", False))
         ms = max(1, int((time.perf_counter() - t0) * 1000))
         if want_agy and not has_agy:
             lbl = "AGY skill senkronu eksik" if is_tr else "AGY skill mirror missing"
-            return False, -1, lbl, str(home / ".gemini" / "config" / "skills" / tool.id)
-        if want_agents and not act_dir.is_dir():
-            lbl = "Skill dizini eksik (~/.agents/skills)" if is_tr else "Skill directory missing (~/.agents/skills)"
+            return False, -1, lbl, str(agy_ref)
+        if want_agents and not has_agents:
+            lbl = "Skill dizini eksik" if is_tr else "Skill directory missing"
             return False, -1, lbl, str(act_dir)
-        ok = (want_agy and has_agy) or (want_agents and act_dir.is_dir())
+        ok = (want_agy and has_agy) or (want_agents and has_agents)
         lbl = ("Skill doğrulandı" if ok else "Skill kurulu değil") if is_tr else ("Skill verified" if ok else "Skill not installed")
         return (ok, ms if ok else -1, lbl, str(act_dir))
 
@@ -877,18 +901,36 @@ def test_tool_for_client_e2e(
         return False, -1, cfg_msg, f"File: {cfg_path}\n{cfg_msg}", "fail"
 
     client_allowed = bool(tool.clients.get(code, False))
+    shared_agent_peers = (
+        [p for p in ("CDX", "CLD", "CUR") if p != code and bool(tool.clients.get(p, False))]
+        if code in ("CDX", "CLD", "CUR")
+        else []
+    )
     home = pathlib.Path.home()
 
     # Skill / Rule per-client checks
     if tool.id == "caveman":
-        target_md = (
-            home / ".gemini" / "config" / "skills" / "caveman" / "SKILL.md"
-            if code == "AGY"
-            else home / ".agents" / "skills" / "caveman" / "SKILL.md"
-        )
+        is_proj = tool.project_scope != "GLOBAL" and bool(projects_map) and tool.project_scope in projects_map
+        if is_proj:
+            rel_sub = (".agent", "skills") if code == "AGY" else (".agents", "skills")
+            target_md = pathlib.Path(projects_map[tool.project_scope]).joinpath(*rel_sub, "caveman", "SKILL.md")
+        else:
+            target_md = (
+                home / ".gemini" / "config" / "skills" / "caveman" / "SKILL.md"
+                if code == "AGY"
+                else home / ".agents" / "skills" / "caveman" / "SKILL.md"
+            )
         exists_for_client = target_md.is_file()
         ms = max(1, int((time.perf_counter() - t0) * 1000))
         if not client_allowed:
+            if exists_for_client and shared_agent_peers and runtime_active:
+                peers_s = "/".join(shared_agent_peers)
+                lbl = (
+                    f"{code} için kapalı (ortak .agents/skills {peers_s} için aktif)"
+                    if is_tr
+                    else f"Disabled for {code} (shared .agents/skills active for {peers_s})"
+                )
+                return True, ms, lbl, str(target_md), "off_client"
             if exists_for_client:
                 lbl = (
                     f"Sızıntı: {code} kapalı ama SKILL.md hâlâ aktif!"
@@ -938,12 +980,27 @@ def test_tool_for_client_e2e(
         else:
             rel_sub = (".agent", "skills") if code == "AGY" else (".agents", "skills")
             p_skills = pathlib.Path(projects_map[tool.project_scope]).joinpath(*rel_sub)
-            exists_for_client = p_skills.is_dir() and any(
-                d.is_dir() and (d / ".aiconomy_managed").is_file() for d in p_skills.iterdir()
-            )
+            exists_for_client = False
+            if p_skills.is_dir():
+                for d in p_skills.iterdir():
+                    mfile = d / ".aiconomy_managed"
+                    if not d.is_dir() or not mfile.is_file() or d.name == "references":
+                        continue
+                    mtxt = mfile.read_text(encoding="utf-8", errors="ignore").strip()
+                    if ":" not in mtxt or mtxt.split(":", 1)[1].strip() == "blender_skills":
+                        exists_for_client = True
+                        break
             target_path_str = str(p_skills)
 
         if not client_allowed:
+            if exists_for_client and shared_agent_peers and runtime_active:
+                peers_s = "/".join(shared_agent_peers)
+                lbl = (
+                    f"{code} için kapalı (ortak .agents/skills {peers_s} için aktif)"
+                    if is_tr
+                    else f"Disabled for {code} (shared .agents/skills active for {peers_s})"
+                )
+                return True, ms, lbl, target_path_str, "off_client"
             if exists_for_client:
                 lbl = (
                     f"Sızıntı: {code} kapalı ama Blender skill'leri hâlâ aktif!"
@@ -973,7 +1030,18 @@ def test_tool_for_client_e2e(
 
     if _is_custom_skill_tool(tool):
         ms = max(1, int((time.perf_counter() - t0) * 1000))
-        if code == "AGY":
+        is_proj = (
+            getattr(tool, "scope_selectable", True)
+            and tool.project_scope != "GLOBAL"
+            and bool(projects_map)
+            and tool.project_scope in projects_map
+        )
+        if is_proj:
+            rel_sub = (".agent", "skills") if code == "AGY" else (".agents", "skills")
+            p_skills = pathlib.Path(projects_map[tool.project_scope]).joinpath(*rel_sub)
+            exists_for_client = _has_skill_mirror_in_root(p_skills, tool.id)
+            target_desc = str(p_skills / tool.id)
+        elif code == "AGY":
             exists_for_client = _has_agy_skill_mirror_on_disk(home, tool.id)
             target_desc = str(home / ".gemini" / "config" / "skills" / tool.id)
         else:
@@ -982,6 +1050,14 @@ def test_tool_for_client_e2e(
             target_desc = str(act_dir)
 
         if not client_allowed:
+            if exists_for_client and shared_agent_peers and runtime_active:
+                peers_s = "/".join(shared_agent_peers)
+                lbl = (
+                    f"{code} için kapalı (ortak .agents/skills {peers_s} için aktif)"
+                    if is_tr
+                    else f"Disabled for {code} (shared .agents/skills active for {peers_s})"
+                )
+                return True, ms, lbl, target_desc, "off_client"
             if exists_for_client:
                 lbl = (
                     f"Sızıntı: {code} kapalı ama skill dizini hâlâ aktif!"

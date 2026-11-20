@@ -130,27 +130,36 @@ def _find_csc_compiler() -> pathlib.Path | None:
 
 
 def _replace_exe_safely(src_or_tmp: pathlib.Path, dst_exe: pathlib.Path) -> bool:
-    """Replace ``dst_exe`` even if a running MCP bridge holds an NTFS image lock on it."""
+    """Replace ``dst_exe`` safely, retrying across transient Windows Defender scan locks and NTFS image locks."""
+    import time
+
     old_exe = dst_exe.with_suffix(".exe.old")
     try:
         old_exe.unlink(missing_ok=True)
     except OSError:
         pass
-    try:
-        os.replace(src_or_tmp, dst_exe)
-        return True
-    except OSError:
+    for attempt in range(8):
         try:
-            if dst_exe.is_file():
-                os.replace(dst_exe, old_exe)
             os.replace(src_or_tmp, dst_exe)
             return True
         except OSError:
             try:
-                src_or_tmp.unlink(missing_ok=True)
+                if dst_exe.is_file():
+                    os.replace(dst_exe, old_exe)
+                os.replace(src_or_tmp, dst_exe)
+                return True
             except OSError:
-                pass
-            return dst_exe.is_file()
+                time.sleep(0.06 * (attempt + 1))
+    try:
+        if not dst_exe.is_file() and src_or_tmp.is_file():
+            shutil.copy2(src_or_tmp, dst_exe)
+    except OSError:
+        pass
+    try:
+        src_or_tmp.unlink(missing_ok=True)
+    except OSError:
+        pass
+    return dst_exe.is_file()
 
 
 def ensure_fast_bridge_binary(data_dir: pathlib.Path | None = None) -> pathlib.Path | None:
@@ -191,39 +200,20 @@ def ensure_fast_bridge_binary(data_dir: pathlib.Path | None = None) -> pathlib.P
 
     if cur_sig != desired_sig or not dst_exe.is_file():
         bin_dir.mkdir(parents=True, exist_ok=True)
-        tmp_exe = bin_dir / f".{BRIDGE_EXE_NAME}.{os.getpid()}.tmp"
+        tmp_exe = bin_dir / f"aiconomy-bridge-stage-{os.getpid()}.exe"
         built_ok = False
-        if bundled is not None and (cs_src is None or not getattr(sys, "frozen", False)):
-            if cs_src is not None:
-                csc = _find_csc_compiler()
-                if csc is not None:
-                    proc = subprocess.run(
-                        [
-                            str(csc),
-                            "/nologo",
-                            "/optimize+",
-                            "/target:exe",
-                            "/r:System.Web.Extensions.dll",
-                            f"/out:{tmp_exe}",
-                            str(cs_src),
-                        ],
-                        capture_output=True,
-                        text=True,
-                        timeout=15,
-                        creationflags=NO_WINDOW,
-                    )
-                    built_ok = proc.returncode == 0 and tmp_exe.is_file()
-            if not built_ok and bundled.is_file():
-                shutil.copy2(bundled, tmp_exe)
-                built_ok = tmp_exe.is_file()
-        elif bundled is not None and bundled.is_file():
+        if bundled is not None and bundled.is_file() and (
+            cs_src is None
+            or getattr(sys, "frozen", False)
+            or bundled.stat().st_mtime >= cs_src.stat().st_mtime
+        ):
             shutil.copy2(bundled, tmp_exe)
             built_ok = tmp_exe.is_file()
         elif cs_src is not None:
             csc = _find_csc_compiler()
             if csc is not None:
-                proc = subprocess.run(
-                    [
+                try:
+                    csc_args = [
                         str(csc),
                         "/nologo",
                         "/optimize+",
@@ -231,13 +221,20 @@ def ensure_fast_bridge_binary(data_dir: pathlib.Path | None = None) -> pathlib.P
                         "/r:System.Web.Extensions.dll",
                         f"/out:{tmp_exe}",
                         str(cs_src),
-                    ],
-                    capture_output=True,
-                    text=True,
-                    timeout=15,
-                    creationflags=NO_WINDOW,
-                )
-                built_ok = proc.returncode == 0 and tmp_exe.is_file()
+                    ]
+                    proc = subprocess.run(
+                        csc_args,
+                        capture_output=True,
+                        text=True,
+                        timeout=30,
+                        creationflags=NO_WINDOW,
+                    )
+                    built_ok = proc.returncode == 0 and tmp_exe.is_file()
+                except Exception:
+                    built_ok = False
+            if not built_ok and bundled is not None and bundled.is_file():
+                shutil.copy2(bundled, tmp_exe)
+                built_ok = tmp_exe.is_file()
 
         if built_ok and _replace_exe_safely(tmp_exe, dst_exe):
             try:
@@ -248,19 +245,23 @@ def ensure_fast_bridge_binary(data_dir: pathlib.Path | None = None) -> pathlib.P
     if not dst_exe.is_file():
         return None
 
-    try:
-        ping = subprocess.run(
-            [str(dst_exe), "--ping"],
-            capture_output=True,
-            text=True,
-            timeout=3,
-            creationflags=NO_WINDOW,
-        )
-        if ping.returncode == 0 and "AICONOMY_BRIDGE_OK" in ping.stdout:
-            _BRIDGE_VERIFIED_SIGS[dst_key] = desired_sig
-            return dst_exe
-    except Exception:
-        pass
+    for attempt in range(2):
+        try:
+            ping = subprocess.run(
+                [str(dst_exe), "--ping"],
+                capture_output=True,
+                text=True,
+                timeout=8,
+                creationflags=NO_WINDOW,
+            )
+            if ping.returncode == 0 and "AICONOMY_BRIDGE_OK" in ping.stdout:
+                _BRIDGE_VERIFIED_SIGS[dst_key] = desired_sig
+                return dst_exe
+        except Exception:
+            if attempt == 0:
+                import time
+
+                time.sleep(0.25)
     return None
 
 
@@ -285,7 +286,22 @@ def _request_launch_from_running_gui(
     try:
         with open(pipe_path, "r+b", buffering=0) as pipe:
             pipe.write(f"resolve_launch:{tool_id}|{dir_b64}".encode("ascii"))
-            resp = pipe.read(8192)
+            chunks: list[bytes] = []
+            total_read = 0
+            while total_read < 524288:
+                try:
+                    chunk = pipe.read(16384)
+                except OSError:
+                    if chunks:
+                        break
+                    raise
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                total_read += len(chunk)
+                if b"\n" in chunk:
+                    break
+            resp = b"".join(chunks)
             txt = resp.decode("ascii", errors="ignore").strip()
             if txt == "LOCKED":
                 return None, True, False

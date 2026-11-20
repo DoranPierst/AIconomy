@@ -55,12 +55,14 @@ class ProfileWizardDialog(QDialog):
         self.workspace_tools: list[ToolSpec] = [
             t for t in parent.tools if getattr(t, "in_workspace", True)
         ]
+        self.locked_keys: set[str] = set(parent._locked_vault_keys())
         self.missing_keys: set[str] = {
             t.vault_key_name
             for t in parent.tools
             if not (getattr(t, "auth_mode", "key") == "oauth" and supports_oauth(t.id))
             and t.vault_key_required
             and t.vault_key_name
+            and t.vault_key_name not in self.locked_keys
             and not parent.vault.has_secret(t.vault_key_name)
         }
 
@@ -476,6 +478,7 @@ class ProfileWizardDialog(QDialog):
             self.main_win.projects_map,
             missing_required_keys=self.missing_keys,
             installed_clients=self.main_win.installed_clients,
+            locked_vault_keys=self.locked_keys,
         )
         pct = bd.active_tokens / CONTEXT_WINDOW_TOKENS * 100.0
         return bd.active_tokens, pct
@@ -604,13 +607,23 @@ class ProfileWizardDialog(QDialog):
                 info_col.addWidget(sum_lbl)
                 r_lay.addLayout(info_col, stretch=1)
 
-                has_missing = bool(
+                has_locked = bool(
                     not (getattr(t, "auth_mode", "key") == "oauth" and supports_oauth(t.id))
+                    and t.vault_key_name
+                    and t.vault_key_name in self.locked_keys
+                )
+                has_missing = bool(
+                    not has_locked
+                    and not (getattr(t, "auth_mode", "key") == "oauth" and supports_oauth(t.id))
                     and t.vault_key_required
                     and t.vault_key_name
                     and t.vault_key_name in self.missing_keys
                 )
-                if has_missing:
+                if has_locked:
+                    k_lbl = QLabel(tr(self.lang, "st_vault_locked"))
+                    k_lbl.setStyleSheet("color: #f59e0b; font-size: 10px; font-weight: 700;")
+                    r_lay.addWidget(k_lbl)
+                elif has_missing:
                     k_lbl = QLabel(tr(self.lang, "st_missing_key"))
                     k_lbl.setStyleSheet("color: #f59e0b; font-size: 10px; font-weight: 700;")
                     r_lay.addWidget(k_lbl)

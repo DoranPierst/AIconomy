@@ -215,20 +215,20 @@ def handle_ipc_message(
         return None, False
 
     if clean == b"activate":
-        return b"OK", True
+        return b"OK\n", True
 
     # Never expose raw Master Passphrase PBKDF2 entropy over IPC!
     if clean == b"request_entropy":
-        return b"DENIED", False
+        return b"DENIED\n", False
 
     if clean.startswith(b"resolve_launch:"):
         raw_arg = clean.split(b":", 1)[1].decode("ascii", errors="ignore").strip()
         status, t_obj = _authorize_bridge_tool_request(conn, raw_arg, win, data_dir, require_dir_binding=True)
         if status != "OK" or t_obj is None:
-            return status.encode("ascii"), False
+            return f"{status}\n".encode("ascii"), False
         spec = build_effective_stdio_spec(t_obj, win.vault, wrap_windows_npx=False)  # type: ignore[arg-type]
         if spec is None:
-            return b"DENIED", False
+            return b"DENIED\n", False
         cmd, args, env = spec
         launch_doc = {
             "name": getattr(t_obj, "name", ""),
@@ -238,23 +238,23 @@ def handle_ipc_message(
             "vault_key": getattr(t_obj, "vault_key_name", ""),
         }
         b64 = base64.b64encode(json.dumps(launch_doc, ensure_ascii=False).encode("utf-8")).decode("ascii")
-        return f"LAUNCH:{b64}".encode("ascii"), False
+        return f"LAUNCH:{b64}\n".encode("ascii"), False
 
     if clean.startswith(b"resolve_secret:"):
         raw_arg = clean.split(b":", 1)[1].decode("ascii", errors="ignore").strip()
         status, t_obj = _authorize_bridge_tool_request(conn, raw_arg, win, data_dir, require_dir_binding=False)
         if status != "OK" or t_obj is None:
-            return status.encode("ascii"), False
+            return f"{status}\n".encode("ascii"), False
         vk = getattr(t_obj, "vault_key_name", "")
         if not vk:
-            return b"DENIED", False
+            return b"DENIED\n", False
         sec = win.vault.get_secret(vk)
         if sec:
             b64 = base64.b64encode(sec.encode("utf-8")).decode("ascii")
-            return f"SECRET:{b64}".encode("ascii"), False
-        return b"EMPTY", False
+            return f"SECRET:{b64}\n".encode("ascii"), False
+        return b"EMPTY\n", False
 
-    return b"DENIED", False
+    return b"DENIED\n", False
 
 
 def main() -> int:

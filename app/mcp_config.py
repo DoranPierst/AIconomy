@@ -126,7 +126,11 @@ def _remove_agy_skill_mirrors(agy_skills_root: pathlib.Path, mirror_prefix: str)
             _force_rmtree(child)
 
 
-def _copy_single_skill_to_agy(src_dir: pathlib.Path, dst_dir: pathlib.Path) -> None:
+def _copy_single_skill_to_agy(
+    src_dir: pathlib.Path,
+    dst_dir: pathlib.Path,
+    owner_id: str = "",
+) -> None:
     if dst_dir.exists():
         _force_rmtree(dst_dir)
     dst_dir.parent.mkdir(parents=True, exist_ok=True)
@@ -141,21 +145,30 @@ def _copy_single_skill_to_agy(src_dir: pathlib.Path, dst_dir: pathlib.Path) -> N
         fixed_md = _dedupe_yaml_frontmatter_keys(raw_md)
         if fixed_md != raw_md:
             _atomic_write_text(dst_skill_md, fixed_md)
-    _atomic_write_text(dst_dir / _AGY_SKILL_MARKER, "managed-by-aiconomy\n")
+    marker_txt = f"managed-by-aiconomy:{owner_id}\n" if owner_id else "managed-by-aiconomy\n"
+    _atomic_write_text(dst_dir / _AGY_SKILL_MARKER, marker_txt)
 
 
 def _mirror_skill_dir_to_agy(
     src_dir: pathlib.Path,
     agy_skills_root: pathlib.Path,
     mirror_prefix: str,
+    owner_id: str = "",
 ) -> int:
-    """Mirror one or more SKILL.md folders from ``src_dir`` into Antigravity's global skills directory."""
-    _remove_agy_skill_mirrors(agy_skills_root, mirror_prefix)
+    """Mirror one or more SKILL.md folders from ``src_dir`` into a target skills directory."""
+    eff_owner = owner_id or mirror_prefix
+    if owner_id:
+        _clean_managed_skills_in_dir(agy_skills_root, owner_id=eff_owner)
+    else:
+        _remove_agy_skill_mirrors(agy_skills_root, mirror_prefix)
     if not src_dir.is_dir():
         return 0
     prefix_clean = _sanitize_skill_folder_name(mirror_prefix)
     if (src_dir / "SKILL.md").is_file():
-        _copy_single_skill_to_agy(src_dir, agy_skills_root / prefix_clean)
+        dst_f = agy_skills_root / prefix_clean
+        if dst_f.exists() and not (dst_f / _AGY_SKILL_MARKER).is_file() and prefix_clean != "caveman":
+            return 0
+        _copy_single_skill_to_agy(src_dir, dst_f, owner_id=eff_owner)
         return 1
 
     copied = 0
@@ -169,7 +182,10 @@ def _mirror_skill_dir_to_agy(
         if target_name in seen_names:
             continue
         seen_names.add(target_name)
-        _copy_single_skill_to_agy(skill_dir, agy_skills_root / target_name)
+        dst_f = agy_skills_root / target_name
+        if dst_f.exists() and not (dst_f / _AGY_SKILL_MARKER).is_file():
+            continue
+        _copy_single_skill_to_agy(skill_dir, dst_f, owner_id=eff_owner)
         copied += 1
     return copied
 
@@ -180,8 +196,9 @@ def sync_caveman_on_disk(
     agy_skills_root: pathlib.Path | None = None,
     lang: str = "en",
     runtime_active: bool = True,
+    projects_map: dict[str, str] | None = None,
 ) -> tuple[bool, str]:
-    """Enable/disable Caveman on disk, stamp Lite/Full/Ultra directive, and mirror to Antigravity when AGY is enabled."""
+    """Enable/disable Caveman on disk (global or project-scoped), stamp Lite/Full/Ultra directive, and isolate per client."""
     is_tr = lang == "tr"
     root = agents_root or (pathlib.Path.home() / ".agents")
     if agy_skills_root is not None:
@@ -196,6 +213,10 @@ def sync_caveman_on_disk(
 
     if not active_dir.is_dir() and not disabled_dir.is_dir():
         _remove_agy_skill_mirrors(agy_root, "caveman")
+        if projects_map:
+            for p_str in projects_map.values():
+                _clean_managed_skills_in_dir(pathlib.Path(p_str) / ".agent" / "skills", owner_id="caveman")
+                _clean_managed_skills_in_dir(pathlib.Path(p_str) / ".agents" / "skills", owner_id="caveman")
         msg = (
             "Caveman kuralı diske kurulu değil."
             if is_tr
@@ -213,6 +234,8 @@ def sync_caveman_on_disk(
             or caveman_tool.clients.get("CUR", False)
         )
     )
+    proj_scope = str(getattr(caveman_tool, "project_scope", "GLOBAL") or "GLOBAL")
+    is_global_scope = proj_scope == "GLOBAL" or not projects_map or proj_scope not in projects_map
 
     if not want_agy and not want_agents:
         if active_dir.is_dir():
@@ -221,6 +244,10 @@ def sync_caveman_on_disk(
                 _force_rmtree(disabled_dir)
             shutil.move(str(active_dir), str(disabled_dir))
         _remove_agy_skill_mirrors(agy_root, "caveman")
+        if projects_map:
+            for p_str in projects_map.values():
+                _clean_managed_skills_in_dir(pathlib.Path(p_str) / ".agent" / "skills", owner_id="caveman")
+                _clean_managed_skills_in_dir(pathlib.Path(p_str) / ".agents" / "skills", owner_id="caveman")
         msg = (
             "Caveman disk üzerinde devre dışı bırakıldı."
             if is_tr
@@ -228,14 +255,13 @@ def sync_caveman_on_disk(
         )
         return True, msg
 
-    # Position master copy according to whether Codex/Claude/Cursor (~/.agents/skills) is enabled
-    if want_agents:
+    # Position master copy according to whether global Codex/Claude/Cursor (~/.agents/skills) is enabled
+    if want_agents and is_global_scope:
         if not active_dir.is_dir() and disabled_dir.is_dir():
             active_dir.parent.mkdir(parents=True, exist_ok=True)
             shutil.move(str(disabled_dir), str(active_dir))
         master_dir = active_dir
     else:
-        # AGY-only mode: keep ~/.agents/skills/caveman absent so Codex/Claude/Cursor do NOT see it
         if active_dir.is_dir():
             disabled_dir.parent.mkdir(parents=True, exist_ok=True)
             if disabled_dir.exists():
@@ -258,10 +284,25 @@ def sync_caveman_on_disk(
         if new_txt != orig_txt:
             _atomic_write_text(skill_md, new_txt)
 
-    if want_agy:
+    if want_agy and is_global_scope:
         _mirror_skill_dir_to_agy(master_dir, agy_root, "caveman")
     else:
         _remove_agy_skill_mirrors(agy_root, "caveman")
+
+    if projects_map:
+        for p_key, p_str in projects_map.items():
+            p_root = pathlib.Path(p_str)
+            if is_global_scope or p_key != proj_scope or not want_agy:
+                _clean_managed_skills_in_dir(p_root / ".agent" / "skills", owner_id="caveman")
+            if is_global_scope or p_key != proj_scope or not want_agents:
+                _clean_managed_skills_in_dir(p_root / ".agents" / "skills", owner_id="caveman")
+        if not is_global_scope:
+            p_target = pathlib.Path(projects_map[proj_scope])
+            if p_target.is_dir():
+                if want_agy:
+                    _mirror_skill_dir_to_agy(master_dir, p_target / ".agent" / "skills", "caveman", owner_id="caveman")
+                if want_agents:
+                    _mirror_skill_dir_to_agy(master_dir, p_target / ".agents" / "skills", "caveman", owner_id="caveman")
 
     modes = localized_tool_modes(caveman_tool, lang)
     mode_lbl = modes[m_idx] if m_idx < len(modes) else "Full (-65%)"
@@ -279,8 +320,9 @@ def sync_custom_skill_tools_on_disk(
     agy_skills_root: pathlib.Path | None = None,
     lang: str = "en",
     runtime_active: bool = True,
+    projects_map: dict[str, str] | None = None,
 ) -> list[str]:
-    """Sync Git-cloned custom skill packs / rules between ~/.agents/skills and Antigravity's ~/.gemini/config/skills."""
+    """Sync Git-cloned custom skill packs / rules across global or project-scoped AGY and Agents directories."""
     is_tr = lang == "tr"
     root = agents_root or (pathlib.Path.home() / ".agents")
     if agy_skills_root is not None:
@@ -305,6 +347,10 @@ def sync_custom_skill_tools_on_disk(
         disabled_dir = root / "skills_disabled" / t.id
         if not active_dir.is_dir() and not disabled_dir.is_dir():
             _remove_agy_skill_mirrors(agy_root, t.id)
+            if projects_map:
+                for p_str in projects_map.values():
+                    _clean_managed_skills_in_dir(pathlib.Path(p_str) / ".agent" / "skills", owner_id=t.id)
+                    _clean_managed_skills_in_dir(pathlib.Path(p_str) / ".agents" / "skills", owner_id=t.id)
             continue
 
         want_on = bool(runtime_active and getattr(t, "in_workspace", True) and t.enabled)
@@ -313,6 +359,9 @@ def sync_custom_skill_tools_on_disk(
             want_on
             and (t.clients.get("CDX", False) or t.clients.get("CLD", False) or t.clients.get("CUR", False))
         )
+        proj_scope = str(getattr(t, "project_scope", "GLOBAL") or "GLOBAL")
+        is_global_scope = not getattr(t, "scope_selectable", True) or proj_scope == "GLOBAL" or not projects_map or proj_scope not in projects_map
+
         if not want_agy and not want_agents:
             if active_dir.is_dir():
                 disabled_dir.parent.mkdir(parents=True, exist_ok=True)
@@ -320,10 +369,14 @@ def sync_custom_skill_tools_on_disk(
                     _force_rmtree(disabled_dir)
                 shutil.move(str(active_dir), str(disabled_dir))
             _remove_agy_skill_mirrors(agy_root, t.id)
+            if projects_map:
+                for p_str in projects_map.values():
+                    _clean_managed_skills_in_dir(pathlib.Path(p_str) / ".agent" / "skills", owner_id=t.id)
+                    _clean_managed_skills_in_dir(pathlib.Path(p_str) / ".agents" / "skills", owner_id=t.id)
             messages.append(f"{t.name}: {'devre dışı' if is_tr else 'disabled'}")
             continue
 
-        if want_agents:
+        if want_agents and is_global_scope:
             if not active_dir.is_dir() and disabled_dir.is_dir():
                 active_dir.parent.mkdir(parents=True, exist_ok=True)
                 shutil.move(str(disabled_dir), str(active_dir))
@@ -336,13 +389,41 @@ def sync_custom_skill_tools_on_disk(
                 shutil.move(str(active_dir), str(disabled_dir))
             master_dir = disabled_dir
 
-        if want_agy:
+        if want_agy and is_global_scope:
             mirrored = _mirror_skill_dir_to_agy(master_dir, agy_root, t.id)
             messages.append(
                 f"{t.name}: AGY ({mirrored} skill)" if is_tr else f"{t.name}: AGY ({mirrored} skill(s))"
             )
         else:
             _remove_agy_skill_mirrors(agy_root, t.id)
+
+        if projects_map:
+            for p_key, p_str in projects_map.items():
+                p_root = pathlib.Path(p_str)
+                if is_global_scope or p_key != proj_scope or not want_agy:
+                    _clean_managed_skills_in_dir(p_root / ".agent" / "skills", owner_id=t.id)
+                if is_global_scope or p_key != proj_scope or not want_agents:
+                    _clean_managed_skills_in_dir(p_root / ".agents" / "skills", owner_id=t.id)
+            if not is_global_scope:
+                p_target = pathlib.Path(projects_map[proj_scope])
+                if p_target.is_dir():
+                    mirrored_proj = 0
+                    if want_agy:
+                        mirrored_proj = _mirror_skill_dir_to_agy(
+                            master_dir, p_target / ".agent" / "skills", t.id, owner_id=t.id
+                        )
+                    if want_agents:
+                        mirrored_proj = max(
+                            mirrored_proj,
+                            _mirror_skill_dir_to_agy(
+                                master_dir, p_target / ".agents" / "skills", t.id, owner_id=t.id
+                            ),
+                        )
+                    messages.append(
+                        f"{t.name}: {proj_scope} ({mirrored_proj} skill)"
+                        if is_tr
+                        else f"{t.name}: {proj_scope} ({mirrored_proj} skill(s))"
+                    )
     return messages
 
 
@@ -377,8 +458,12 @@ def detect_installed_ai_clients(home_dir: pathlib.Path | None = None) -> set[str
     return detected
 
 
-def _clean_managed_skills_in_dir(skills_root: pathlib.Path, prefix: str = "") -> None:
-    """Remove only directories marked with ``.aiconomy_managed`` inside ``skills_root``."""
+def _clean_managed_skills_in_dir(
+    skills_root: pathlib.Path,
+    prefix: str = "",
+    owner_id: str = "",
+) -> None:
+    """Remove directories marked with ``.aiconomy_managed`` inside ``skills_root`` (scoped to ``owner_id`` when given)."""
     if not skills_root.is_dir():
         return
     for child in list(skills_root.iterdir()):
@@ -386,8 +471,20 @@ def _clean_managed_skills_in_dir(skills_root: pathlib.Path, prefix: str = "") ->
             continue
         if prefix and not child.name.startswith(prefix):
             continue
-        if (child / _AGY_SKILL_MARKER).is_file():
-            _force_rmtree(child)
+        marker = child / _AGY_SKILL_MARKER
+        if not marker.is_file():
+            continue
+        if owner_id:
+            try:
+                raw_m = marker.read_text(encoding="utf-8", errors="ignore").strip()
+            except OSError:
+                raw_m = ""
+            if ":" in raw_m:
+                if raw_m.split(":", 1)[1].strip() != owner_id:
+                    continue
+            elif owner_id != "blender_skills" and child.name != owner_id and not child.name.startswith(f"{owner_id}__"):
+                continue
+        _force_rmtree(child)
 
 
 def unique_project_key(folder_path: pathlib.Path, projects_map: dict[str, str]) -> str:
@@ -455,8 +552,8 @@ def sync_blender_skills_on_disk(
         _clean_managed_skills_in_dir(agents_skills_root, prefix="blender-skills__")
         if projects_map:
             for p_str in projects_map.values():
-                _clean_managed_skills_in_dir(pathlib.Path(p_str) / ".agent" / "skills")
-                _clean_managed_skills_in_dir(pathlib.Path(p_str) / ".agents" / "skills")
+                _clean_managed_skills_in_dir(pathlib.Path(p_str) / ".agent" / "skills", owner_id="blender_skills")
+                _clean_managed_skills_in_dir(pathlib.Path(p_str) / ".agents" / "skills", owner_id="blender_skills")
         msg = (
             "Blender Skills henüz diske indirilmedi (Eklentiler sekmesinden kurabilirsiniz)."
             if is_tr
@@ -498,16 +595,20 @@ def sync_blender_skills_on_disk(
         for name in sorted(active_skills):
             src_f = all_pool.get(name)
             if src_f is not None and name != "references":
-                _copy_single_skill_to_agy(src_f, agents_skills_root / f"blender-skills__{name}")
+                _copy_single_skill_to_agy(
+                    src_f,
+                    agents_skills_root / f"blender-skills__{name}",
+                    owner_id="blender_skills",
+                )
 
-    # Always clean stale AIconomy-managed copies across non-target projects (never touches user-authored skills!)
+    # Always clean stale AIconomy-managed Blender copies across non-target projects (never touches other skills!)
     if projects_map:
         for p_key, p_dir_str in projects_map.items():
             p_root = pathlib.Path(p_dir_str)
             if is_global_scope or p_key != project_scope or not want_agy:
-                _clean_managed_skills_in_dir(p_root / ".agent" / "skills")
+                _clean_managed_skills_in_dir(p_root / ".agent" / "skills", owner_id="blender_skills")
             if is_global_scope or p_key != project_scope or not want_agents:
-                _clean_managed_skills_in_dir(p_root / ".agents" / "skills")
+                _clean_managed_skills_in_dir(p_root / ".agents" / "skills", owner_id="blender_skills")
 
     if not is_global_scope and projects_map:
         proj_dir = pathlib.Path(projects_map[project_scope])
@@ -517,7 +618,7 @@ def sync_blender_skills_on_disk(
                 (want_agents, proj_dir / ".agents" / "skills"),
             ]
             for should_write, bucket_dir in target_buckets:
-                _clean_managed_skills_in_dir(bucket_dir)
+                _clean_managed_skills_in_dir(bucket_dir, owner_id="blender_skills")
                 if should_write and active_skills:
                     bucket_dir.mkdir(parents=True, exist_ok=True)
                     for name in sorted(active_skills):
@@ -528,11 +629,11 @@ def sync_blender_skills_on_disk(
                         if dst_f.exists() and not (dst_f / _AGY_SKILL_MARKER).is_file():
                             # Preserve user's own non-AIconomy skill folder if same name exists
                             continue
-                        _copy_single_skill_to_agy(src_f, dst_f)
+                        _copy_single_skill_to_agy(src_f, dst_f, owner_id="blender_skills")
                     if "references" in all_pool:
                         dst_ref = bucket_dir / "references"
                         if not dst_ref.exists() or (dst_ref / _AGY_SKILL_MARKER).is_file():
-                            _copy_single_skill_to_agy(all_pool["references"], dst_ref)
+                            _copy_single_skill_to_agy(all_pool["references"], dst_ref, owner_id="blender_skills")
             cnt = len(active_skills) if (want_agy or want_agents) else 0
             msg = (
                 f"'{project_scope}' projesine senkronlandı ({cnt} skill)."

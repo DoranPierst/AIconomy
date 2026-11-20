@@ -169,9 +169,11 @@ def compute_token_breakdown(
     home_dir: pathlib.Path | None = None,
     which_fn: Callable[[str], str | None] = shutil.which,
     schema_token_cache: dict[str, int] | None = None,
+    locked_vault_keys: set[str] | None = None,
 ) -> TokenBreakdown:
     """Compute realistic active schema load, honest disabled savings, per-client totals, and per-tool % shares."""
     missing_keys = missing_required_keys or set()
+    locked_keys = locked_vault_keys or set()
     inst_clients = installed_clients if installed_clients is not None else {c for c, _ in AI_CLIENTS}
     tok_cache = schema_token_cache or {}
     which_cache: dict[str, bool] = {}
@@ -190,8 +192,14 @@ def compute_token_breakdown(
             continue
 
         active_clients = [c for c, _ in AI_CLIENTS if t.clients.get(c, False)]
-        has_missing_key = bool(
+        has_locked_vault = bool(
             getattr(t, "auth_mode", "key") != "oauth"
+            and t.vault_key_name
+            and t.vault_key_name in locked_keys
+        )
+        has_missing_key = bool(
+            not has_locked_vault
+            and getattr(t, "auth_mode", "key") != "oauth"
             and t.vault_key_required
             and t.vault_key_name
             and t.vault_key_name in missing_keys
@@ -213,7 +221,10 @@ def compute_token_breakdown(
                 nominal = int(t.schema_tokens)
 
         if t.enabled:
-            if has_missing_key:
+            if has_locked_vault:
+                eff = 0
+                zero_reason = "tok_zero_vault_locked"
+            elif has_missing_key:
                 eff = 0
                 zero_reason = "tok_zero_missing_key"
             elif not active_clients:
@@ -247,8 +258,8 @@ def compute_token_breakdown(
                 )
             )
         else:
-            # Disabled tool: count toward 'Saved' ONLY if installed, has >= 1 client checked, and key is present
-            if active_clients and not has_missing_key and is_installed:
+            # Disabled tool: count toward 'Saved' ONLY if installed, has >= 1 client checked, and key is present/unlocked
+            if active_clients and not has_locked_vault and not has_missing_key and is_installed:
                 if t.id == "blender_skills":
                     saved_tokens += len(BLENDER_SKILLS_94) * BLENDER_SKILL_INDEX_TOKENS
                 else:

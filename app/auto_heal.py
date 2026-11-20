@@ -555,7 +555,9 @@ def execute_background_heal_plan(
                     raw_parts.append(i_raw or i_msg)
                     if not ok_i:
                         return False, i_msg, "\n".join(raw_parts)
-                ok_s, s_msg = sync_caveman_on_disk(tool, lang=lang, runtime_active=runtime_active)
+                ok_s, s_msg = sync_caveman_on_disk(
+                    tool, lang=lang, runtime_active=runtime_active, projects_map=projects_map
+                )
                 raw_parts.append(s_msg)
                 return ok_s, s_msg, "\n".join(raw_parts)
 
@@ -588,7 +590,9 @@ def execute_background_heal_plan(
                 raw_parts.append(i_raw or i_msg)
                 if not ok_i:
                     return False, i_msg, "\n".join(raw_parts)
-            s_msgs = sync_custom_skill_tools_on_disk([tool], lang=lang, runtime_active=runtime_active)
+            s_msgs = sync_custom_skill_tools_on_disk(
+                [tool], lang=lang, runtime_active=runtime_active, projects_map=projects_map
+            )
             summary = " | ".join(s_msgs) if s_msgs else (
                 f"{tool.name} skill senkronizasyonu tamamlandı." if is_tr else f"Synced {tool.name} skill mirror."
             )
@@ -611,9 +615,15 @@ def execute_background_heal_plan(
                 raw_parts.append(b_msg)
             cv_tool = by_id.get("caveman")
             if cv_tool:
-                _ok, c_msg = sync_caveman_on_disk(cv_tool, lang=lang, runtime_active=runtime_active)
+                _ok, c_msg = sync_caveman_on_disk(
+                    cv_tool, lang=lang, runtime_active=runtime_active, projects_map=projects_map
+                )
                 raw_parts.append(c_msg)
-            raw_parts.extend(sync_custom_skill_tools_on_disk(tools, lang=lang, runtime_active=runtime_active))
+            raw_parts.extend(
+                sync_custom_skill_tools_on_disk(
+                    tools, lang=lang, runtime_active=runtime_active, projects_map=projects_map
+                )
+            )
             cfg_msgs = sync_mcp_json_clients(tools, vault, projects_map, lang=lang, runtime_active=runtime_active)
             raw_parts.extend(cfg_msgs)
             summary = " | ".join(cfg_msgs) if cfg_msgs else (
@@ -627,7 +637,9 @@ def execute_background_heal_plan(
             ok_i, _ver, i_msg, i_raw = install_library_tool(tool, active_skills, lang=lang)
             if ok_i:
                 sync_mcp_json_clients(tools, vault, projects_map, lang=lang, runtime_active=runtime_active)
-                sync_custom_skill_tools_on_disk([tool], lang=lang, runtime_active=runtime_active)
+                sync_custom_skill_tools_on_disk(
+                    [tool], lang=lang, runtime_active=runtime_active, projects_map=projects_map
+                )
             return ok_i, i_msg, i_raw or i_msg
 
         if plan.action_id == "launch_host_app":

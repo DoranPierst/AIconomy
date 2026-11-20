@@ -295,6 +295,7 @@ class ToolsTabMixin:
             missing_required_keys=self._missing_required_vault_keys(),
             installed_clients=self.installed_clients,
             schema_token_cache=tok_cache if isinstance(tok_cache, dict) else None,
+            locked_vault_keys=self._locked_vault_keys(),
         )
         return bd.active_tokens, bd.saved_tokens
 
@@ -686,8 +687,9 @@ class ToolsTabMixin:
                 if getattr(t, "auth_mode", "key") == "oauth" and supports_oauth(t.id):
                     lines.append("   - Auth: Browser OAuth")
                 else:
-                    has_k = self.vault.has_secret(t.vault_key_name)
-                    if has_k:
+                    if self._tool_blocked_by_locked_vault(t):
+                        k_status = "Locked (Master Passphrase)"
+                    elif self.vault.has_secret(t.vault_key_name):
                         k_status = "Configured"
                     elif t.vault_key_required:
                         k_status = "Missing (required)"

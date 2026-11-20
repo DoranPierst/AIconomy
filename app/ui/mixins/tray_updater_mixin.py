@@ -10,7 +10,7 @@ from typing import Any
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import QApplication, QFileDialog, QMenu, QMessageBox, QSystemTrayIcon
 
-from ...catalog import PROFILES, build_default_catalog, profile_title
+from ...catalog import PROFILES, build_default_catalog, default_projects_map, profile_title
 from ...i18n import normalize_language, tr
 from ...library_catalog import build_library_catalog, refresh_remote_catalog
 from ...mcp_config import (
@@ -286,6 +286,8 @@ class TrayUpdaterMixin:
         _atomic_write_text(self.store.state_file, txt)
         self.tools = build_default_catalog(data_dir=self.data_dir)
         self.active_skills, self.meta = self.store.load_into(self.tools, vault=self.vault)
+        if not isinstance(self.meta.get("projects"), dict):
+            self.meta["projects"] = default_projects_map()
 
         self.sort_key = str(self.meta.get("sort_key", "enabled"))
         if self.sort_key not in ("name", "project", "ping", "enabled"):
@@ -293,6 +295,7 @@ class TrayUpdaterMixin:
         self.sort_desc = bool(self.meta.get("sort_desc", True))
         self.lang = normalize_language(str(self.meta.get("lang") or self.lang))
         self.meta["lang"] = self.lang
+        self._save_state()
         self._apply_theme(self.meta.get("theme", "dark"))
 
         rt_active = bool(self.runtime_started and self._runtime_state == "running")
@@ -326,8 +329,12 @@ class TrayUpdaterMixin:
                 )
             cv_tool = next((t for t in self.tools if t.id == "caveman"), None)
             if cv_tool:
-                sync_caveman_on_disk(cv_tool, lang=self.lang, runtime_active=rt_active)
-            sync_custom_skill_tools_on_disk(self.tools, lang=self.lang, runtime_active=rt_active)
+                sync_caveman_on_disk(
+                    cv_tool, lang=self.lang, runtime_active=rt_active, projects_map=self.projects_map
+                )
+            sync_custom_skill_tools_on_disk(
+                self.tools, lang=self.lang, runtime_active=rt_active, projects_map=self.projects_map
+            )
             sync_mcp_json_clients(self.tools, self.vault, self.projects_map, lang=self.lang, runtime_active=rt_active)
             self._sync_live_environment_async(target_tools=list(self.tools))
 

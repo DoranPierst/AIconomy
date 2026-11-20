@@ -133,9 +133,17 @@ class ProfilesMixin:
 
         is_rt_running = bool(self.runtime_started and self._runtime_state == "running")
         target_enable = set(PROFILES[profile_key]["enable"])
+        need_download: list[ToolSpec] = []
         for t in self.tools:
             if t.id in target_enable and not getattr(t, "in_workspace", True):
-                t.in_workspace = True
+                if not getattr(t, "installed", False) and self.sync_live_environment:
+                    need_download.append(t)
+                else:
+                    t.installed = True
+                    t.in_workspace = True
+                    t.live_location_detail = resolve_disk_location(
+                        t, self.projects_map, self._latest_live_map, lang=self.lang
+                    )
         for t in self.tools:
             if not getattr(t, "in_workspace", True):
                 t.enabled = False
@@ -171,6 +179,9 @@ class ProfilesMixin:
         self._refresh_plugins_tab()
         self._refresh_logs_tab()
         self._sync_live_environment_async(target_tools=list(self.tools))
+        if need_download:
+            self.tabs.setCurrentIndex(1)
+            self._run_library_install(need_download, enable_after=True)
 
     def _save_custom_preset(self) -> bool:
         cur_active = str(self.meta.get("active_profile", "") or "")
@@ -258,6 +269,8 @@ class ProfilesMixin:
                     t.mode_index = max(0, min(int(saved["mode_index"]), len(t.modes) - 1))
                 if "param_value" in saved:
                     t.param_value = str(saved["param_value"])
+                    if self.store._migrate_tool_secret_in_ram(t, self.vault):
+                        saved["param_value"] = ""
                     if t.id in ("serena", "unity_mcp", "blender_mcp") and t.param_value.isdigit():
                         p_int = int(t.param_value)
                         if 1 <= p_int <= 65535:

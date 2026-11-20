@@ -489,8 +489,8 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, ProfilesMixin, Tr
             )
         cv_tool = next((x for x in tools_snap if x.id == "caveman"), None)
         if cv_tool:
-            sync_caveman_on_disk(cv_tool, lang=lang_snap, runtime_active=False)
-        sync_custom_skill_tools_on_disk(tools_snap, lang=lang_snap, runtime_active=False)
+            sync_caveman_on_disk(cv_tool, lang=lang_snap, runtime_active=False, projects_map=proj_snap)
+        sync_custom_skill_tools_on_disk(tools_snap, lang=lang_snap, runtime_active=False, projects_map=proj_snap)
         sync_mcp_json_clients(tools_snap, self.vault, proj_snap, lang=lang_snap, runtime_active=False)
 
     def _shutdown_managed_runtime_sync(self) -> None:
@@ -611,8 +611,8 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, ProfilesMixin, Tr
                         )
                     cv_tool = next((x for x in tools_snap if x.id == "caveman"), None)
                     if cv_tool:
-                        sync_caveman_on_disk(cv_tool, lang=lang_snap)
-                    sync_custom_skill_tools_on_disk(tools_snap, lang=lang_snap)
+                        sync_caveman_on_disk(cv_tool, lang=lang_snap, projects_map=proj_snap)
+                    sync_custom_skill_tools_on_disk(tools_snap, lang=lang_snap, projects_map=proj_snap)
                     sync_mcp_json_clients(tools_snap, self.vault, proj_snap, lang=lang_snap)
                     if started_ports:
                         wait_for_started_ports(started_ports, timeout=2.5)
@@ -961,8 +961,12 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, ProfilesMixin, Tr
                     )
                 cv_tool = next((x for x in tools_snap if x.id == "caveman"), None)
                 if cv_tool:
-                    sync_caveman_on_disk(cv_tool, lang=lang_snap, runtime_active=allow_start_flag)
-                sync_custom_skill_tools_on_disk(tools_snap, lang=lang_snap, runtime_active=allow_start_flag)
+                    sync_caveman_on_disk(
+                        cv_tool, lang=lang_snap, runtime_active=allow_start_flag, projects_map=proj_snap
+                    )
+                sync_custom_skill_tools_on_disk(
+                    tools_snap, lang=lang_snap, runtime_active=allow_start_flag, projects_map=proj_snap
+                )
                 removed_keys = {
                     x.mcp_server_key
                     for x in tools_snap
@@ -1290,9 +1294,10 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, ProfilesMixin, Tr
 
         snap = copy.deepcopy(tool)
         lang_snap = self.lang
+        proj_snap = dict(self.projects_map)
 
         def worker() -> None:
-            ok, msg, raw_log = uninstall_library_tool(snap, lang=lang_snap)
+            ok, msg, raw_log = uninstall_library_tool(snap, lang=lang_snap, projects_map=proj_snap)
             safe_emit(self.bridge.lib_uninstall_done, snap.id, ok, msg, raw_log)
 
         threading.Thread(target=worker, daemon=True).start()
@@ -1605,6 +1610,8 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, ProfilesMixin, Tr
         live_map: dict[str, str] | None = None,
         silent: bool = False,
     ) -> None:
+        if getattr(self, "_shutdown_done", False) or getattr(self, "_is_closing", False) or not self.data_dir.is_dir():
+            return
         if getattr(self, "_health_pending", False) and not self._health_busy:
             self._health_pending = False
             QTimer.singleShot(20, self.run_health_scan)

@@ -17,8 +17,26 @@ from typing import Any
 
 from .catalog import ToolSpec
 from .host_apps import NO_WINDOW
-from .mcp_config import _dedupe_yaml_frontmatter_keys, _force_rmtree, _remove_agy_skill_mirrors
+from .mcp_config import (
+    _clean_managed_skills_in_dir,
+    _dedupe_yaml_frontmatter_keys,
+    _force_rmtree,
+    _remove_agy_skill_mirrors,
+)
+from .security import build_isolated_child_env
 from .updater import get_current_app_version, parse_semver, resolve_github_latest_release_web
+
+
+def _run_isolated_cmd(cmd: list[str], timeout: int = 90) -> subprocess.CompletedProcess[str]:
+    """Run a package/git subprocess with scrubbed host secrets and lifecycle scripts disabled."""
+    return subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        env=build_isolated_child_env({}),
+        creationflags=NO_WINDOW,
+    )
 
 NPM_PACKAGE_MAP: dict[str, str] = {
     "bla": "bla-agents",
@@ -74,12 +92,9 @@ def install_or_update_blender_skills(active_skills: set[str], lang: str = "en") 
     temp_clone = pathlib.Path(tempfile.mkdtemp(prefix="aiconomy_bs_"))
     clone_dest = temp_clone / "repo"
     try:
-        proc = subprocess.run(
+        proc = _run_isolated_cmd(
             ["git", "clone", "--depth", "1", "https://github.com/arjun988/blender-skills.git", str(clone_dest)],
-            capture_output=True,
-            text=True,
             timeout=90,
-            creationflags=NO_WINDOW,
         )
         if proc.returncode != 0:
             err = proc.stderr.strip()
@@ -553,7 +568,7 @@ def update_single_tool(
             cav_dir = active_dir if active_dir.is_dir() else (disabled_dir if disabled_dir.is_dir() else active_dir)
             if (cav_dir / ".git").is_dir():
                 cmd = ["git", "-C", str(cav_dir), "pull", "--ff-only"]
-                proc = subprocess.run(cmd, capture_output=True, text=True, timeout=30, creationflags=NO_WINDOW)
+                proc = _run_isolated_cmd(cmd, timeout=30)
                 raw = _fmt_cmd_raw(cmd, proc, is_tr)
                 if proc.returncode == 0:
                     out = proc.stdout.strip() or ("Güncel." if is_tr else "Up to date.")
@@ -620,7 +635,7 @@ def update_single_tool(
             try:
                 clone_dst = tmp_cav / "repo"
                 cmd = [git_exe, "clone", "--depth", "1", "https://github.com/JuliusBrussee/caveman.git", str(clone_dst)]
-                proc = subprocess.run(cmd, capture_output=True, text=True, timeout=60, creationflags=NO_WINDOW)
+                proc = _run_isolated_cmd(cmd, timeout=60)
                 raw = _fmt_cmd_raw(cmd, proc, is_tr)
                 if proc.returncode != 0:
                     err_first = (proc.stderr.strip() or proc.stdout.strip() or "git clone error").splitlines()[0]
@@ -657,7 +672,7 @@ def update_single_tool(
             else:
                 cmd = ["uv", "tool", "upgrade", pkg]
 
-            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=90, creationflags=NO_WINDOW)
+            proc = _run_isolated_cmd(cmd, timeout=90)
             combined = (proc.stdout + "\n" + proc.stderr).strip()
             raw = _fmt_cmd_raw(cmd, proc, is_tr)
             if proc.returncode == 0 or "Nothing to upgrade" in combined or "already installed" in combined.lower():
@@ -690,11 +705,11 @@ def update_single_tool(
             npm_exe = shutil.which("npm.cmd") or shutil.which("npm")
             if npm_exe:
                 cmd = [npm_exe, "install", "-g", "--ignore-scripts", "--no-fund", "--no-audit", target_spec]
-                proc = subprocess.run(cmd, capture_output=True, text=True, timeout=90, creationflags=NO_WINDOW)
+                proc = _run_isolated_cmd(cmd, timeout=90)
                 raw = _fmt_cmd_raw(cmd, proc, is_tr)
                 if proc.returncode != 0 and "EEXIST" in (proc.stderr + "\n" + proc.stdout):
                     cache_cmd = [npm_exe, "cache", "add", target_spec]
-                    proc2 = subprocess.run(cache_cmd, capture_output=True, text=True, timeout=90, creationflags=NO_WINDOW)
+                    proc2 = _run_isolated_cmd(cache_cmd, timeout=90)
                     raw = raw + "\n\n" + _fmt_cmd_raw(cache_cmd, proc2, is_tr)
                     proc = proc2
                 if proc.returncode != 0:
@@ -730,12 +745,12 @@ def update_single_tool(
             if uv_exe and latest_ver:
                 target_py = f"{pkg}=={latest_ver}"
                 cmd = [uv_exe, "tool", "install", "--upgrade", target_py]
-                proc = subprocess.run(cmd, capture_output=True, text=True, timeout=90, creationflags=NO_WINDOW)
+                proc = _run_isolated_cmd(cmd, timeout=90)
                 comb = (proc.stdout + "\n" + proc.stderr).strip()
                 raw = _fmt_cmd_raw(cmd, proc, is_tr)
                 if proc.returncode != 0 and "no executables are provided" in comb.lower():
                     warm_cmd = [uv_exe, "tool", "run", "--refresh", target_py, "--help"]
-                    proc2 = subprocess.run(warm_cmd, capture_output=True, text=True, timeout=60, creationflags=NO_WINDOW)
+                    proc2 = _run_isolated_cmd(warm_cmd, timeout=60)
                     raw = raw + "\n\n" + _fmt_cmd_raw(warm_cmd, proc2, is_tr)
                     if proc2.returncode == 0:
                         proc = proc2
@@ -873,11 +888,11 @@ def install_library_tool(
                     pkg_spec = f"{base_pkg}@{resolved_latest}"
 
             cmd = [npm_exe, "install", "-g", "--ignore-scripts", "--no-fund", "--no-audit", pkg_spec]
-            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=120, creationflags=NO_WINDOW)
+            proc = _run_isolated_cmd(cmd, timeout=120)
             raw = _fmt_cmd_raw(cmd, proc, is_tr)
             if proc.returncode != 0 and "EEXIST" in (proc.stderr + "\n" + proc.stdout):
                 cache_cmd = [npm_exe, "cache", "add", pkg_spec]
-                proc2 = subprocess.run(cache_cmd, capture_output=True, text=True, timeout=120, creationflags=NO_WINDOW)
+                proc2 = _run_isolated_cmd(cache_cmd, timeout=120)
                 raw = raw + "\n\n" + _fmt_cmd_raw(cache_cmd, proc2, is_tr)
                 proc = proc2
 
@@ -957,13 +972,13 @@ def install_library_tool(
             else:
                 cmd = [uv_exe, "tool", "install", "--upgrade", pkg_spec.removesuffix("@latest")]
 
-            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=120, creationflags=NO_WINDOW)
+            proc = _run_isolated_cmd(cmd, timeout=120)
             combined = (proc.stdout + "\n" + proc.stderr).strip()
             raw = _fmt_cmd_raw(cmd, proc, is_tr)
 
             if proc.returncode != 0 and "no executables are provided" in combined.lower():
                 warm_cmd = [uv_exe, "tool", "run", pkg_spec, "--help"]
-                proc2 = subprocess.run(warm_cmd, capture_output=True, text=True, timeout=60, creationflags=NO_WINDOW)
+                proc2 = _run_isolated_cmd(warm_cmd, timeout=60)
                 raw = raw + "\n\n" + _fmt_cmd_raw(warm_cmd, proc2, is_tr)
                 if proc2.returncode == 0:
                     proc = proc2
@@ -1012,7 +1027,7 @@ def install_library_tool(
                 if dest_dir.exists():
                     _force_rmtree(dest_dir)
                 cmd = [git_exe, "clone", "--depth", "1", tool.repo_url, str(dest_dir)]
-            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=90, creationflags=NO_WINDOW)
+            proc = _run_isolated_cmd(cmd, timeout=90)
             raw = _fmt_cmd_raw(cmd, proc, is_tr)
             if proc.returncode != 0:
                 first_err = (proc.stderr.strip() or proc.stdout.strip() or "git clone error").splitlines()[0]
@@ -1090,7 +1105,11 @@ def can_uninstall_tool_from_disk(tool: ToolSpec) -> bool:
     return False
 
 
-def uninstall_library_tool(tool: ToolSpec, lang: str = "en") -> tuple[bool, str, str]:
+def uninstall_library_tool(
+    tool: ToolSpec,
+    lang: str = "en",
+    projects_map: dict[str, str] | None = None,
+) -> tuple[bool, str, str]:
     """Remove an installed plugin package or skill directory from the user's PC.
 
     Returns (ok, short_summary, raw_log_detail). Never mutates ``tool``.
@@ -1101,6 +1120,11 @@ def uninstall_library_tool(tool: ToolSpec, lang: str = "en") -> tuple[bool, str,
             target_root = pathlib.Path.home() / ".gemini" / "config" / "plugins" / "blender-skills"
             if target_root.exists():
                 _force_rmtree(target_root)
+            _clean_managed_skills_in_dir(pathlib.Path.home() / ".agents" / "skills", prefix="blender-skills__")
+            if projects_map:
+                for p_str in projects_map.values():
+                    _clean_managed_skills_in_dir(pathlib.Path(p_str) / ".agent" / "skills", owner_id="blender_skills")
+                    _clean_managed_skills_in_dir(pathlib.Path(p_str) / ".agents" / "skills", owner_id="blender_skills")
             msg = "Blender Skills diskten kaldırıldı." if is_tr else "Uninstalled Blender Skills from disk."
             return True, msg, str(target_root)
 
@@ -1110,6 +1134,10 @@ def uninstall_library_tool(tool: ToolSpec, lang: str = "en") -> tuple[bool, str,
                 if p.exists():
                     _force_rmtree(p)
             _remove_agy_skill_mirrors(pathlib.Path.home() / ".gemini" / "config" / "skills", "caveman")
+            if projects_map:
+                for p_str in projects_map.values():
+                    _clean_managed_skills_in_dir(pathlib.Path(p_str) / ".agent" / "skills", owner_id="caveman")
+                    _clean_managed_skills_in_dir(pathlib.Path(p_str) / ".agents" / "skills", owner_id="caveman")
             msg = "Caveman kuralı diskten kaldırıldı." if is_tr else "Uninstalled Caveman rule from disk."
             return True, msg, str(pathlib.Path.home() / ".agents")
 
@@ -1119,7 +1147,7 @@ def uninstall_library_tool(tool: ToolSpec, lang: str = "en") -> tuple[bool, str,
             if not uv_exe:
                 return False, ("uv bulunamadı." if is_tr else "uv not found on PATH."), pkg
             cmd = [uv_exe, "tool", "uninstall", pkg]
-            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=60, creationflags=NO_WINDOW)
+            proc = _run_isolated_cmd(cmd, timeout=60)
             raw = _fmt_cmd_raw(cmd, proc, is_tr)
             comb = (proc.stdout + "\n" + proc.stderr).lower()
             if proc.returncode == 0 or "is not installed" in comb or "nothing to uninstall" in comb:
@@ -1138,7 +1166,7 @@ def uninstall_library_tool(tool: ToolSpec, lang: str = "en") -> tuple[bool, str,
             if not npm_exe:
                 return False, ("npm bulunamadı." if is_tr else "npm not found on PATH."), base_pkg
             cmd = [npm_exe, "uninstall", "-g", base_pkg]
-            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=90, creationflags=NO_WINDOW)
+            proc = _run_isolated_cmd(cmd, timeout=90)
             raw = _fmt_cmd_raw(cmd, proc, is_tr)
             if proc.returncode == 0:
                 msg = f"npm paketi bilgisayardan kaldırıldı: {base_pkg}" if is_tr else f"Uninstalled npm package: {base_pkg}"
@@ -1167,7 +1195,7 @@ def uninstall_library_tool(tool: ToolSpec, lang: str = "en") -> tuple[bool, str,
             if not clean_pkg:
                 return False, ("uv paket adı bulunamadı." if is_tr else "Could not determine uv package."), cmd_text
             cmd = [uv_exe, "tool", "uninstall", clean_pkg]
-            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=60, creationflags=NO_WINDOW)
+            proc = _run_isolated_cmd(cmd, timeout=60)
             raw = _fmt_cmd_raw(cmd, proc, is_tr)
             comb = (proc.stdout + "\n" + proc.stderr).lower()
             if proc.returncode == 0 or "is not installed" in comb or "nothing to uninstall" in comb:
@@ -1182,6 +1210,10 @@ def uninstall_library_tool(tool: ToolSpec, lang: str = "en") -> tuple[bool, str,
                 if p.exists():
                     _force_rmtree(p)
             _remove_agy_skill_mirrors(pathlib.Path.home() / ".gemini" / "config" / "skills", tool.id)
+            if projects_map:
+                for p_str in projects_map.values():
+                    _clean_managed_skills_in_dir(pathlib.Path(p_str) / ".agent" / "skills", owner_id=tool.id)
+                    _clean_managed_skills_in_dir(pathlib.Path(p_str) / ".agents" / "skills", owner_id=tool.id)
             dest_dir = pathlib.Path.home() / ".agents" / "skills" / tool.id
             msg = f"Skill klasörü silindi: {dest_dir}" if is_tr else f"Removed skill folder: {dest_dir}"
             return True, msg, str(dest_dir)

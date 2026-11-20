@@ -6,10 +6,18 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.IO.Pipes;
+using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Web.Script.Serialization;
+
+[assembly: AssemblyTitle("AIconomy MCP Bridge")]
+[assembly: AssemblyDescription("AIconomy Native Stdio MCP Secret Bridge")]
+[assembly: AssemblyCompany("AIconomy")]
+[assembly: AssemblyProduct("AIconomy")]
+[assembly: AssemblyVersion("1.6.0.0")]
+[assembly: AssemblyFileVersion("1.6.0.0")]
 
 internal static class Program
 {
@@ -326,12 +334,9 @@ internal static class Program
                 byte[] req = Encoding.ASCII.GetBytes("resolve_launch:" + toolId + "|" + dirB64);
                 pipe.Write(req, 0, req.Length);
                 pipe.Flush();
-                using (MemoryStream ms = new MemoryStream())
+                using (StreamReader reader = new StreamReader(pipe, Encoding.ASCII, false, 4096, true))
                 {
-                    byte[] buf = new byte[8192];
-                    int n = pipe.Read(buf, 0, buf.Length);
-                    if (n > 0) ms.Write(buf, 0, n);
-                    string resp = Encoding.ASCII.GetString(ms.ToArray()).Trim();
+                    string resp = (reader.ReadLine() ?? "").Trim();
                     if (resp == "LOCKED")
                     {
                         lockedError = true;

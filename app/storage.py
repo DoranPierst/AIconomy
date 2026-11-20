@@ -389,7 +389,7 @@ class LogDatabase:
         extra = self.vault.all_unlocked_values() if self.vault is not None else ()
         safe_summary = redact_secrets(summary, extra_secrets=extra)
         safe_raw = redact_secrets(raw_detail or summary, extra_secrets=extra)
-        with self._db_lock, self._connect() as conn, conn:
+        with contextlib.suppress(sqlite3.Error, OSError), self._db_lock, self._connect() as conn, conn:
             conn.execute(
                 "INSERT INTO logs (ts, level, tool, summary, raw_detail, port) VALUES (?, ?, ?, ?, ?, ?)",
                 (ts, level, tool, safe_summary, safe_raw, port),
@@ -397,7 +397,7 @@ class LogDatabase:
             self._prune_locked(conn)
 
     def clear(self) -> None:
-        with self._connect() as conn, conn:
+        with contextlib.suppress(sqlite3.Error, OSError), self._db_lock, self._connect() as conn, conn:
             conn.execute("DELETE FROM logs")
 
     def query(self, level: str = "ALL", tool: str = "ALL", search: str = "", limit: int = 200) -> list[dict[str, Any]]:
@@ -416,8 +416,11 @@ class LogDatabase:
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         sql = f"SELECT id, ts, level, tool, summary, raw_detail, port FROM logs {where} ORDER BY id DESC LIMIT ?"
         params.append(limit)
-        with self._connect() as conn:
-            rows = conn.execute(sql, params).fetchall()
+        try:
+            with self._db_lock, self._connect() as conn:
+                rows = conn.execute(sql, params).fetchall()
+        except (sqlite3.Error, OSError):
+            return []
         return [
             {
                 "id": r[0],
@@ -432,16 +435,19 @@ class LogDatabase:
         ]
 
     def latest_issue_for_tool(self, tool_name: str) -> str:
-        with self._connect() as conn:
-            row = conn.execute(
-                "SELECT level, summary FROM logs WHERE tool = ? AND level IN ('ERR', 'WARN') ORDER BY id DESC LIMIT 1",
-                (tool_name,),
-            ).fetchone()
-        return f"[{row[0]}] {row[1]}" if row else ""
+        try:
+            with self._db_lock, self._connect() as conn:
+                row = conn.execute(
+                    "SELECT level, summary FROM logs WHERE tool = ? AND level IN ('ERR', 'WARN') ORDER BY id DESC LIMIT 1",
+                    (tool_name,),
+                ).fetchone()
+            return f"[{row[0]}] {row[1]}" if row else ""
+        except (sqlite3.Error, OSError):
+            return ""
 
     def counts_by_level(self) -> dict[str, int]:
         out = {"ERR": 0, "WARN": 0, "INFO": 0, "DBG": 0}
-        with self._connect() as conn:
+        with contextlib.suppress(sqlite3.Error, OSError), self._db_lock, self._connect() as conn:
             for lvl, cnt in conn.execute("SELECT level, COUNT(*) FROM logs GROUP BY level"):
                 out[lvl] = cnt
         return out
@@ -493,6 +499,48 @@ class StateStore:
             t.param_value = ""
             return True
         return False
+
+    def _scrub_custom_presets_in_meta(
+        self,
+        meta: dict[str, Any],
+        by_id: dict[str, ToolSpec],
+        eff_vault: WindowsDpapiVault | None,
+    ) -> bool:
+        """Scrub and migrate any DB URI or embedded secret inside ``meta['custom_presets']`` into DPAPI vault."""
+        presets = meta.get("custom_presets")
+        if not isinstance(presets, dict):
+            return False
+        scrubbed = False
+        for pdata in presets.values():
+            if not isinstance(pdata, dict):
+                continue
+            tools_map = pdata.get("tools")
+            if not isinstance(tools_map, dict):
+                continue
+            for tid, tcfg in tools_map.items():
+                if not isinstance(tcfg, dict):
+                    continue
+                pv = str(tcfg.get("param_value") or "").strip()
+                if not pv:
+                    continue
+                is_db_uri_tool = tid in ("postgres_mcp", "mongodb_mcp", "redis_mcp")
+                has_secret = contains_embedded_secret(pv)
+                if not is_db_uri_tool and not has_secret:
+                    continue
+                if is_db_uri_tool and pv in self._LEGACY_DUMMY_DB_URIS:
+                    tcfg["param_value"] = ""
+                    scrubbed = True
+                    continue
+                spec = by_id.get(tid)
+                vk = (spec.vault_key_name if spec and spec.vault_key_name else "") or auto_vault_key_for_tool(tid)
+                if spec is not None and not spec.vault_key_name:
+                    spec.vault_key_name = vk
+                if eff_vault is not None and not eff_vault.is_locked():
+                    if not eff_vault.has_key_entry(vk) or has_secret:
+                        eff_vault.set_secret(vk, pv)
+                tcfg["param_value"] = ""
+                scrubbed = True
+        return scrubbed
 
     def load_into(
         self,
@@ -651,6 +699,10 @@ class StateStore:
                     scrubbed_any = True
                 tools.append(cust_t)
 
+        by_id_all = {t.id: t for t in tools}
+        if self._scrub_custom_presets_in_meta(meta, by_id_all, eff_vault):
+            scrubbed_any = True
+
         if scrubbed_any:
             with contextlib.suppress(OSError):
                 self.save(tools, active_skills, meta, set(by_id.keys()))
@@ -659,6 +711,8 @@ class StateStore:
     def serialize(
         self, tools: list[ToolSpec], active_skills: set[str], meta: dict[str, Any], default_ids: set[str]
     ) -> dict[str, Any]:
+        by_id_all = {t.id: t for t in tools}
+        self._scrub_custom_presets_in_meta(meta, by_id_all, self.vault)
         tools_dict: dict[str, Any] = {}
         for t in tools:
             self._migrate_tool_secret_in_ram(t, self.vault)
