@@ -834,14 +834,25 @@ def enforce_tool_runtime_state(
 
 
 def free_trellis_vram(lang: str = "en") -> tuple[bool, str]:
-    """Terminate trellis-server.exe to release GPU VRAM."""
+    """Terminate trellis-server.exe (with force-kill fallback) to release GPU VRAM."""
     is_tr = lang == "tr"
     stopped: list[int] = []
+    procs_to_wait: list[psutil.Process] = []
     try:
         for proc in psutil.process_iter(["pid", "name"]):
             if (proc.info.get("name") or "").lower() == "trellis-server.exe":
                 proc.terminate()
-                stopped.append(proc.info["pid"])
+                stopped.append(int(proc.info["pid"]))
+                procs_to_wait.append(proc)
+        if procs_to_wait:
+            _gone, alive = psutil.wait_procs(procs_to_wait, timeout=2.5)
+            for stuck in alive:
+                try:
+                    stuck.kill()
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    pass
+            if alive:
+                psutil.wait_procs(alive, timeout=1.0)
     except Exception as exc:
         return False, (f"TRELLIS kontrol hatası: {exc}" if is_tr else f"TRELLIS check failed: {exc}")
 

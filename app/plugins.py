@@ -11,6 +11,7 @@ import subprocess
 import tempfile
 import traceback
 import urllib.error
+import urllib.parse
 import urllib.request
 from typing import Any
 
@@ -270,9 +271,28 @@ def inspect_github_repo(repo_url: str, github_token: str = "", lang: str = "en")
     skill_files = [p for p in paths if p.endswith("SKILL.md")]
     has_pkg = "package.json" in paths
     has_py = "pyproject.toml" in paths
-    needs_key = any("API_KEY" in p.upper() or ".env.example" in p for p in paths)
+    env_example_files = [p for p in paths if p.endswith(".env.example") or p == ".env.sample"]
+    needs_key = any("API_KEY" in p.upper() for p in paths) or bool(env_example_files)
     vault_key_name = ""
-    if needs_key:
+    if env_example_files:
+        try:
+            env_rel = sorted(env_example_files, key=len)[0]
+            env_req = urllib.request.Request(
+                f"https://raw.githubusercontent.com/{owner}/{repo}/{branch}/{urllib.parse.quote(env_rel)}",
+                headers={"User-Agent": _user_agent()},
+            )
+            with urllib.request.urlopen(env_req, timeout=4) as env_resp:
+                env_txt = env_resp.read(16384).decode("utf-8", errors="ignore")
+            m_env_key = re.search(
+                r"^[ \t]*(?:export[ \t]+)?([A-Z][A-Z0-9_]*(?:API_KEY|TOKEN|SECRET|PASSWORD|PASSWD|URI|URL|DSN))[ \t]*=",
+                env_txt,
+                flags=re.MULTILINE,
+            )
+            if m_env_key:
+                vault_key_name = m_env_key.group(1)
+        except Exception:
+            pass
+    if needs_key and not vault_key_name:
         clean_repo_tok = re.sub(r"[^A-Z0-9]+", "_", repo.upper()).strip("_")
         clean_repo_tok = re.sub(r"(?:_MCP(?:_SERVER)?|_SERVER)$", "", clean_repo_tok) or "CUSTOM_TOOL"
         vault_key_name = f"{clean_repo_tok}_API_KEY"

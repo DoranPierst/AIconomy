@@ -16,6 +16,7 @@ from typing import Any
 
 from .catalog import ToolSpec, localized_tool_modes
 from .oauth import check_cli_oauth_ready, get_oauth_spec, resolve_cli_oauth_token, supports_oauth
+from .security import auto_vault_key_for_tool, contains_embedded_secret, split_postgres_uri_secret
 from .storage import WindowsDpapiVault
 
 _CONFIG_LOCK = threading.Lock()
@@ -428,6 +429,7 @@ def cleanup_removed_project_configs(proj_dir: pathlib.Path | str, tools: list[To
                     _rewrite_mcp_json(p_cfg, managed_keys, {}, create_if_missing=False, lang=lang)
                 except Exception:
                     pass
+        _clean_managed_skills_in_dir(proj_dir / ".agent" / "skills")
         _clean_managed_skills_in_dir(proj_dir / ".agents" / "skills")
 
 
@@ -453,6 +455,7 @@ def sync_blender_skills_on_disk(
         _clean_managed_skills_in_dir(agents_skills_root, prefix="blender-skills__")
         if projects_map:
             for p_str in projects_map.values():
+                _clean_managed_skills_in_dir(pathlib.Path(p_str) / ".agent" / "skills")
                 _clean_managed_skills_in_dir(pathlib.Path(p_str) / ".agents" / "skills")
         msg = (
             "Blender Skills henüz diske indirilmedi (Eklentiler sekmesinden kurabilirsiniz)."
@@ -500,34 +503,41 @@ def sync_blender_skills_on_disk(
     # Always clean stale AIconomy-managed copies across non-target projects (never touches user-authored skills!)
     if projects_map:
         for p_key, p_dir_str in projects_map.items():
-            if is_global_scope or p_key != project_scope or not (want_agy or want_agents):
-                _clean_managed_skills_in_dir(pathlib.Path(p_dir_str) / ".agents" / "skills")
+            p_root = pathlib.Path(p_dir_str)
+            if is_global_scope or p_key != project_scope or not want_agy:
+                _clean_managed_skills_in_dir(p_root / ".agent" / "skills")
+            if is_global_scope or p_key != project_scope or not want_agents:
+                _clean_managed_skills_in_dir(p_root / ".agents" / "skills")
 
     if not is_global_scope and projects_map:
         proj_dir = pathlib.Path(projects_map[project_scope])
         if proj_dir.is_dir():
-            proj_skills = proj_dir / ".agents" / "skills"
-            _clean_managed_skills_in_dir(proj_skills)
-            if (want_agy or want_agents) and active_skills:
-                proj_skills.mkdir(parents=True, exist_ok=True)
-                for name in sorted(active_skills):
-                    src_f = all_pool.get(name)
-                    if src_f is None or name == "references":
-                        continue
-                    dst_f = proj_skills / name
-                    if dst_f.exists() and not (dst_f / _AGY_SKILL_MARKER).is_file():
-                        # Preserve user's own non-AIconomy skill folder if same name exists
-                        continue
-                    _copy_single_skill_to_agy(src_f, dst_f)
-                if "references" in all_pool:
-                    dst_ref = proj_skills / "references"
-                    if not dst_ref.exists() or (dst_ref / _AGY_SKILL_MARKER).is_file():
-                        _copy_single_skill_to_agy(all_pool["references"], dst_ref)
+            target_buckets: list[tuple[bool, pathlib.Path]] = [
+                (want_agy, proj_dir / ".agent" / "skills"),
+                (want_agents, proj_dir / ".agents" / "skills"),
+            ]
+            for should_write, bucket_dir in target_buckets:
+                _clean_managed_skills_in_dir(bucket_dir)
+                if should_write and active_skills:
+                    bucket_dir.mkdir(parents=True, exist_ok=True)
+                    for name in sorted(active_skills):
+                        src_f = all_pool.get(name)
+                        if src_f is None or name == "references":
+                            continue
+                        dst_f = bucket_dir / name
+                        if dst_f.exists() and not (dst_f / _AGY_SKILL_MARKER).is_file():
+                            # Preserve user's own non-AIconomy skill folder if same name exists
+                            continue
+                        _copy_single_skill_to_agy(src_f, dst_f)
+                    if "references" in all_pool:
+                        dst_ref = bucket_dir / "references"
+                        if not dst_ref.exists() or (dst_ref / _AGY_SKILL_MARKER).is_file():
+                            _copy_single_skill_to_agy(all_pool["references"], dst_ref)
             cnt = len(active_skills) if (want_agy or want_agents) else 0
             msg = (
-                f"'{project_scope}' projesine senkronlandı ({cnt} skill -> .agents/skills)."
+                f"'{project_scope}' projesine senkronlandı ({cnt} skill)."
                 if is_tr
-                else f"Synced to project '{project_scope}' ({cnt} skills -> .agents/skills)."
+                else f"Synced to project '{project_scope}' ({cnt} skills)."
             )
             return True, msg
 
@@ -582,6 +592,19 @@ def build_mcp_exec_launcher_entry(t: ToolSpec, vault: WindowsDpapiVault) -> dict
     }
 
 
+def _migrate_inline_tool_secret(t: ToolSpec, vault: WindowsDpapiVault) -> None:
+    """Ensure any secret accidentally placed in ``t.param_value`` is moved into DPAPI vault in RAM."""
+    pv = (t.param_value or "").strip()
+    if not pv or not contains_embedded_secret(pv):
+        return
+    vk = t.vault_key_name or auto_vault_key_for_tool(t.id)
+    if not t.vault_key_name:
+        t.vault_key_name = vk
+    if not vault.is_locked():
+        vault.set_secret(vk, pv)
+        t.param_value = ""
+
+
 def write_bridge_specs_manifest(
     tools: list[ToolSpec],
     vault: WindowsDpapiVault,
@@ -604,7 +627,8 @@ def write_bridge_specs_manifest(
             if not t.mcp_command:
                 continue
 
-            args = list(t.mcp_args)
+            _migrate_inline_tool_secret(t, vault)
+            args = [str(a) for a in t.mcp_args if not contains_embedded_secret(str(a))]
             opt_map = {o.key: bool(o.enabled) for o in t.options}
             if t.id == "chrome_devtools":
                 if opt_map.get("headless_mode", False) and "--headless" not in args:
@@ -613,7 +637,7 @@ def write_bridge_specs_manifest(
                     args.append("--isolated")
 
             plain_env: dict[str, str] = {}
-            p_val = t.param_value.strip()
+            p_val = "" if contains_embedded_secret(t.param_value) else t.param_value.strip()
             if t.id == "blender_mcp":
                 b_port = int(t.port or (int(p_val) if p_val.isdigit() else 9876))
                 if b_port != 9876:
@@ -633,6 +657,16 @@ def write_bridge_specs_manifest(
                         args.extend([t.param_arg_flag, p_val])
 
             use_oauth_cli = bool(is_oauth and ospec is not None and ospec.kind == "cli_login" and ospec.token_args)
+            sec_flag = ""
+            sec_env_var = t.vault_key_name
+            if not use_oauth_cli:
+                if t.id == "postgres_mcp":
+                    sec_flag = "__PG_POSITIONAL__"
+                    sec_env_var = ""
+                elif t.vault_key_name.startswith("AICONOMY_PARAM_"):
+                    sec_flag = getattr(t, "param_arg_flag", "") or ""
+                    sec_env_var = getattr(t, "param_env_var", "") or t.vault_key_name
+
             entries[t.id] = {
                 "name": t.name,
                 "cmd": t.mcp_command,
@@ -640,7 +674,8 @@ def write_bridge_specs_manifest(
                 "env": plain_env,
                 "vault_key": t.vault_key_name,
                 "vault_required": bool(t.vault_key_required),
-                "secret_arg_flag": "--api-key" if (not use_oauth_cli and t.id == "context7") else "",
+                "secret_arg_flag": sec_flag,
+                "secret_env_var": sec_env_var,
                 "oauth_mode": use_oauth_cli,
                 "oauth_cli_bin": ospec.cli_binary if (use_oauth_cli and ospec is not None) else "",
                 "oauth_token_args": list(ospec.token_args) if (use_oauth_cli and ospec is not None) else [],
@@ -673,6 +708,7 @@ def build_effective_stdio_spec(
 
     if not t.mcp_command:
         return None
+    _migrate_inline_tool_secret(t, vault)
     if (
         not is_oauth
         and t.vault_key_required
@@ -703,11 +739,25 @@ def build_effective_stdio_spec(
     elif t.vault_key_name:
         secret = override_secret if override_secret is not None else vault.get_secret(t.vault_key_name)
         if secret:
-            if t.id == "context7" and "--api-key" not in args:
-                args.extend(["--api-key", secret])
-            env[t.vault_key_name] = secret
+            if t.id == "postgres_mcp":
+                clean_uri, pg_pw = split_postgres_uri_secret(secret)
+                if clean_uri and clean_uri not in args:
+                    args.append(clean_uri)
+                if pg_pw:
+                    env["PGPASSWORD"] = pg_pw
+            elif t.vault_key_name.startswith("AICONOMY_PARAM_"):
+                target_env = getattr(t, "param_env_var", "") or t.vault_key_name
+                env[target_env] = secret
+                p_flag = getattr(t, "param_arg_flag", "")
+                if p_flag == "__POSITIONAL__":
+                    if secret not in args:
+                        args.append(secret)
+                elif p_flag and p_flag not in args:
+                    args.extend([p_flag, secret])
+            else:
+                env[t.vault_key_name] = secret
 
-    p_val = t.param_value.strip()
+    p_val = "" if contains_embedded_secret(t.param_value) else t.param_value.strip()
     if t.id == "blender_mcp":
         b_port = int(t.port or (int(p_val) if p_val.isdigit() else 9876))
         if b_port != 9876:
@@ -735,9 +785,10 @@ def build_effective_stdio_spec(
 
 
 def _build_mcp_entry(t: ToolSpec, vault: WindowsDpapiVault) -> dict[str, Any] | None:
-    """Build a disk-safe MCP client config entry with ZERO plaintext API keys."""
+    """Build a disk-safe MCP client config entry with ZERO plaintext API keys, tokens, or DB passwords."""
     if _is_http_mcp_tool(t):
         return {"url": f"http://127.0.0.1:{t.port}/mcp"}
+    _migrate_inline_tool_secret(t, vault)
     if not is_tool_credential_ready(t, vault):
         return None
 
@@ -752,14 +803,20 @@ def _build_mcp_entry(t: ToolSpec, vault: WindowsDpapiVault) -> dict[str, Any] | 
         if ospec.token_args:
             return build_mcp_exec_launcher_entry(t, vault)
 
-    # Whenever a tool uses a stored vault secret, route through --mcp-exec so NO secret touches disk!
-    if not is_oauth and t.vault_key_name and vault.has_key_entry(t.vault_key_name):
+    # Whenever a tool uses a required or stored vault secret, or has any embedded secret, route through --mcp-exec!
+    if not is_oauth and t.vault_key_name and (t.vault_key_required or vault.has_key_entry(t.vault_key_name)):
+        return build_mcp_exec_launcher_entry(t, vault)
+    if contains_embedded_secret(t.param_value) or any(contains_embedded_secret(str(a)) for a in t.mcp_args):
         return build_mcp_exec_launcher_entry(t, vault)
 
     spec = build_effective_stdio_spec(t, vault, wrap_windows_npx=True)
     if spec is None:
         return None
     cmd, args, env = spec
+    if any(contains_embedded_secret(str(a)) for a in args) or any(
+        contains_embedded_secret(str(v)) for v in env.values()
+    ):
+        return build_mcp_exec_launcher_entry(t, vault)
     entry: dict[str, Any] = {"command": cmd, "args": args}
     if env:
         entry["env"] = env
@@ -972,6 +1029,68 @@ def _sync_mcp_json_clients_impl(
                     if t.id == "unity_mcp":
                         alias_map["unityMCP"] = t
 
+            def _replace_toml_args_assignment(body_text: str, args_toml_inner: str) -> str:
+                m_args = re.search(r"^[ \t]*args[ \t]*=[ \t]*\[", body_text, flags=re.MULTILINE)
+                if not m_args:
+                    return body_text
+                idx_scan = m_args.end() - 1  # points to '['
+                depth = 0
+                in_dq = False
+                in_sq = False
+                esc = False
+                end_idx = -1
+                while idx_scan < len(body_text):
+                    ch = body_text[idx_scan]
+                    if in_dq:
+                        if esc:
+                            esc = False
+                        elif ch == "\\":
+                            esc = True
+                        elif ch == '"':
+                            in_dq = False
+                    elif in_sq:
+                        if ch == "'":
+                            in_sq = False
+                    else:
+                        if ch == '"':
+                            in_dq = True
+                        elif ch == "'":
+                            in_sq = True
+                        elif ch == "#":
+                            nl = body_text.find("\n", idx_scan)
+                            if nl < 0:
+                                break
+                            idx_scan = nl
+                            continue
+                        elif ch == "[":
+                            depth += 1
+                        elif ch == "]":
+                            depth -= 1
+                            if depth == 0:
+                                end_idx = idx_scan + 1
+                                break
+                    idx_scan += 1
+                if end_idx < 0:
+                    return body_text
+                return body_text[: m_args.start()] + f"args = [{args_toml_inner}]" + body_text[end_idx:]
+
+            def _strip_codex_env_subtable(sec_name: str, text_in: str) -> str:
+                env_pat = re.compile(
+                    rf'^\[mcp_servers\.(?:"{re.escape(sec_name)}"|\'{re.escape(sec_name)}\'|{re.escape(sec_name)})\.env\][ \t]*(?:#[^\r\n]*)?(?:\r?\n|\Z)',
+                    flags=re.MULTILINE,
+                )
+                while True:
+                    m_env = env_pat.search(text_in)
+                    if not m_env:
+                        break
+                    e_start = m_env.end()
+                    next_s = re.search(r"^\[", text_in[e_start:], flags=re.MULTILINE)
+                    e_end = e_start + next_s.start() if next_s else len(text_in)
+                    prefix = text_in[: m_env.start()].rstrip(" \t\r\n")
+                    suffix = text_in[e_end:].lstrip("\r\n")
+                    text_in = (prefix + "\n\n" + suffix) if (prefix and suffix) else (prefix + suffix)
+                return text_in
+
             def _sync_existing_codex_section(
                 sec_name: str,
                 should_enable: bool,
@@ -1008,7 +1127,7 @@ def _sync_mcp_json_clients_impl(
                         if re.search(r"^[ \t]*url[ \t]*=", body, flags=re.MULTILINE):
                             body = re.sub(
                                 r"^[ \t]*url[ \t]*=[^\r\n]*",
-                                f"url = {url_toml}",
+                                lambda _m, u=url_toml: f"url = {u}",
                                 body,
                                 count=1,
                                 flags=re.MULTILINE,
@@ -1019,23 +1138,19 @@ def _sync_mcp_json_clients_impl(
                         if re.search(r"^[ \t]*command[ \t]*=", body, flags=re.MULTILINE):
                             body = re.sub(
                                 r"^[ \t]*command[ \t]*=[^\r\n]*",
-                                f"command = {cmd_toml}",
+                                lambda _m, c=cmd_toml: f"command = {c}",
                                 body,
                                 count=1,
                                 flags=re.MULTILINE,
                             )
-                        if re.search(r"^[ \t]*args[ \t]*=\s*\[[^\]]*\]", body, flags=re.MULTILINE):
-                            body = re.sub(
-                                r"^[ \t]*args[ \t]*=\s*\[[^\]]*\]",
-                                f"args = [{args_toml}]",
-                                body,
-                                count=1,
-                                flags=re.MULTILINE,
-                            )
+                        body = _replace_toml_args_assignment(body, args_toml)
 
                 if not header_chunk.endswith("\n"):
                     header_chunk = header_chunk + "\n"
-                return text_in[: m.start()] + header_chunk + body + text_in[end:], True
+                updated_txt = text_in[: m.start()] + header_chunk + body + text_in[end:]
+                if desired_entry is None or not desired_entry.get("env"):
+                    updated_txt = _strip_codex_env_subtable(sec_name, updated_txt)
+                return updated_txt, True
 
             handled_existing: set[str] = set()
             for sec_key, t_obj in alias_map.items():

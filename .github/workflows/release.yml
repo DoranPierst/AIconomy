@@ -53,11 +53,15 @@ jobs:
             --exclude-module PySide6.QtQml `
             --exclude-module PySide6.QtQuick `
             main.py
+          $sha = (Get-FileHash "dist/AIconomy.exe" -Algorithm SHA256).Hash.ToLower()
+          [System.IO.File]::WriteAllText((Join-Path $PWD "dist/AIconomy.exe.sha256"), "$sha  AIconomy.exe`n", (New-Object System.Text.UTF8Encoding($false)))
 
-      - name: Publish GitHub Release with AIconomy.exe
+      - name: Publish GitHub Release with AIconomy.exe & SHA-256 manifest
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.meta.outputs.tag }}
           name: "AIconomy ${{ steps.meta.outputs.tag }}"
           body_path: release_notes.md
-          files: dist/AIconomy.exe
+          files: |
+            dist/AIconomy.exe
+            dist/AIconomy.exe.sha256

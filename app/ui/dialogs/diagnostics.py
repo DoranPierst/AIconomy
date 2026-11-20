@@ -354,3 +354,13 @@ class DiagnosticsDialog(QDialog):
         r = idxs[0].row()
         if 0 <= r < len(self._raw_details):
             self.detail_box.setPlainText(self._raw_details[r])
+
+    def done(self, result: int) -> None:
+        self._run_gen += 1
+        self._running = False
+        super().done(result)
+
+    def closeEvent(self, event: object) -> None:  # noqa: N802
+        self._run_gen += 1
+        self._running = False
+        super().closeEvent(event)  # type: ignore[arg-type]

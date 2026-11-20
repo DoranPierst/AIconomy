@@ -702,11 +702,26 @@ class ToolsTabMixin:
         if new_scope == "__ADD_NEW__":
             self._prompt_add_project_folder(assign_tool=tool)
             return
+        dir_param_tools = (
+            "unity_pipeline",
+            "renderdoc_mcp",
+            "filesystem_mcp",
+            "obsidian_mcp",
+            "git_local_mcp",
+            "chroma_mcp",
+        )
         tool.project_scope = new_scope
         if new_scope != "GLOBAL" and new_scope in self.projects_map:
             proj_dir = self.projects_map[new_scope]
-            if tool.id in ("unity_pipeline", "renderdoc_mcp"):
+            if tool.id in dir_param_tools:
                 tool.param_value = proj_dir
+        elif new_scope == "GLOBAL" and tool.id in dir_param_tools:
+            if tool.param_value in set(self.projects_map.values()):
+                from ...catalog import get_default_tool_spec
+
+                def_spec = get_default_tool_spec(tool.id, data_dir=getattr(self, "data_dir", None))
+                if def_spec is not None and def_spec.param_value:
+                    tool.param_value = def_spec.param_value
         self._save_state()
         is_rt_running = bool(self.runtime_started and self._runtime_state == "running")
         loc_det = resolve_disk_location(tool, self.projects_map, self._latest_live_map, lang=self.lang)

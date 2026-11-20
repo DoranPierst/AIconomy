@@ -396,7 +396,7 @@ class ToolSpec:
     health_state: str = "off"  # ok | warn | error | idle | off
 
 
-def build_default_catalog() -> list[ToolSpec]:
+def build_default_catalog(data_dir: pathlib.Path | None = None) -> list[ToolSpec]:
     u_proj = _detect_local_unity_project()
     u_path = str(u_proj) if u_proj else ""
     u_parent = str(u_proj.parent) if u_proj else ""
@@ -761,16 +761,16 @@ def build_default_catalog() -> list[ToolSpec]:
     ]
     from .oauth import supports_oauth
 
-    all_tools = starter_tools + build_library_catalog()
+    all_tools = starter_tools + build_library_catalog(data_dir=data_dir)
     for t in all_tools:
         if supports_oauth(t.id):
             t.has_gear = True
     return all_tools
 
 
-def get_default_tool_spec(tool_id: str) -> ToolSpec | None:
+def get_default_tool_spec(tool_id: str, data_dir: pathlib.Path | None = None) -> ToolSpec | None:
     """Return a fresh factory-default ToolSpec for ``tool_id`` (or None for custom repos)."""
-    for spec in build_default_catalog():
+    for spec in build_default_catalog(data_dir=data_dir):
         if spec.id == tool_id:
             return spec
     return None

@@ -22,7 +22,7 @@ from .catalog import (
     default_projects_map,
     normalize_tool_kind,
 )
-from .security import derive_vault_entropy, redact_secrets
+from .security import auto_vault_key_for_tool, contains_embedded_secret, derive_vault_entropy, redact_secrets
 
 STATE_FILENAME = "aiconomy-state.json"
 LOG_DB_FILENAME = "aiconomy.db"
@@ -450,15 +450,56 @@ class LogDatabase:
 class StateStore:
     """Persist tool states, 94 Blender skills, profiles, projects, and user preferences."""
 
-    def __init__(self, state_file: pathlib.Path) -> None:
+    _LEGACY_DUMMY_DB_URIS: frozenset[str] = frozenset(
+        {
+            "postgresql://localhost:5432/postgres",
+            "mongodb://127.0.0.1:27017",
+            "redis://127.0.0.1:6379/0",
+        }
+    )
+
+    def __init__(self, state_file: pathlib.Path, vault: WindowsDpapiVault | None = None) -> None:
         self.state_file = state_file
+        self.vault = vault
         self.state_file.parent.mkdir(parents=True, exist_ok=True)
 
     @property
     def has_saved_state(self) -> bool:
         return self.state_file.is_file()
 
-    def load_into(self, tools: list[ToolSpec]) -> tuple[set[str], dict[str, Any]]:
+    def _migrate_tool_secret_in_ram(self, t: ToolSpec, eff_vault: WindowsDpapiVault | None) -> bool:
+        """Move any legacy URI or embedded secret out of ``t.param_value`` into DPAPI vault."""
+        pv = (t.param_value or "").strip()
+        if not pv:
+            return False
+        is_db_uri_tool = t.id in ("postgres_mcp", "mongodb_mcp", "redis_mcp")
+        has_secret = contains_embedded_secret(pv)
+        if not is_db_uri_tool and not has_secret:
+            return False
+
+        if is_db_uri_tool and pv in self._LEGACY_DUMMY_DB_URIS:
+            t.param_value = ""
+            return True
+
+        vk = t.vault_key_name or auto_vault_key_for_tool(t.id)
+        if not t.vault_key_name:
+            t.vault_key_name = vk
+        if eff_vault is not None and not eff_vault.is_locked():
+            if not eff_vault.has_key_entry(vk) or has_secret:
+                eff_vault.set_secret(vk, pv)
+            t.param_value = ""
+            return True
+        if has_secret or is_db_uri_tool:
+            t.param_value = ""
+            return True
+        return False
+
+    def load_into(
+        self,
+        tools: list[ToolSpec],
+        vault: WindowsDpapiVault | None = None,
+    ) -> tuple[set[str], dict[str, Any]]:
+        eff_vault = vault or self.vault
         active_skills = set(DEFAULT_ACTIVE_BLENDER_SKILLS)
         meta: dict[str, Any] = {
             "theme": "dark",
@@ -477,7 +518,11 @@ class StateStore:
             return active_skills, meta
         try:
             raw = json.loads(self.state_file.read_text(encoding="utf-8"))
+            if not isinstance(raw, dict):
+                raise ValueError("State root must be a JSON object")
         except Exception:
+            with contextlib.suppress(OSError):
+                shutil.copyfile(self.state_file, self.state_file.with_suffix(".json.corrupt.bak"))
             return active_skills, meta
 
         # Existing users who already had a state file shouldn't see the first-run welcome banner
@@ -490,8 +535,9 @@ class StateStore:
         merged_projs = default_projects_map()
         if isinstance(saved_projs, dict):
             for k, v in saved_projs.items():
-                if pathlib.Path(str(v)).exists():
-                    merged_projs[str(k)] = str(v)
+                v_str = str(v).strip()
+                if v_str:
+                    merged_projs[str(k)] = v_str
         meta.update(saved_meta)
         meta["projects"] = merged_projs
 
@@ -515,8 +561,11 @@ class StateStore:
         if cur_ap in _legacy_prof_map:
             meta["active_profile"] = _legacy_prof_map[cur_ap]
 
+        scrubbed_any = False
         by_id = {t.id: t for t in tools}
         for tid, tdata in raw.get("tools", {}).items():
+            if not isinstance(tdata, dict):
+                continue
             if tid in by_id:
                 t = by_id[tid]
                 if "in_workspace" in tdata:
@@ -539,7 +588,11 @@ class StateStore:
                     t.mode_index = max(0, min(int(tdata.get("mode_index", t.mode_index)), len(t.modes) - 1))
                 else:
                     t.mode_index = 0
+                if not t.vault_key_name and str(tdata.get("vault_key_name", "")).startswith("AICONOMY_PARAM_"):
+                    t.vault_key_name = str(tdata["vault_key_name"])
                 t.param_value = str(tdata.get("param_value", t.param_value))
+                if self._migrate_tool_secret_in_ram(t, eff_vault):
+                    scrubbed_any = True
                 if t.id in ("serena", "unity_mcp", "blender_mcp") and t.param_value.isdigit():
                     p_int = int(t.param_value)
                     if 1 <= p_int <= 65535:
@@ -550,52 +603,57 @@ class StateStore:
                     if opt.key in opt_map:
                         opt.enabled = bool(opt_map[opt.key])
             elif tdata.get("_custom"):
-                tools.append(
-                    ToolSpec(
-                        id=tid,
-                        name=tdata["name"],
-                        kind=normalize_tool_kind(tdata.get("kind", "stdio")),
-                        version=tdata.get("version", "v1.0.0"),
-                        repo_url=tdata.get("repo_url", ""),
-                        schema_tokens=int(tdata.get("schema_tokens", 1800)),
-                        summary=str(tdata.get("summary", "")),
-                        details=str(tdata.get("details", "")),
-                        when_to_use=str(tdata.get("when_to_use", "")),
-                        enabled=bool(tdata.get("enabled", True)),
-                        clients=tdata.get("clients", {"AGY": True, "CDX": True, "CLD": False, "CUR": False}),
-                        scope_selectable=bool(tdata.get("scope_selectable", True)),
-                        project_scope=str(tdata.get("project_scope", "GLOBAL")),
-                        fixed_location_label=str(tdata.get("fixed_location_label", "")),
-                        modes=tdata.get("modes", []),
-                        mode_index=int(tdata.get("mode_index", 0)),
-                        has_gear=bool(tdata.get("has_gear", False)),
-                        param_label=tdata.get("param_label", ""),
-                        param_value=tdata.get("param_value", ""),
-                        param_help=tdata.get("param_help", ""),
-                        param_arg_flag=str(tdata.get("param_arg_flag", "")),
-                        param_env_var=str(tdata.get("param_env_var", "")),
-                        vault_key_name=str(tdata.get("vault_key_name", "")),
-                        vault_key_required=bool(tdata.get("vault_key_required", False)),
-                        vault_key_desc=str(tdata.get("vault_key_desc", "")),
-                        auth_mode=str(tdata.get("auth_mode", "key")),
-                        in_workspace=bool(tdata.get("in_workspace", True)),
-                        installed=bool(tdata.get("installed", True)),
-                        category=str(tdata.get("category", "coding_dev")),
-                        install_cmd=tdata.get("install_cmd", ""),
-                        mcp_server_key=tdata.get("mcp_server_key", tid),
-                        mcp_command=tdata.get("mcp_command", ""),
-                        mcp_args=tdata.get("mcp_args", []),
-                        ai_question_hint=tdata.get(
-                            "ai_question_hint",
-                            "How should I optimize this tool's settings for my project?",
-                        ),
-                        tags=[str(x) for x in tdata.get("tags", ["automation"]) if x],
-                        options=[
-                            CheckOption(o["key"], o["label"], o["enabled"], o.get("help_text", ""))
-                            for o in tdata.get("custom_options", [])
-                        ],
-                    )
+                cust_t = ToolSpec(
+                    id=tid,
+                    name=tdata["name"],
+                    kind=normalize_tool_kind(tdata.get("kind", "stdio")),
+                    version=tdata.get("version", "v1.0.0"),
+                    repo_url=tdata.get("repo_url", ""),
+                    schema_tokens=int(tdata.get("schema_tokens", 1800)),
+                    summary=str(tdata.get("summary", "")),
+                    details=str(tdata.get("details", "")),
+                    when_to_use=str(tdata.get("when_to_use", "")),
+                    enabled=bool(tdata.get("enabled", True)),
+                    clients=tdata.get("clients", {"AGY": True, "CDX": True, "CLD": False, "CUR": False}),
+                    scope_selectable=bool(tdata.get("scope_selectable", True)),
+                    project_scope=str(tdata.get("project_scope", "GLOBAL")),
+                    fixed_location_label=str(tdata.get("fixed_location_label", "")),
+                    modes=tdata.get("modes", []),
+                    mode_index=int(tdata.get("mode_index", 0)),
+                    has_gear=bool(tdata.get("has_gear", False)),
+                    param_label=tdata.get("param_label", ""),
+                    param_value=tdata.get("param_value", ""),
+                    param_help=tdata.get("param_help", ""),
+                    param_arg_flag=str(tdata.get("param_arg_flag", "")),
+                    param_env_var=str(tdata.get("param_env_var", "")),
+                    vault_key_name=str(tdata.get("vault_key_name", "")),
+                    vault_key_required=bool(tdata.get("vault_key_required", False)),
+                    vault_key_desc=str(tdata.get("vault_key_desc", "")),
+                    auth_mode=str(tdata.get("auth_mode", "key")),
+                    in_workspace=bool(tdata.get("in_workspace", True)),
+                    installed=bool(tdata.get("installed", True)),
+                    category=str(tdata.get("category", "coding_dev")),
+                    install_cmd=tdata.get("install_cmd", ""),
+                    mcp_server_key=tdata.get("mcp_server_key", tid),
+                    mcp_command=tdata.get("mcp_command", ""),
+                    mcp_args=tdata.get("mcp_args", []),
+                    ai_question_hint=tdata.get(
+                        "ai_question_hint",
+                        "How should I optimize this tool's settings for my project?",
+                    ),
+                    tags=[str(x) for x in tdata.get("tags", ["automation"]) if x],
+                    options=[
+                        CheckOption(o["key"], o["label"], o["enabled"], o.get("help_text", ""))
+                        for o in tdata.get("custom_options", [])
+                    ],
                 )
+                if self._migrate_tool_secret_in_ram(cust_t, eff_vault):
+                    scrubbed_any = True
+                tools.append(cust_t)
+
+        if scrubbed_any:
+            with contextlib.suppress(OSError):
+                self.save(tools, active_skills, meta, set(by_id.keys()))
         return active_skills, meta
 
     def serialize(
@@ -603,6 +661,8 @@ class StateStore:
     ) -> dict[str, Any]:
         tools_dict: dict[str, Any] = {}
         for t in tools:
+            self._migrate_tool_secret_in_ram(t, self.vault)
+            safe_pv = "" if contains_embedded_secret(t.param_value) else t.param_value
             entry: dict[str, Any] = {
                 "name": t.name,
                 "version": t.version,
@@ -613,10 +673,13 @@ class StateStore:
                 "clients": dict(t.clients),
                 "project_scope": t.project_scope,
                 "mode_index": t.mode_index,
-                "param_value": t.param_value,
+                "param_value": safe_pv,
                 "options": {o.key: o.enabled for o in t.options},
             }
+            if t.vault_key_name.startswith("AICONOMY_PARAM_"):
+                entry["vault_key_name"] = t.vault_key_name
             if t.id not in default_ids:
+                safe_args = [a for a in t.mcp_args if not contains_embedded_secret(str(a))]
                 entry.update(
                     {
                         "_custom": True,
@@ -633,17 +696,17 @@ class StateStore:
                         "modes": t.modes,
                         "has_gear": t.has_gear,
                         "param_label": t.param_label,
-                        "param_value": t.param_value,
+                        "param_value": safe_pv,
                         "param_help": t.param_help,
                         "param_arg_flag": getattr(t, "param_arg_flag", ""),
                         "param_env_var": getattr(t, "param_env_var", ""),
                         "vault_key_name": t.vault_key_name,
                         "vault_key_required": t.vault_key_required,
                         "vault_key_desc": getattr(t, "vault_key_desc", ""),
-                        "install_cmd": t.install_cmd,
+                        "install_cmd": "" if contains_embedded_secret(t.install_cmd) else t.install_cmd,
                         "mcp_server_key": t.mcp_server_key,
                         "mcp_command": t.mcp_command,
-                        "mcp_args": t.mcp_args,
+                        "mcp_args": safe_args,
                         "tags": list(t.tags),
                         "custom_options": [
                             {"key": o.key, "label": o.label, "enabled": o.enabled, "help_text": o.help_text}

@@ -503,6 +503,7 @@ def inspect_client_config_file(
     client_code: str,
     projects_map: dict[str, str] | None = None,
     lang: str = "en",
+    target_project_scope: str | None = None,
 ) -> tuple[bool, str, dict[str, dict[str, Any]], set[str], pathlib.Path]:
     """Parse a real AI client's config file and return (parse_ok, summary_msg, active_servers, disabled_keys, path)."""
     is_tr = lang == "tr"
@@ -550,7 +551,18 @@ def inspect_client_config_file(
         "CLD": home / ".claude.json",
         "CUR": home / ".cursor" / "mcp.json",
     }
-    cfg_path = cfg_map.get(code, cfg_map["AGY"])
+    if (
+        code in ("CLD", "CUR")
+        and target_project_scope
+        and target_project_scope != "GLOBAL"
+        and projects_map
+        and target_project_scope in projects_map
+    ):
+        rel_name = ".mcp.json" if code == "CLD" else ".cursor/mcp.json"
+        cfg_path = pathlib.Path(projects_map[target_project_scope]) / rel_name
+    else:
+        cfg_path = cfg_map.get(code, cfg_map["AGY"])
+
     active = {}
     if cfg_path.is_file():
         try:
@@ -570,8 +582,8 @@ def inspect_client_config_file(
             if isinstance(v, dict):
                 active[str(k)] = v
 
-    # Also merge project-scoped .mcp.json / .cursor/mcp.json for CLD / CUR
-    if code in ("CLD", "CUR") and projects_map:
+    # When target_project_scope is None (banner summary or full leak sweep), merge all project configs too
+    if code in ("CLD", "CUR") and projects_map and target_project_scope is None:
         rel_name = ".mcp.json" if code == "CLD" else ".cursor/mcp.json"
         for proj_dir_s in projects_map.values():
             p_cfg = pathlib.Path(proj_dir_s) / rel_name
@@ -924,14 +936,15 @@ def test_tool_for_client_e2e(
                 )
                 target_path_str = str(ag_root / "blender-skills__*")
         else:
-            p_skills = pathlib.Path(projects_map[tool.project_scope]) / ".agents" / "skills"
+            rel_sub = (".agent", "skills") if code == "AGY" else (".agents", "skills")
+            p_skills = pathlib.Path(projects_map[tool.project_scope]).joinpath(*rel_sub)
             exists_for_client = p_skills.is_dir() and any(
                 d.is_dir() and (d / ".aiconomy_managed").is_file() for d in p_skills.iterdir()
             )
             target_path_str = str(p_skills)
 
         if not client_allowed:
-            if exists_for_client and is_global:
+            if exists_for_client:
                 lbl = (
                     f"Sızıntı: {code} kapalı ama Blender skill'leri hâlâ aktif!"
                     if is_tr
@@ -1031,7 +1044,21 @@ def test_tool_for_client_e2e(
         note_clean = f" | {code} config temiz" if is_tr else f" | {code} config paused"
         return ok_d, ms_d, f"{msg_d}{note_clean}", f"{cfg_path}\n{raw_d}", st_d
 
-    # Running & client allowed: entry MUST exist in client's actual config file!
+    # Running & client allowed: entry MUST exist in client's exact target config file!
+    if code in ("CLD", "CUR"):
+        eff_scope = tool.project_scope if tool.scope_selectable else "GLOBAL"
+        s_ok, s_msg, s_active, _s_dis, s_path = inspect_client_config_file(
+            code,
+            projects_map=projects_map,
+            lang=lang,
+            target_project_scope=eff_scope,
+        )
+        if not s_ok:
+            return False, -1, s_msg, f"File: {s_path}\n{s_msg}", "fail"
+        active_servers = s_active
+        cfg_path = s_path
+        found_key = next((k for k in lookup_keys if k in active_servers), "")
+
     if not found_key:
         if is_disabled_in_cfg:
             lbl = (

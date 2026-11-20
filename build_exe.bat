@@ -21,6 +21,9 @@ uv run pyinstaller --noconfirm --onefile --windowed --name "AIconomy" ^
   --exclude-module PySide6.QtQml ^
   --exclude-module PySide6.QtQuick ^
   main.py
+if exist "dist\AIconomy.exe" (
+  uv run python -c "import hashlib, pathlib; p=pathlib.Path('dist/AIconomy.exe'); d=hashlib.sha256(p.read_bytes()).hexdigest().lower(); pathlib.Path('dist/AIconomy.exe.sha256').write_text(f'{d}  AIconomy.exe\n', encoding='utf-8')"
+)
 echo.
 echo Done! Standalone executable: %~dp0dist\AIconomy.exe
 pause

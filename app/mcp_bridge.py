@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import base64
+import ctypes
+from ctypes import wintypes
 import hashlib
 import json
 import os
@@ -11,13 +13,81 @@ import subprocess
 import sys
 from typing import Any
 
-from .security import build_isolated_child_env
+from .security import build_isolated_child_env, split_postgres_uri_secret
 from .storage import VAULT_FILENAME, WindowsDpapiVault
 
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
 BRIDGE_MANIFEST_FILENAME = "aiconomy-bridge-specs.json"
 BRIDGE_EXE_NAME = "aiconomy-bridge.exe"
-_BRIDGE_VERIFIED_PATHS: set[str] = set()
+_BRIDGE_VERIFIED_SIGS: dict[str, str] = {}
+_ACTIVE_JOB_HANDLE: int = 0
+
+
+class _JOBOBJECT_BASIC_LIMIT_INFORMATION(ctypes.Structure):
+    _fields_ = [
+        ("PerProcessUserTimeLimit", ctypes.c_int64),
+        ("PerJobUserTimeLimit", ctypes.c_int64),
+        ("LimitFlags", wintypes.DWORD),
+        ("MinimumWorkingSetSize", ctypes.c_size_t),
+        ("MaximumWorkingSetSize", ctypes.c_size_t),
+        ("ActiveProcessLimit", wintypes.DWORD),
+        ("Affinity", ctypes.c_size_t),
+        ("PriorityClass", wintypes.DWORD),
+        ("SchedulingClass", wintypes.DWORD),
+    ]
+
+
+class _IO_COUNTERS(ctypes.Structure):
+    _fields_ = [
+        ("ReadOperationCount", ctypes.c_uint64),
+        ("WriteOperationCount", ctypes.c_uint64),
+        ("OtherOperationCount", ctypes.c_uint64),
+        ("ReadTransferCount", ctypes.c_uint64),
+        ("WriteTransferCount", ctypes.c_uint64),
+        ("OtherTransferCount", ctypes.c_uint64),
+    ]
+
+
+class _JOBOBJECT_EXTENDED_LIMIT_INFORMATION(ctypes.Structure):
+    _fields_ = [
+        ("BasicLimitInformation", _JOBOBJECT_BASIC_LIMIT_INFORMATION),
+        ("IoInfo", _IO_COUNTERS),
+        ("ProcessMemoryLimit", ctypes.c_size_t),
+        ("JobMemoryLimit", ctypes.c_size_t),
+        ("PeakProcessMemoryUsed", ctypes.c_size_t),
+        ("PeakJobMemoryUsed", ctypes.c_size_t),
+    ]
+
+
+def _attach_kill_on_close_job(proc: subprocess.Popen[Any]) -> None:
+    """Bind ``proc`` to a Win32 Job Object with JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE so orphans cannot survive."""
+    global _ACTIVE_JOB_HANDLE
+    if os.name != "nt":
+        return
+    try:
+        k32 = ctypes.windll.kernel32
+        if not _ACTIVE_JOB_HANDLE:
+            k32.CreateJobObjectW.restype = wintypes.HANDLE
+            h_job = k32.CreateJobObjectW(None, None)
+            if not h_job:
+                return
+            info = _JOBOBJECT_EXTENDED_LIMIT_INFORMATION()
+            info.BasicLimitInformation.LimitFlags = 0x00002000  # JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+            ok = k32.SetInformationJobObject(
+                wintypes.HANDLE(h_job),
+                9,  # JobObjectExtendedLimitInformation
+                ctypes.byref(info),
+                ctypes.sizeof(info),
+            )
+            if not ok:
+                k32.CloseHandle(wintypes.HANDLE(h_job))
+                return
+            _ACTIVE_JOB_HANDLE = int(h_job)
+        proc_handle = int(getattr(proc, "_handle", 0) or 0)
+        if proc_handle:
+            k32.AssignProcessToJobObject(wintypes.HANDLE(_ACTIVE_JOB_HANDLE), wintypes.HANDLE(proc_handle))
+    except Exception:
+        pass
 
 
 def _default_data_dir() -> pathlib.Path:
@@ -84,7 +154,7 @@ def _replace_exe_safely(src_or_tmp: pathlib.Path, dst_exe: pathlib.Path) -> bool
 
 
 def ensure_fast_bridge_binary(data_dir: pathlib.Path | None = None) -> pathlib.Path | None:
-    """Materialize the ~15KB native ``aiconomy-bridge.exe`` into ``<data_dir>/bin`` (<85ms launch, zero _MEI temp)."""
+    """Materialize the native ``aiconomy-bridge.exe`` into ``<data_dir>/bin`` (<85ms launch, zero _MEI temp)."""
     if os.name != "nt":
         return None
     ddir = data_dir or _default_data_dir()
@@ -92,7 +162,6 @@ def ensure_fast_bridge_binary(data_dir: pathlib.Path | None = None) -> pathlib.P
     dst_exe = bin_dir / BRIDGE_EXE_NAME
     sha_file = bin_dir / "aiconomy-bridge.sha256"
 
-    # Best-effort cleanup of previous swapped bridge binary once unlocked
     old_exe = dst_exe.with_suffix(".exe.old")
     if old_exe.is_file():
         try:
@@ -110,7 +179,7 @@ def ensure_fast_bridge_binary(data_dir: pathlib.Path | None = None) -> pathlib.P
         return dst_exe if dst_exe.is_file() else None
 
     dst_key = str(dst_exe.resolve())
-    if dst_key in _BRIDGE_VERIFIED_PATHS and dst_exe.is_file():
+    if _BRIDGE_VERIFIED_SIGS.get(dst_key) == desired_sig and dst_exe.is_file():
         return dst_exe
 
     cur_sig = ""
@@ -124,9 +193,7 @@ def ensure_fast_bridge_binary(data_dir: pathlib.Path | None = None) -> pathlib.P
         bin_dir.mkdir(parents=True, exist_ok=True)
         tmp_exe = bin_dir / f".{BRIDGE_EXE_NAME}.{os.getpid()}.tmp"
         built_ok = False
-        # Prefer bundled precompiled bridge when signature matches or cs compiler unavailable
         if bundled is not None and (cs_src is None or not getattr(sys, "frozen", False)):
-            # In dev mode, recompile from bridge_host.cs if csc.exe exists so edits take effect automatically
             if cs_src is not None:
                 csc = _find_csc_compiler()
                 if csc is not None:
@@ -190,37 +257,51 @@ def ensure_fast_bridge_binary(data_dir: pathlib.Path | None = None) -> pathlib.P
             creationflags=NO_WINDOW,
         )
         if ping.returncode == 0 and "AICONOMY_BRIDGE_OK" in ping.stdout:
-            _BRIDGE_VERIFIED_PATHS.add(dst_key)
+            _BRIDGE_VERIFIED_SIGS[dst_key] = desired_sig
             return dst_exe
     except Exception:
         pass
     return None
 
 
-def _request_tool_secret_from_running_gui(tool_id: str) -> tuple[str, bool]:
-    """Request ONLY ``tool_id``'s decrypted secret over the kernel-PID-verified local pipe (zero master entropy exposure).
-
-    Returns ``(secret_value, is_locked_or_denied)``.
-    """
+def _pipe_device_path() -> str:
+    custom = (os.environ.get("AICONOMY_PIPE_NAME") or "").strip()
+    if custom:
+        return rf"\\.\pipe\{custom}"
     suffix = (os.environ.get("USERNAME") or "user").replace(" ", "_")
-    pipe_path = rf"\\.\pipe\AIconomy.SingleInstance.{suffix}"
+    return rf"\\.\pipe\AIconomy.SingleInstance.{suffix}"
+
+
+def _request_launch_from_running_gui(
+    tool_id: str,
+    data_dir: pathlib.Path,
+) -> tuple[dict[str, Any] | None, bool, bool]:
+    """Request authoritative RAM ``(cmd, args, env)`` launch spec from the unlocked AIconomy GUI.
+
+    Returns ``(spec_dict, is_locked, is_denied)``.
+    """
+    pipe_path = _pipe_device_path()
+    dir_b64 = base64.b64encode(str(data_dir.resolve()).encode("utf-8")).decode("ascii")
     try:
         with open(pipe_path, "r+b", buffering=0) as pipe:
-            pipe.write(f"resolve_secret:{tool_id}".encode("ascii"))
-            resp = pipe.read(4096)
+            pipe.write(f"resolve_launch:{tool_id}|{dir_b64}".encode("ascii"))
+            resp = pipe.read(8192)
             txt = resp.decode("ascii", errors="ignore").strip()
-            if txt in ("LOCKED", "DENIED"):
-                return "", True
-            if txt == "EMPTY":
-                return "", False
-            if txt.startswith("SECRET:"):
+            if txt == "LOCKED":
+                return None, True, False
+            if txt == "DENIED" or not txt:
+                return None, False, True
+            if txt.startswith("LAUNCH:"):
                 b64_part = txt.split(":", 1)[1].strip()
-                if not b64_part:
-                    return "", False
-                return base64.b64decode(b64_part.encode("ascii")).decode("utf-8"), False
+                raw_json = base64.b64decode(b64_part.encode("ascii")).decode("utf-8")
+                parsed = json.loads(raw_json)
+                if isinstance(parsed, dict):
+                    return parsed, False, False
     except OSError:
-        return "", True
-    return "", True
+        return None, True, False
+    except Exception:
+        return None, False, True
+    return None, False, True
 
 
 def _write_err(msg: str) -> None:
@@ -256,15 +337,47 @@ def _resolve_executable(cmd: str) -> str:
     return shutil.which(cmd) or cmd
 
 
+def _unwrap_node_batch(exe_path: str, cmd_args: list[str]) -> tuple[str, list[str]]:
+    if os.name != "nt":
+        return exe_path, cmd_args
+    p = pathlib.Path(exe_path)
+    low = p.name.lower()
+    if low not in ("npx.cmd", "npm.cmd"):
+        return exe_path, cmd_args
+    node_exe = p.parent / "node.exe"
+    cli_js = p.parent / "node_modules" / "npm" / "bin" / ("npx-cli.js" if low == "npx.cmd" else "npm-cli.js")
+    if node_exe.is_file() and cli_js.is_file():
+        return str(node_exe), [str(cli_js), *cmd_args]
+    return exe_path, cmd_args
+
+
 def _resolve_from_manifest(
     tool_id: str,
     data_dir: pathlib.Path,
 ) -> tuple[str, str, list[str], dict[str, str], str] | int | None:
-    """Fast pre-catalog path reading ``aiconomy-bridge-specs.json`` (<5ms).
+    """Fast pre-catalog path reading ``aiconomy-bridge-specs.json`` (<5ms) when vault is unprotected."""
+    vault = WindowsDpapiVault(data_dir / VAULT_FILENAME)
+    if vault.is_locked():
+        auth_spec, is_locked, _is_denied = _request_launch_from_running_gui(tool_id, data_dir)
+        if auth_spec is None:
+            if is_locked:
+                _write_err(
+                    f"AIconomy vault is locked with a Master Passphrase. Open AIconomy and unlock your vault before starting '{tool_id}'.\n"
+                )
+            else:
+                _write_err(
+                    f"AIconomy --mcp-exec: launch denied for '{tool_id}' (ensure Tools are Started and tool is enabled in AIconomy).\n"
+                )
+            return 3
+        t_name = str(auth_spec.get("name") or tool_id)
+        r_cmd = str(auth_spec.get("cmd") or "").strip()
+        if not r_cmd:
+            return 2
+        c_args = [str(x) for x in (auth_spec.get("args") or [])]
+        t_env = {str(k): str(v) for k, v in (auth_spec.get("env") or {}).items()}
+        v_key = str(auth_spec.get("vault_key") or "").strip()
+        return t_name, r_cmd, c_args, t_env, v_key
 
-    Returns ``(tool_name, raw_cmd, cmd_args, tool_env, vault_key)`` on success,
-    an integer exit code on credential/lock error, or ``None`` if manifest has no entry.
-    """
     manifest_path = data_dir / BRIDGE_MANIFEST_FILENAME
     if not manifest_path.is_file():
         return None
@@ -288,6 +401,7 @@ def _resolve_from_manifest(
     vault_key = str(spec.get("vault_key") or "").strip()
     vault_req = bool(spec.get("vault_required", False))
     secret_flag = str(spec.get("secret_arg_flag") or "").strip()
+    secret_env_var = str(spec.get("secret_env_var") or vault_key).strip()
     oauth_mode = bool(spec.get("oauth_mode", False))
     oauth_cli = str(spec.get("oauth_cli_bin") or "").strip()
     oauth_targs = [str(x) for x in (spec.get("oauth_token_args") or [])]
@@ -311,26 +425,25 @@ def _resolve_from_manifest(
             _write_err(f"AIconomy --mcp-exec: OAuth CLI token unavailable for '{tool_name}'.\n")
             return 3
     elif vault_key:
-        vault = WindowsDpapiVault(data_dir / VAULT_FILENAME)
-        if vault.is_locked():
-            has_entry = vault.has_key_entry(vault_key)
-            secret_val, locked_err = _request_tool_secret_from_running_gui(tool_id)
-            if locked_err and (vault_req or has_entry):
-                _write_err(
-                    f"AIconomy vault is locked with a Master Passphrase. Open AIconomy and unlock your vault before starting '{tool_name}'.\n"
-                )
-                return 3
-        else:
-            secret_val = vault.get_secret(vault_key)
+        secret_val = vault.get_secret(vault_key)
         if not secret_val and vault_req:
             _write_err(f"AIconomy --mcp-exec: missing required credential for '{tool_name}'.\n")
             return 3
 
     if secret_val:
-        if secret_flag and secret_flag not in cmd_args:
+        if secret_flag == "__PG_POSITIONAL__":
+            clean_pg, pg_pw = split_postgres_uri_secret(secret_val)
+            if clean_pg and clean_pg not in cmd_args:
+                cmd_args.append(clean_pg)
+            if pg_pw:
+                tool_env["PGPASSWORD"] = pg_pw
+        elif secret_flag == "__POSITIONAL__":
+            if secret_val not in cmd_args:
+                cmd_args.append(secret_val)
+        elif secret_flag and secret_flag not in cmd_args:
             cmd_args.extend([secret_flag, secret_val])
-        if vault_key:
-            tool_env[vault_key] = secret_val
+        if secret_env_var and secret_flag != "__PG_POSITIONAL__":
+            tool_env[secret_env_var] = secret_val
 
     return tool_name, raw_cmd, cmd_args, tool_env, vault_key
 
@@ -358,40 +471,30 @@ def run_mcp_exec_cli(argv: list[str]) -> int:
     if fast_res is not None:
         _tool_name, raw_cmd, cmd_args, tool_env, vault_key = fast_res
     else:
-        # Lazy fallback for ad-hoc CLI invocations before a manifest is written
+        # Lazy fallback for ad-hoc CLI invocations before a manifest is written (unprotected vault only)
         from .catalog import build_default_catalog
         from .mcp_config import build_effective_stdio_spec
         from .storage import STATE_FILENAME, StateStore
 
-        tools = build_default_catalog()
-        store = StateStore(data_dir / STATE_FILENAME)
-        store.load_into(tools)
+        vault = WindowsDpapiVault(data_dir / VAULT_FILENAME)
+        tools = build_default_catalog(data_dir=data_dir)
+        store = StateStore(data_dir / STATE_FILENAME, vault=vault)
+        store.load_into(tools, vault=vault)
 
         target = next((t for t in tools if t.id == tool_id), None)
         if target is None:
             _write_err(f"AIconomy --mcp-exec: unknown tool '{tool_id}'.\n")
             return 2
 
-        vault = WindowsDpapiVault(data_dir / VAULT_FILENAME)
         vault_key = target.vault_key_name
-        if vault.is_locked():
-            has_entry = bool(vault_key and vault.has_key_entry(vault_key))
-            sec_pipe, locked_err = _request_tool_secret_from_running_gui(tool_id)
-            if locked_err and (target.vault_key_required or has_entry):
-                _write_err(
-                    f"AIconomy vault is locked with a Master Passphrase. Open AIconomy and unlock your vault before starting '{target.name}'.\n"
-                )
-                return 3
-            spec = build_effective_stdio_spec(target, vault, wrap_windows_npx=False, override_secret=sec_pipe)
-        else:
-            spec = build_effective_stdio_spec(target, vault, wrap_windows_npx=False)
-
+        spec = build_effective_stdio_spec(target, vault, wrap_windows_npx=False)
         if spec is None:
             _write_err(f"AIconomy --mcp-exec: missing required credential for '{target.name}'.\n")
             return 3
         raw_cmd, cmd_args, tool_env = spec
 
     exe_path = _resolve_executable(raw_cmd)
+    exe_path, cmd_args = _unwrap_node_batch(exe_path, cmd_args)
     child_env = build_isolated_child_env(
         tool_env,
         allowed_secret_key=vault_key,
@@ -406,6 +509,7 @@ def run_mcp_exec_cli(argv: list[str]) -> int:
             env=child_env,
             creationflags=NO_WINDOW,
         )
+        _attach_kill_on_close_job(proc)
         return int(proc.wait())
     except FileNotFoundError:
         _write_err(f"AIconomy --mcp-exec: executable not found: {raw_cmd}\n")

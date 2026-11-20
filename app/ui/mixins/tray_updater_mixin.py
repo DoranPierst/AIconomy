@@ -151,40 +151,83 @@ class TrayUpdaterMixin:
 
     # --- CONFIG SYNC, REMOTE CATALOG & IMPORT / EXPORT ---
     def _handle_refresh_remote_catalog(self) -> None:
-        ok, updated, msg = refresh_remote_catalog(self.data_dir, lang=self.lang)
+        if getattr(self, "_remote_catalog_busy", False):
+            return
+        self._remote_catalog_busy = True
+        data_dir_snap = self.data_dir
+        lang_snap = self.lang
+
+        def worker() -> None:
+            ok, updated, msg = False, False, ""
+            try:
+                ok, updated, msg = refresh_remote_catalog(data_dir_snap, lang=lang_snap)
+            finally:
+                safe_emit(self.bridge.remote_catalog_done, ok, updated, msg)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_remote_catalog_done(self, ok: bool, updated: bool, msg: str) -> None:
+        self._remote_catalog_busy = False
         self.logs.add("INFO" if ok else "WARN", "AIconomy", msg)
         self._refresh_logs_tab()
         self.set_status(msg)
         if updated:
-            existing_ids = {t.id for t in self.tools}
+            by_id = {t.id: t for t in self.tools}
             for new_t in build_library_catalog(self.data_dir):
-                if new_t.id not in existing_ids:
+                existing = by_id.get(new_t.id)
+                if existing is None:
                     self.tools.append(new_t)
                     self.default_ids.add(new_t.id)
+                elif new_t.id in self.default_ids:
+                    # Refresh upstream metadata/commands while preserving user's workspace/enabled/client choices
+                    existing.name = new_t.name
+                    existing.version = new_t.version
+                    existing.repo_url = new_t.repo_url
+                    existing.schema_tokens = new_t.schema_tokens
+                    existing.summary = new_t.summary
+                    existing.details = new_t.details
+                    existing.when_to_use = new_t.when_to_use
+                    existing.install_cmd = new_t.install_cmd
+                    existing.mcp_server_key = new_t.mcp_server_key
+                    existing.mcp_command = new_t.mcp_command
+                    existing.mcp_args = list(new_t.mcp_args)
+                    existing.param_label = new_t.param_label
+                    existing.param_help = new_t.param_help
+                    existing.param_arg_flag = new_t.param_arg_flag
+                    existing.param_env_var = new_t.param_env_var
+                    existing.vault_key_required = new_t.vault_key_required
+                    if new_t.vault_key_name:
+                        existing.vault_key_name = new_t.vault_key_name
+                    existing.vault_key_desc = new_t.vault_key_desc
+                    existing.has_gear = new_t.has_gear
             self._save_state()
             self._rebuild_tag_filter_combo()
             self._rebuild_plugin_filter_combos()
             self._update_tab_titles()
+            self._refresh_table()
             self._refresh_plugins_tab()
 
     def _handle_sync_configs(self) -> None:
-        rt_active = bool(self.runtime_started and self._runtime_state == "running")
-        bs_tool = next((t for t in self.tools if t.id == "blender_skills"), None)
-        if bs_tool:
-            sync_blender_skills_on_disk(
-                self.active_skills,
-                bool(getattr(bs_tool, "in_workspace", True) and bs_tool.enabled),
-                bs_tool.project_scope,
-                self.projects_map,
-                lang=self.lang,
-                clients=dict(bs_tool.clients),
-                runtime_active=rt_active,
+        with self._sync_lock:
+            rt_active = bool(self.runtime_started and self._runtime_state == "running")
+            bs_tool = next((t for t in self.tools if t.id == "blender_skills"), None)
+            if bs_tool:
+                sync_blender_skills_on_disk(
+                    self.active_skills,
+                    bool(getattr(bs_tool, "in_workspace", True) and bs_tool.enabled),
+                    bs_tool.project_scope,
+                    self.projects_map,
+                    lang=self.lang,
+                    clients=dict(bs_tool.clients),
+                    runtime_active=rt_active,
+                )
+            cv_tool = next((t for t in self.tools if t.id == "caveman"), None)
+            if cv_tool:
+                sync_caveman_on_disk(cv_tool, lang=self.lang, runtime_active=rt_active)
+            sync_custom_skill_tools_on_disk(self.tools, lang=self.lang, runtime_active=rt_active)
+            msgs = sync_mcp_json_clients(
+                self.tools, self.vault, self.projects_map, lang=self.lang, runtime_active=rt_active
             )
-        cv_tool = next((t for t in self.tools if t.id == "caveman"), None)
-        if cv_tool:
-            sync_caveman_on_disk(cv_tool, lang=self.lang, runtime_active=rt_active)
-        sync_custom_skill_tools_on_disk(self.tools, lang=self.lang, runtime_active=rt_active)
-        msgs = sync_mcp_json_clients(self.tools, self.vault, self.projects_map, lang=self.lang, runtime_active=rt_active)
         summary = " | ".join(msgs) if msgs else tr(self.lang, "log_no_cfg_files")
         self.logs.add("INFO", tr(self.lang, "log_src_cfg_sync"), summary)
         self._refresh_logs_tab()
@@ -241,8 +284,8 @@ class TrayUpdaterMixin:
         ):
             raise ValueError("Invalid AIconomy settings schema (expected 'tools' or 'meta' object).")
         _atomic_write_text(self.store.state_file, txt)
-        self.tools = build_default_catalog()
-        self.active_skills, self.meta = self.store.load_into(self.tools)
+        self.tools = build_default_catalog(data_dir=self.data_dir)
+        self.active_skills, self.meta = self.store.load_into(self.tools, vault=self.vault)
 
         self.sort_key = str(self.meta.get("sort_key", "enabled"))
         if self.sort_key not in ("name", "project", "ping", "enabled"):

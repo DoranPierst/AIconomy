@@ -162,11 +162,33 @@ def _probe_github_release_exe_url(owner: str, repo: str, raw_tag: str, ua: str, 
 
 def _normalize_sha256_digest(raw_digest: str) -> str:
     val = (raw_digest or "").strip().lower()
+    if val:
+        val = val.split()[0]
     if val.startswith("sha256:"):
         val = val.split(":", 1)[1].strip()
     if re.fullmatch(r"[0-9a-f]{64}", val):
         return val
     return ""
+
+
+def _fetch_release_sha256_asset(owner: str, repo: str, tag_name: str, user_agent: str) -> str:
+    """Fetch official ``AIconomy.exe.sha256`` directly from GitHub Releases (unaffected by API 60/hr limit)."""
+    clean_tag = tag_name.strip()
+    if not clean_tag:
+        return ""
+    if not clean_tag.lower().startswith("v"):
+        clean_tag = f"v{clean_tag}"
+    sha_url = (
+        f"https://github.com/{owner}/{repo}/releases/download/"
+        f"{urllib.parse.quote(clean_tag)}/AIconomy.exe.sha256"
+    )
+    try:
+        req = urllib.request.Request(sha_url, headers={"User-Agent": user_agent})
+        with urllib.request.urlopen(req, timeout=6) as resp:
+            txt = resp.read(512).decode("utf-8", errors="ignore")
+        return _normalize_sha256_digest(txt)
+    except Exception:
+        return ""
 
 
 def _fetch_release_exe_metadata_api(
@@ -286,6 +308,8 @@ def check_for_app_updates(repo_input: str = "", github_token: str = "", lang: st
             if tag_url:
                 notes_url = tag_url
             exe_url = _probe_github_release_exe_url(owner, repo, raw_tag, ua)
+            if exe_url and not exe_sha256:
+                exe_sha256 = _fetch_release_sha256_asset(owner, repo, raw_tag, ua)
 
     for branch in ("main", "master"):
         try:
@@ -517,16 +541,24 @@ def apply_self_update(
 
         expected_sha = _normalize_sha256_digest(check_res.exe_sha256)
         if not expected_sha and check_res.remote_version:
+            tag_str = f"v{check_res.remote_version.lstrip('vV')}"
             try:
                 _v, _b, _h, _u, fetched_sha = _fetch_release_exe_metadata_api(
                     OFFICIAL_OWNER,
                     OFFICIAL_REPO,
                     headers,
-                    tag_name=f"v{check_res.remote_version.lstrip('vV')}",
+                    tag_name=tag_str,
                 )
                 expected_sha = _normalize_sha256_digest(fetched_sha)
             except Exception:
                 pass
+            if not expected_sha:
+                expected_sha = _fetch_release_sha256_asset(
+                    OFFICIAL_OWNER,
+                    OFFICIAL_REPO,
+                    tag_str,
+                    f"AIconomy/{local_ver}",
+                )
 
         if not expected_sha:
             msg = (

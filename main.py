@@ -22,23 +22,27 @@ import base64
 import contextlib
 import ctypes
 from ctypes import wintypes
+import json
 import os
 import pathlib
 import shutil
 
 import psutil
+from PySide6.QtCore import QTimer
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
 from PySide6.QtWidgets import QApplication
 
 from app.main_window import MainWindow, create_app_icon
 from app.mcp_bridge import BRIDGE_EXE_NAME
+from app.mcp_config import build_effective_stdio_spec
 
 APP_USER_MODEL_ID = "DoranPierst.AIconomy.App"
 _SESSION_SUFFIX = (os.environ.get("USERNAME") or "user").replace(" ", "_")
 MUTEX_NAME = f"Local\\AIconomy.SingleInstance.{_SESSION_SUFFIX}"
 SERVER_NAME = f"AIconomy.SingleInstance.{_SESSION_SUFFIX}"
 LEGACY_MUTEX_NAME = "Local\\AIAracMerkeziPySide6Mutex"
-LEGACY_EXE_NAMES = ("aiconomy.exe", "ai-arac-merkezi.exe")
+# Strictly pre-rename legacy binaries ONLY — never terminate a running modern AIconomy.exe!
+LEGACY_EXE_NAMES = ("ai-arac-merkezi.exe",)
 
 
 def _app_root_dir() -> pathlib.Path:
@@ -91,7 +95,7 @@ def _activate_running_instance() -> bool:
     """Asks an already running instance to show its window. Returns True on success."""
     sock = QLocalSocket()
     sock.connectToServer(SERVER_NAME)
-    if not sock.waitForConnected(800):
+    if not sock.waitForConnected(1200):
         return False
     sock.write(b"activate")
     sock.flush()
@@ -100,8 +104,8 @@ def _activate_running_instance() -> bool:
     return True
 
 
-def _terminate_stale_instances() -> None:
-    """Closes old builds that hold the mutex but have no activation server (pre-1.3.4 versions or hung processes)."""
+def _terminate_stale_instances() -> int:
+    """Close pre-1.3.4 legacy builds that hold the old mutex without an activation server."""
     self_pids = {os.getpid(), os.getppid()}
     stale: list[psutil.Process] = []
     for proc in psutil.process_iter(["pid", "name"]):
@@ -115,6 +119,7 @@ def _terminate_stale_instances() -> None:
             continue
     if stale:
         psutil.wait_procs(stale, timeout=2.0)
+    return len(stale)
 
 
 def _bring_to_front(win: MainWindow) -> None:
@@ -159,6 +164,99 @@ def _is_trusted_bridge_peer(conn: QLocalSocket, data_dir: pathlib.Path) -> bool:
     return False
 
 
+def _authorize_bridge_tool_request(
+    conn: QLocalSocket,
+    raw_payload: str,
+    win: MainWindow,
+    data_dir: pathlib.Path,
+    require_dir_binding: bool,
+) -> tuple[str, object | None]:
+    """Validate kernel peer identity, exact data_dir match, unlocked vault, running runtime, and enabled tool."""
+    if not _is_trusted_bridge_peer(conn, data_dir):
+        return "DENIED", None
+
+    if "|" in raw_payload:
+        req_tid, dir_b64 = raw_payload.split("|", 1)
+        req_tid = req_tid.strip()
+        try:
+            decoded_dir = base64.b64decode(dir_b64.strip().encode("ascii")).decode("utf-8")
+            if pathlib.Path(decoded_dir).resolve() != data_dir.resolve():
+                return "DENIED", None
+        except Exception:
+            return "DENIED", None
+    elif require_dir_binding:
+        return "DENIED", None
+    else:
+        req_tid = raw_payload.strip()
+
+    if win.vault.is_locked():
+        return "LOCKED", None
+    if not (win.runtime_started and getattr(win, "_runtime_state", "") == "running"):
+        return "DENIED", None
+
+    t_obj = next(
+        (t for t in win.tools if t.id == req_tid and getattr(t, "in_workspace", True) and t.enabled),
+        None,
+    )
+    if t_obj is None:
+        return "DENIED", None
+    return "OK", t_obj
+
+
+def handle_ipc_message(
+    msg: bytes,
+    conn: QLocalSocket,
+    win: MainWindow,
+    data_dir: pathlib.Path,
+) -> tuple[bytes | None, bool]:
+    """Process a single local pipe frame and return ``(optional_reply_bytes, should_activate_window)``."""
+    clean = msg.strip()
+    if not clean:
+        return None, False
+
+    if clean == b"activate":
+        return b"OK", True
+
+    # Never expose raw Master Passphrase PBKDF2 entropy over IPC!
+    if clean == b"request_entropy":
+        return b"DENIED", False
+
+    if clean.startswith(b"resolve_launch:"):
+        raw_arg = clean.split(b":", 1)[1].decode("ascii", errors="ignore").strip()
+        status, t_obj = _authorize_bridge_tool_request(conn, raw_arg, win, data_dir, require_dir_binding=True)
+        if status != "OK" or t_obj is None:
+            return status.encode("ascii"), False
+        spec = build_effective_stdio_spec(t_obj, win.vault, wrap_windows_npx=False)  # type: ignore[arg-type]
+        if spec is None:
+            return b"DENIED", False
+        cmd, args, env = spec
+        launch_doc = {
+            "name": getattr(t_obj, "name", ""),
+            "cmd": cmd,
+            "args": args,
+            "env": env,
+            "vault_key": getattr(t_obj, "vault_key_name", ""),
+        }
+        b64 = base64.b64encode(json.dumps(launch_doc, ensure_ascii=False).encode("utf-8")).decode("ascii")
+        return f"LAUNCH:{b64}".encode("ascii"), False
+
+    if clean.startswith(b"resolve_secret:"):
+        raw_arg = clean.split(b":", 1)[1].decode("ascii", errors="ignore").strip()
+        status, t_obj = _authorize_bridge_tool_request(conn, raw_arg, win, data_dir, require_dir_binding=False)
+        if status != "OK" or t_obj is None:
+            return status.encode("ascii"), False
+        vk = getattr(t_obj, "vault_key_name", "")
+        if not vk:
+            return b"DENIED", False
+        sec = win.vault.get_secret(vk)
+        if sec:
+            b64 = base64.b64encode(sec.encode("utf-8")).decode("ascii")
+            return f"SECRET:{b64}".encode("ascii"), False
+        return b"EMPTY", False
+
+    return b"DENIED", False
+
+
 def main() -> int:
     _cleanup_old_exe_swap()
     if os.name == "nt":
@@ -177,7 +275,10 @@ def main() -> int:
         if _activate_running_instance():
             kernel32.CloseHandle(mutex)
             return 0
-        _terminate_stale_instances()
+        if _terminate_stale_instances() == 0:
+            # Another modern AIconomy instance owns the mutex; never force-kill it!
+            kernel32.CloseHandle(mutex)
+            return 0
     else:
         # Builds before 1.3.4 used a different mutex name and have no activation server.
         legacy = kernel32.OpenMutexW(0x00100000, False, LEGACY_MUTEX_NAME)  # SYNCHRONIZE
@@ -192,49 +293,42 @@ def main() -> int:
 
     data_dir = resolve_data_dir(_app_root_dir())
     win = MainWindow(data_dir=data_dir)
+    active_conns: set[QLocalSocket] = set()
 
     def _on_new_connection() -> None:
-        conn = server.nextPendingConnection()
-        if conn is None:
-            return
-        conn.waitForReadyRead(300)
-        msg = bytes(conn.readAll()).strip()
+        while server.hasPendingConnections():
+            conn = server.nextPendingConnection()
+            if conn is None:
+                continue
+            active_conns.add(conn)
+            handled = False
 
-        # Never expose raw Master Passphrase PBKDF2 entropy over IPC!
-        if msg == b"request_entropy":
-            conn.write(b"DENIED")
-            conn.flush()
-            conn.waitForBytesWritten(300)
-            conn.disconnectFromServer()
-            return
+            def _cleanup(c: QLocalSocket = conn) -> None:
+                active_conns.discard(c)
+                c.deleteLater()
 
-        if msg.startswith(b"resolve_secret:"):
-            if not _is_trusted_bridge_peer(conn, data_dir):
-                conn.write(b"DENIED")
-            elif win.vault.is_locked():
-                conn.write(b"LOCKED")
-            else:
-                req_tid = msg.split(b":", 1)[1].decode("ascii", errors="ignore").strip()
-                t_obj = next(
-                    (t for t in win.tools if t.id == req_tid and getattr(t, "in_workspace", True)),
-                    None,
-                )
-                if t_obj is None or not t_obj.vault_key_name:
-                    conn.write(b"DENIED")
-                else:
-                    sec = win.vault.get_secret(t_obj.vault_key_name)
-                    if sec:
-                        b64 = base64.b64encode(sec.encode("utf-8")).decode("ascii")
-                        conn.write(f"SECRET:{b64}".encode("ascii"))
-                    else:
-                        conn.write(b"EMPTY")
-            conn.flush()
-            conn.waitForBytesWritten(300)
-            conn.disconnectFromServer()
-            return
+            def _process_ready(c: QLocalSocket = conn) -> None:
+                nonlocal handled
+                if handled:
+                    return
+                msg = bytes(c.readAll())
+                if not msg:
+                    return
+                handled = True
+                reply, should_activate = handle_ipc_message(msg, c, win, data_dir)
+                if reply is not None:
+                    c.write(reply)
+                    c.flush()
+                    c.waitForBytesWritten(200)
+                c.disconnectFromServer()
+                if should_activate:
+                    _bring_to_front(win)
 
-        conn.disconnectFromServer()
-        _bring_to_front(win)
+            conn.readyRead.connect(_process_ready)
+            conn.disconnected.connect(_cleanup)
+            QTimer.singleShot(1500, lambda c=conn: c.disconnectFromServer() if c in active_conns else None)
+            if conn.bytesAvailable() > 0:
+                _process_ready()
 
     server.newConnection.connect(_on_new_connection)
     win.show()

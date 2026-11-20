@@ -100,11 +100,11 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, ProfilesMixin, Tr
 
         self.vault = WindowsDpapiVault(self.data_dir / VAULT_FILENAME)
         self.logs = LogDatabase(self.data_dir / LOG_DB_FILENAME, vault=self.vault)
-        self.store = StateStore(self.data_dir / STATE_FILENAME)
+        self.store = StateStore(self.data_dir / STATE_FILENAME, vault=self.vault)
 
-        self.tools: list[ToolSpec] = build_default_catalog()
+        self.tools: list[ToolSpec] = build_default_catalog(data_dir=self.data_dir)
         self.default_ids: set[str] = {t.id for t in self.tools}
-        self.active_skills, self.meta = self.store.load_into(self.tools)
+        self.active_skills, self.meta = self.store.load_into(self.tools, vault=self.vault)
         self.installed_clients: set[str] = detect_installed_ai_clients()
 
         self.sort_key = str(self.meta.get("sort_key", "enabled"))
@@ -137,12 +137,15 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, ProfilesMixin, Tr
         self.bridge.lib_uninstall_done.connect(self._on_lib_uninstall_done)
         self.bridge.schema_measure_done.connect(self._on_bg_schema_measure_done)
         self.bridge.auto_heal_done.connect(self._on_auto_heal_done)
+        self.bridge.remote_catalog_done.connect(self._on_remote_catalog_done)
         self._installing_tool_ids: set[str] = set()
         self._uninstalling_tool_ids: set[str] = set()
         self._heal_busy = False
+        self._remote_catalog_busy = False
 
         self.runtime_started = False
         self._runtime_state = "probing"  # probing | stopped | starting | running | stopping
+        self._runtime_epoch = 0
         self._shutdown_done = False
         self._health_busy = False
         self._vram_busy = False
@@ -495,6 +498,7 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, ProfilesMixin, Tr
         if getattr(self, "_shutdown_done", False):
             return
         self._shutdown_done = True
+        self._runtime_epoch += 1
         try:
             self.tick_timer.stop()
             self._sync_debounce.stop()
@@ -570,6 +574,7 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, ProfilesMixin, Tr
         self._sync_pending_ids.clear()
         self._sync_stop_ids.clear()
         self._sync_restart_ids.clear()
+        self._runtime_epoch += 1
         self._set_runtime_ui_state("starting")
         self.set_status(tr(self.lang, "msg_tools_starting"))
 
@@ -647,6 +652,7 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, ProfilesMixin, Tr
         self._sync_pending_ids.clear()
         self._sync_stop_ids.clear()
         self._sync_restart_ids.clear()
+        self._runtime_epoch += 1
         self._set_runtime_ui_state("stopping")
         self.set_status(tr(self.lang, "msg_tools_stopping"))
 
@@ -918,13 +924,16 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, ProfilesMixin, Tr
         skills_snap = set(self.active_skills)
         proj_snap = dict(self.projects_map)
         lang_snap = self.lang
-        allow_start_flag = bool(self.runtime_started and self._runtime_state == "running")
+        epoch_snap = self._runtime_epoch
         missing_keys = self._missing_required_vault_keys()
         locked_keys = self._locked_vault_keys()
 
         def worker() -> None:
             measured_schemas: dict[str, int] = {}
             with self._sync_lock:
+                if self._runtime_epoch != epoch_snap:
+                    return
+                allow_start_flag = bool(self.runtime_started and self._runtime_state == "running")
                 for t_obj in tools_snap:
                     if t_obj.id in target_ids and (getattr(t_obj, "in_workspace", True) or t_obj.id in stop_ids):
                         enforce_tool_runtime_state(
@@ -982,6 +991,8 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, ProfilesMixin, Tr
                         locked_vault_keys=locked_keys,
                     )
                     out.append((x.id, ok, h_state, ping_str, ms, detail, loc_detail))
+            if self._runtime_epoch != epoch_snap:
+                return
             if measured_schemas:
                 safe_emit(self.bridge.schema_measure_done, measured_schemas, len(measured_schemas))
             if self.lang == eff_lang:
@@ -1788,17 +1799,25 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, ProfilesMixin, Tr
         proj_snap = dict(self.projects_map)
         sk_cnt = len(self.active_skills)
         lang_snap = self.lang
+        epoch_snap = self._runtime_epoch
         missing_keys = self._missing_required_vault_keys()
         locked_keys = self._locked_vault_keys()
-        rt_active = bool(self.runtime_started and self._runtime_state == "running")
 
         def worker() -> None:
-            note = enforce_tool_runtime_state(
-                tool_snap, proj_snap, allow_stop=False, allow_start=rt_active, lang=lang_snap
-            )
+            with self._sync_lock:
+                if self._runtime_epoch != epoch_snap:
+                    return
+                rt_active = bool(self.runtime_started and self._runtime_state == "running")
+                if not rt_active:
+                    return
+                note = enforce_tool_runtime_state(
+                    tool_snap, proj_snap, allow_stop=False, allow_start=True, lang=lang_snap
+                )
             if note:
                 self.logs.add("INFO", tool_snap.name, tr(lang_snap, "log_auto_heal", note=note))
                 time.sleep(1.5)
+                if self._runtime_epoch != epoch_snap:
+                    return
                 live_map = scan_live_process_locations(lang=lang_snap)
                 ok, h_state, ping_str, ms, detail, loc_detail = probe_tool_health(
                     tool_snap,
@@ -1807,15 +1826,16 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, ProfilesMixin, Tr
                     live_map,
                     lang=lang_snap,
                     missing_required_keys=missing_keys,
-                    runtime_active=rt_active,
+                    runtime_active=True,
                     locked_vault_keys=locked_keys,
                 )
-                safe_emit(
-                    self.bridge.health_done,
-                    [(tool_snap.id, ok, h_state, ping_str, ms, detail, loc_detail)],
-                    live_map,
-                    True,
-                )
+                if self._runtime_epoch == epoch_snap:
+                    safe_emit(
+                        self.bridge.health_done,
+                        [(tool_snap.id, ok, h_state, ping_str, ms, detail, loc_detail)],
+                        live_map,
+                        True,
+                    )
 
         threading.Thread(target=worker, daemon=True).start()
 

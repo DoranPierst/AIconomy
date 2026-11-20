@@ -1,9 +1,10 @@
 """Per-tool technical settings dialog with mode selector, real CLI options, API key shortcut, and reset."""
 from __future__ import annotations
 
+import threading
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import QEvent, QObject, Qt
+from PySide6.QtCore import QEvent, QObject, Qt, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -26,7 +27,9 @@ from ...catalog import (
 )
 from ...i18n import tr
 from ...oauth import check_cli_oauth_ready, get_oauth_spec, launch_browser_oauth_flow, supports_oauth
+from ...security import auto_vault_key_for_tool, contains_embedded_secret
 from ..widgets import create_option_help_badge
+from ..workers import safe_emit
 
 if TYPE_CHECKING:
     from ..main_window import MainWindow
@@ -34,6 +37,8 @@ if TYPE_CHECKING:
 
 class ToolGearDialog(QDialog):
     """Configure a tool's active mode, parameter, real CLI options, API key shortcut, and defaults."""
+
+    _oauth_probe_done = Signal(int, bool)
 
     def __init__(
         self,
@@ -48,6 +53,8 @@ class ToolGearDialog(QDialog):
         self.lang = parent.lang
         self.scope_display = scope_display
         self.reset_requested = False
+        self._oauth_probe_gen = 0
+        self._oauth_probe_done.connect(self._on_oauth_probe_done)
         self.setWindowTitle(tr(self.lang, "gear_title", name=tool.name))
         self.setMinimumWidth(620)
         self.resize(650, 460)
@@ -274,19 +281,33 @@ class ToolGearDialog(QDialog):
                 if self._oauth_spec.kind == "remote_mcp":
                     txt = tr(self.lang, "gear_oauth_remote_ready")
                     col = "#10b981"
+                    self._oauth_status_lbl.setText(f"<span style='color:{col}; font-weight:600;'>{txt}</span>")
+                elif not getattr(self.main_win, "sync_live_environment", True):
+                    txt = tr(self.lang, "gear_oauth_cli_missing")
+                    self._oauth_status_lbl.setText(f"<span style='color:#f59e0b; font-weight:600;'>{txt}</span>")
                 else:
-                    cli_ok = (
-                        check_cli_oauth_ready(self.tool.id)
-                        if getattr(self.main_win, "sync_live_environment", True)
-                        else False
-                    )
-                    if cli_ok:
-                        txt = tr(self.lang, "gear_oauth_cli_ok", provider=self._oauth_spec.provider_label)
-                        col = "#10b981"
-                    else:
-                        txt = tr(self.lang, "gear_oauth_cli_missing")
-                        col = "#f59e0b"
-                self._oauth_status_lbl.setText(f"<span style='color:{col}; font-weight:600;'>{txt}</span>")
+                    self._oauth_probe_gen += 1
+                    cur_gen = self._oauth_probe_gen
+                    tid_snap = self.tool.id
+                    wait_txt = tr(self.lang, "st_scanning")
+                    self._oauth_status_lbl.setText(f"<span style='color:#94a3b8; font-weight:600;'>{wait_txt}</span>")
+
+                    def _probe() -> None:
+                        ok_cli = check_cli_oauth_ready(tid_snap)
+                        safe_emit(self._oauth_probe_done, cur_gen, ok_cli)
+
+                    threading.Thread(target=_probe, daemon=True).start()
+
+    def _on_oauth_probe_done(self, gen: int, cli_ok: bool) -> None:
+        if gen != self._oauth_probe_gen or self._oauth_status_lbl is None or self._oauth_spec is None:
+            return
+        if cli_ok:
+            txt = tr(self.lang, "gear_oauth_cli_ok", provider=self._oauth_spec.provider_label)
+            col = "#10b981"
+        else:
+            txt = tr(self.lang, "gear_oauth_cli_missing")
+            col = "#f59e0b"
+        self._oauth_status_lbl.setText(f"<span style='color:{col}; font-weight:600;'>{txt}</span>")
 
     def _handle_oauth_login(self) -> None:
         if not getattr(self.main_win, "sync_live_environment", True):
@@ -303,8 +324,10 @@ class ToolGearDialog(QDialog):
     def _refresh_key_status(self) -> None:
         if self._key_status_lbl is None:
             return
-        has_k = self.vault.has_secret(self.tool.vault_key_name)
-        if has_k:
+        if self.vault.is_locked() and (self.tool.vault_key_required or self.vault.has_key_entry(self.tool.vault_key_name)):
+            status_txt = tr(self.lang, "st_vault_locked")
+            col = "#f59e0b"
+        elif self.vault.has_secret(self.tool.vault_key_name):
             status_txt = tr(self.lang, "gear_key_set")
             col = "#22c55e"
         elif self.tool.vault_key_required:
@@ -366,7 +389,15 @@ class ToolGearDialog(QDialog):
         if self.auth_cmb is not None:
             self.tool.auth_mode = self._selected_auth_mode()
         if self.param_inp is not None:
-            self.tool.param_value = self.param_inp.text().strip()
+            raw_pv = self.param_inp.text().strip()
+            if contains_embedded_secret(raw_pv):
+                vk = self.tool.vault_key_name or auto_vault_key_for_tool(self.tool.id)
+                self.tool.vault_key_name = vk
+                if not self.vault.is_locked():
+                    self.vault.set_secret(vk, raw_pv)
+                self.tool.param_value = ""
+            else:
+                self.tool.param_value = raw_pv
             if self.tool.id in ("serena", "unity_mcp", "blender_mcp") and self.tool.param_value.isdigit():
                 p_val = int(self.tool.param_value)
                 if 1 <= p_val <= 65535:

@@ -19,7 +19,7 @@ REMOTE_CATALOG_FILENAME = "catalog-remote.json"
 REMOTE_SHA_FILENAME = "catalog-remote.sha256"
 
 _TR_LIBRARY_TEXT: dict[str, dict[str, Any]] = {}
-_CACHED_DOC: dict[str, Any] | None = None
+_CACHED_DOCS: dict[str, dict[str, Any]] = {}
 
 
 def _bundled_assets_dir() -> pathlib.Path:
@@ -96,9 +96,13 @@ def _read_verified_catalog(json_path: pathlib.Path, sha_path: pathlib.Path) -> d
 
 def load_catalog_document(force_reload: bool = False, data_dir: pathlib.Path | None = None) -> dict[str, Any]:
     """Load bundled ``assets/catalog.json`` (or a newer SHA-256 verified remote catalog in ``data_dir``)."""
-    global _CACHED_DOC
-    if _CACHED_DOC is not None and not force_reload:
-        return _CACHED_DOC
+    ddir = data_dir or _default_user_data_dir()
+    cache_key = str(ddir.resolve())
+    if not force_reload and cache_key in _CACHED_DOCS:
+        cached = _CACHED_DOCS[cache_key]
+        _TR_LIBRARY_TEXT.clear()
+        _TR_LIBRARY_TEXT.update(_normalize_tr_dict(cached.get("tr_text") or {}))
+        return cached
 
     assets_dir = _bundled_assets_dir()
     bundled_doc = _read_verified_catalog(assets_dir / "catalog.json", assets_dir / "catalog.sha256")
@@ -110,7 +114,6 @@ def load_catalog_document(force_reload: bool = False, data_dir: pathlib.Path | N
     chosen = bundled_doc
     bundled_rev = int(bundled_doc.get("catalog_revision", 0) or 0)
 
-    ddir = data_dir or _default_user_data_dir()
     remote_doc = _read_verified_catalog(ddir / REMOTE_CATALOG_FILENAME, ddir / REMOTE_SHA_FILENAME)
     if remote_doc is not None:
         rem_rev = int(remote_doc.get("catalog_revision", 0) or 0)
@@ -119,7 +122,7 @@ def load_catalog_document(force_reload: bool = False, data_dir: pathlib.Path | N
 
     _TR_LIBRARY_TEXT.clear()
     _TR_LIBRARY_TEXT.update(_normalize_tr_dict(chosen.get("tr_text") or {}))
-    _CACHED_DOC = chosen
+    _CACHED_DOCS[cache_key] = chosen
     return chosen
 
 
