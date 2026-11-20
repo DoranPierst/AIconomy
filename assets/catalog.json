@@ -7,7 +7,7 @@
       "name": "Filesystem MCP",
       "category": "coding_dev",
       "kind": "stdio",
-      "version": "v2025.3.0",
+      "version": "v2.4.0",
       "repo_url": "https://github.com/modelcontextprotocol/servers",
       "schema_tokens": 1900,
       "summary": "Sandboxed local file read, write, directory tree, and search restricted to an allowed folder.",
@@ -36,12 +36,12 @@
       "vault_key_name": "",
       "vault_key_required": false,
       "vault_key_desc": "",
-      "install_cmd": "npx -y @modelcontextprotocol/server-filesystem",
+      "install_cmd": "npx -y @modelcontextprotocol/server-filesystem@2.4.0",
       "mcp_server_key": "filesystem",
       "mcp_command": "npx",
       "mcp_args": [
         "-y",
-        "@modelcontextprotocol/server-filesystem"
+        "@modelcontextprotocol/server-filesystem@2.4.0"
       ],
       "tags": [
         "coding_lsp",
@@ -103,7 +103,7 @@
       "name": "E2B Sandbox MCP",
       "category": "coding_dev",
       "kind": "stdio",
-      "version": "v0.3.0",
+      "version": "v0.2.3",
       "repo_url": "https://github.com/e2b-dev/mcp-server",
       "schema_tokens": 1500,
       "summary": "Executes untrusted Python and JavaScript snippets inside isolated cloud sandboxes.",
@@ -132,12 +132,12 @@
       "vault_key_name": "E2B_API_KEY",
       "vault_key_required": true,
       "vault_key_desc": "E2B Cloud Sandbox API key",
-      "install_cmd": "npx -y @e2b/mcp-server",
+      "install_cmd": "npx -y @e2b/mcp-server@0.2.3",
       "mcp_server_key": "e2b-sandbox",
       "mcp_command": "npx",
       "mcp_args": [
         "-y",
-        "@e2b/mcp-server"
+        "@e2b/mcp-server@0.2.3"
       ],
       "tags": [
         "coding_lsp",
@@ -150,7 +150,7 @@
       "name": "Pydantic Run Python MCP",
       "category": "coding_dev",
       "kind": "stdio",
-      "version": "v0.0.14",
+      "version": "v0.0.22",
       "repo_url": "https://github.com/pydantic/mcp-run-python",
       "schema_tokens": 1100,
       "summary": "Runs Python code safely inside a local Pyodide WebAssembly sandbox with package support.",
@@ -179,11 +179,11 @@
       "vault_key_name": "",
       "vault_key_required": false,
       "vault_key_desc": "",
-      "install_cmd": "uvx mcp-run-python stdio",
+      "install_cmd": "uvx mcp-run-python==0.0.22 stdio",
       "mcp_server_key": "run-python",
       "mcp_command": "uvx",
       "mcp_args": [
-        "mcp-run-python",
+        "mcp-run-python==0.0.22",
         "stdio"
       ],
       "tags": [
@@ -246,7 +246,7 @@
       "name": "GraphQL Endpoint MCP",
       "category": "coding_dev",
       "kind": "stdio",
-      "version": "v0.2.4",
+      "version": "v2.0.4",
       "repo_url": "https://github.com/blurrah/mcp-graphql",
       "schema_tokens": 1400,
       "summary": "Introspects GraphQL schemas and executes typed queries against any GraphQL API.",
@@ -275,12 +275,12 @@
       "vault_key_name": "",
       "vault_key_required": false,
       "vault_key_desc": "",
-      "install_cmd": "npx -y mcp-graphql",
+      "install_cmd": "npx -y mcp-graphql@2.0.4",
       "mcp_server_key": "graphql",
       "mcp_command": "npx",
       "mcp_args": [
         "-y",
-        "mcp-graphql"
+        "mcp-graphql@2.0.4"
       ],
       "tags": [
         "coding_lsp",
@@ -294,7 +294,7 @@
       "name": "Postman Official MCP",
       "category": "coding_dev",
       "kind": "stdio",
-      "version": "v1.1.0",
+      "version": "v2.15.0",
       "repo_url": "https://github.com/postmanlabs/postman-mcp-server",
       "schema_tokens": 2600,
       "summary": "Manages Postman collections, environments, mock servers, and API test suites.",
@@ -323,12 +323,12 @@
       "vault_key_name": "POSTMAN_API_KEY",
       "vault_key_required": true,
       "vault_key_desc": "Postman API key (PMAK-...)",
-      "install_cmd": "npx -y @postman/postman-mcp-server",
+      "install_cmd": "npx -y @postman/postman-mcp-server@2.15.0",
       "mcp_server_key": "postman",
       "mcp_command": "npx",
       "mcp_args": [
         "-y",
-        "@postman/postman-mcp-server"
+        "@postman/postman-mcp-server@2.15.0"
       ],
       "tags": [
         "testing_qa",
@@ -341,7 +341,7 @@
       "name": "Repomix Codebase Packager",
       "category": "coding_dev",
       "kind": "stdio",
-      "version": "v0.3.4",
+      "version": "v1.19.0",
       "repo_url": "https://github.com/yamadashy/repomix",
       "schema_tokens": 1600,
       "summary": "Packs repositories or filtered subtrees into token-counted, AI-optimized summaries.",
@@ -370,12 +370,12 @@
       "vault_key_name": "",
       "vault_key_required": false,
       "vault_key_desc": "",
-      "install_cmd": "npx -y repomix --mcp",
+      "install_cmd": "npx -y repomix@1.19.0 --mcp",
       "mcp_server_key": "repomix",
       "mcp_command": "npx",
       "mcp_args": [
         "-y",
-        "repomix",
+        "repomix@1.19.0",
         "--mcp"
       ],
       "tags": [
@@ -419,10 +419,12 @@
       "vault_key_name": "",
       "vault_key_required": false,
       "vault_key_desc": "",
-      "install_cmd": "uvx ast-grep-mcp",
+      "install_cmd": "uvx --from git+https://github.com/ast-grep/ast-grep-mcp ast-grep-mcp",
       "mcp_server_key": "ast-grep",
       "mcp_command": "uvx",
       "mcp_args": [
+        "--from",
+        "git+https://github.com/ast-grep/ast-grep-mcp",
         "ast-grep-mcp"
       ],
       "tags": [
@@ -437,7 +439,7 @@
       "name": "Jupyter Notebook MCP",
       "category": "coding_dev",
       "kind": "stdio",
-      "version": "v0.7.0",
+      "version": "v2.2.6",
       "repo_url": "https://github.com/datalayer/jupyter-mcp-server",
       "schema_tokens": 2000,
       "summary": "Connects to live JupyterLab kernels to inspect cells, run code, and read dataframe outputs.",
@@ -466,11 +468,11 @@
       "vault_key_name": "JUPYTER_TOKEN",
       "vault_key_required": false,
       "vault_key_desc": "JupyterLab server token (optional for local no-token notebooks)",
-      "install_cmd": "uvx jupyter-mcp-server",
+      "install_cmd": "uvx jupyter-mcp-server==2.2.6",
       "mcp_server_key": "jupyter",
       "mcp_command": "uvx",
       "mcp_args": [
-        "jupyter-mcp-server"
+        "jupyter-mcp-server==2.2.6"
       ],
       "tags": [
         "jupyter:coding_lsp",
@@ -531,7 +533,7 @@
       "name": "GitHub Official MCP",
       "category": "git_vcs",
       "kind": "stdio",
-      "version": "v0.6.2",
+      "version": "v2025.4.8",
       "repo_url": "https://github.com/github/github-mcp-server",
       "schema_tokens": 3600,
       "summary": "Manages GitHub issues, pull requests, review comments, branches, and repository search.",
@@ -560,12 +562,12 @@
       "vault_key_name": "GITHUB_PERSONAL_ACCESS_TOKEN",
       "vault_key_required": true,
       "vault_key_desc": "GitHub Personal Access Token (repo / read:org scopes)",
-      "install_cmd": "npx -y @modelcontextprotocol/server-github",
+      "install_cmd": "npx -y @modelcontextprotocol/server-github@2025.4.8",
       "mcp_server_key": "github",
       "mcp_command": "npx",
       "mcp_args": [
         "-y",
-        "@modelcontextprotocol/server-github"
+        "@modelcontextprotocol/server-github@2025.4.8"
       ],
       "tags": [
         "git_repo",
@@ -578,7 +580,7 @@
       "name": "Git Local Repository MCP",
       "category": "git_vcs",
       "kind": "stdio",
-      "version": "v2025.3.0",
+      "version": "v2026.11.18",
       "repo_url": "https://github.com/modelcontextprotocol/servers",
       "schema_tokens": 1800,
       "summary": "Reads local Git history, diffs, blame, branches, and commit logs with zero cloud access.",
@@ -607,11 +609,11 @@
       "vault_key_name": "",
       "vault_key_required": false,
       "vault_key_desc": "",
-      "install_cmd": "uvx mcp-server-git",
+      "install_cmd": "uvx mcp-server-git==2026.11.18",
       "mcp_server_key": "git-local",
       "mcp_command": "uvx",
       "mcp_args": [
-        "mcp-server-git"
+        "mcp-server-git==2026.11.18"
       ],
       "tags": [
         "git_repo",
@@ -624,7 +626,7 @@
       "name": "GitLab Official MCP",
       "category": "git_vcs",
       "kind": "stdio",
-      "version": "v2025.2.0",
+      "version": "v2025.4.25",
       "repo_url": "https://github.com/modelcontextprotocol/servers",
       "schema_tokens": 2800,
       "summary": "Integrates GitLab merge requests, pipelines, issues, and self-hosted repositories.",
@@ -653,12 +655,12 @@
       "vault_key_name": "GITLAB_PERSONAL_ACCESS_TOKEN",
       "vault_key_required": true,
       "vault_key_desc": "GitLab Personal Access Token (api scope)",
-      "install_cmd": "npx -y @modelcontextprotocol/server-gitlab",
+      "install_cmd": "npx -y @modelcontextprotocol/server-gitlab@2025.4.25",
       "mcp_server_key": "gitlab",
       "mcp_command": "npx",
       "mcp_args": [
         "-y",
-        "@modelcontextprotocol/server-gitlab"
+        "@modelcontextprotocol/server-gitlab@2025.4.25"
       ],
       "tags": [
         "git_repo",
@@ -671,7 +673,7 @@
       "name": "Bitbucket PR & Repo MCP",
       "category": "git_vcs",
       "kind": "stdio",
-      "version": "v1.6.0",
+      "version": "v3.1.0",
       "repo_url": "https://github.com/aashari/mcp-server-atlassian-bitbucket",
       "schema_tokens": 2400,
       "summary": "Inspects Bitbucket workspaces, pull requests, diffs, and branch permissions.",
@@ -700,12 +702,12 @@
       "vault_key_name": "ATLASSIAN_API_TOKEN",
       "vault_key_required": true,
       "vault_key_desc": "Atlassian / Bitbucket App Password or API Token",
-      "install_cmd": "npx -y @aashari/mcp-server-atlassian-bitbucket",
+      "install_cmd": "npx -y @aashari/mcp-server-atlassian-bitbucket@3.1.0",
       "mcp_server_key": "bitbucket",
       "mcp_command": "npx",
       "mcp_args": [
         "-y",
-        "@aashari/mcp-server-atlassian-bitbucket"
+        "@aashari/mcp-server-atlassian-bitbucket@3.1.0"
       ],
       "tags": [
         "git_repo",
@@ -765,7 +767,7 @@
       "name": "GitHub Actions CI MCP",
       "category": "git_vcs",
       "kind": "stdio",
-      "version": "v0.3.1",
+      "version": "v1.0.1",
       "repo_url": "https://github.com/ko1ynnky/github-actions-mcp-server",
       "schema_tokens": 1900,
       "summary": "Monitors GitHub Actions workflow runs, job failure logs, and triggers dispatches.",
@@ -794,12 +796,12 @@
       "vault_key_name": "GITHUB_PERSONAL_ACCESS_TOKEN",
       "vault_key_required": true,
       "vault_key_desc": "GitHub Personal Access Token (workflow scope)",
-      "install_cmd": "npx -y github-actions-mcp-server",
+      "install_cmd": "npx -y github-actions-mcp@1.0.1",
       "mcp_server_key": "github-actions",
       "mcp_command": "npx",
       "mcp_args": [
         "-y",
-        "github-actions-mcp-server"
+        "github-actions-mcp@1.0.1"
       ],
       "tags": [
         "git_repo",
@@ -909,7 +911,7 @@
       "name": "Puppeteer Browser MCP",
       "category": "web_browser",
       "kind": "stdio",
-      "version": "v2025.2.0",
+      "version": "v2025.5.12",
       "repo_url": "https://github.com/modelcontextprotocol/servers",
       "schema_tokens": 2100,
       "summary": "Automates headless Chromium navigation, page clicks, JS evaluation, and screenshots.",
@@ -938,12 +940,12 @@
       "vault_key_name": "",
       "vault_key_required": false,
       "vault_key_desc": "",
-      "install_cmd": "npx -y @modelcontextprotocol/server-puppeteer",
+      "install_cmd": "npx -y @modelcontextprotocol/server-puppeteer@2025.5.12",
       "mcp_server_key": "puppeteer",
       "mcp_command": "npx",
       "mcp_args": [
         "-y",
-        "@modelcontextprotocol/server-puppeteer"
+        "@modelcontextprotocol/server-puppeteer@2025.5.12"
       ],
       "tags": [
         "web_browser",
@@ -957,7 +959,7 @@
       "name": "Official Web Fetch MCP",
       "category": "web_browser",
       "kind": "stdio",
-      "version": "v2025.3.0",
+      "version": "v2026.11.18",
       "repo_url": "https://github.com/modelcontextprotocol/servers",
       "schema_tokens": 950,
       "summary": "Fetches web URLs and converts cluttered HTML into clean, low-token Markdown.",
@@ -986,11 +988,11 @@
       "vault_key_name": "",
       "vault_key_required": false,
       "vault_key_desc": "",
-      "install_cmd": "uvx mcp-server-fetch",
+      "install_cmd": "uvx mcp-server-fetch==2026.11.18",
       "mcp_server_key": "fetch",
       "mcp_command": "uvx",
       "mcp_args": [
-        "mcp-server-fetch"
+        "mcp-server-fetch==2026.11.18"
       ],
       "tags": [
         "web_browser",
@@ -1033,12 +1035,12 @@
       "vault_key_name": "BRAVE_API_KEY",
       "vault_key_required": true,
       "vault_key_desc": "Brave Search API key",
-      "install_cmd": "npx -y @modelcontextprotocol/server-brave-search",
+      "install_cmd": "npx -y @modelcontextprotocol/server-brave-search@0.6.2",
       "mcp_server_key": "brave-search",
       "mcp_command": "npx",
       "mcp_args": [
         "-y",
-        "@modelcontextprotocol/server-brave-search"
+        "@modelcontextprotocol/server-brave-search@0.6.2"
       ],
       "tags": [
         "web_browser",
@@ -1099,7 +1101,7 @@
       "name": "Exa Neural Search MCP",
       "category": "web_browser",
       "kind": "stdio",
-      "version": "v0.3.7",
+      "version": "v3.5.1",
       "repo_url": "https://github.com/exa-labs/exa-mcp-server",
       "schema_tokens": 1500,
       "summary": "Semantic neural search for engineering blogs, GitHub repos, papers, and company docs.",
@@ -1128,12 +1130,12 @@
       "vault_key_name": "EXA_API_KEY",
       "vault_key_required": true,
       "vault_key_desc": "Exa AI Search API key",
-      "install_cmd": "npx -y exa-mcp-server",
+      "install_cmd": "npx -y exa-mcp-server@3.5.1",
       "mcp_server_key": "exa-search",
       "mcp_command": "npx",
       "mcp_args": [
         "-y",
-        "exa-mcp-server"
+        "exa-mcp-server@3.5.1"
       ],
       "tags": [
         "docs_search",
@@ -1146,7 +1148,7 @@
       "name": "Firecrawl Web Scraper MCP",
       "category": "web_browser",
       "kind": "stdio",
-      "version": "v1.7.0",
+      "version": "v3.41.0",
       "repo_url": "https://github.com/mendableai/firecrawl-mcp-server",
       "schema_tokens": 2200,
       "summary": "Crawls multi-page documentation sites and dynamic SPAs into clean structured Markdown/JSON.",
@@ -1175,12 +1177,12 @@
       "vault_key_name": "FIRECRAWL_API_KEY",
       "vault_key_required": true,
       "vault_key_desc": "Firecrawl API key (fc-...)",
-      "install_cmd": "npx -y firecrawl-mcp",
+      "install_cmd": "npx -y firecrawl-mcp@3.41.0",
       "mcp_server_key": "firecrawl",
       "mcp_command": "npx",
       "mcp_args": [
         "-y",
-        "firecrawl-mcp"
+        "firecrawl-mcp@3.41.0"
       ],
       "tags": [
         "web_browser",
@@ -1194,7 +1196,7 @@
       "name": "Perplexity Sonar Ask MCP",
       "category": "web_browser",
       "kind": "stdio",
-      "version": "v0.2.2",
+      "version": "v0.1.3",
       "repo_url": "https://github.com/ppl-ai/modelcontextprotocol",
       "schema_tokens": 1300,
       "summary": "Queries Perplexity Sonar models for cited, real-time web research answers.",
@@ -1223,12 +1225,12 @@
       "vault_key_name": "PERPLEXITY_API_KEY",
       "vault_key_required": true,
       "vault_key_desc": "Perplexity Sonar API key (pplx-...)",
-      "install_cmd": "npx -y server-perplexity-ask",
+      "install_cmd": "npx -y server-perplexity-ask@0.1.3",
       "mcp_server_key": "perplexity-ask",
       "mcp_command": "npx",
       "mcp_args": [
         "-y",
-        "server-perplexity-ask"
+        "server-perplexity-ask@0.1.3"
       ],
       "tags": [
         "docs_search",
@@ -1289,7 +1291,7 @@
       "name": "YouTube Transcript MCP",
       "category": "web_browser",
       "kind": "stdio",
-      "version": "v0.1.9",
+      "version": "v0.1.1",
       "repo_url": "https://github.com/kimtaeyoon83/mcp-server-youtube-transcript",
       "schema_tokens": 900,
       "summary": "Extracts timestamped subtitles and transcripts from YouTube talks and tutorials.",
@@ -1318,12 +1320,12 @@
       "vault_key_name": "",
       "vault_key_required": false,
       "vault_key_desc": "",
-      "install_cmd": "npx -y @kimtaeyoon83/mcp-server-youtube-transcript",
+      "install_cmd": "npx -y @kimtaeyoon83/mcp-server-youtube-transcript@0.1.1",
       "mcp_server_key": "youtube-transcript",
       "mcp_command": "npx",
       "mcp_args": [
         "-y",
-        "@kimtaeyoon83/mcp-server-youtube-transcript"
+        "@kimtaeyoon83/mcp-server-youtube-transcript@0.1.1"
       ],
       "tags": [
         "docs_search",
@@ -1337,7 +1339,7 @@
       "name": "DuckDuckGo Free Search MCP",
       "category": "web_browser",
       "kind": "stdio",
-      "version": "v0.1.6",
+      "version": "v0.7.0",
       "repo_url": "https://github.com/nickclyde/duckduckgo-mcp-server",
       "schema_tokens": 1000,
       "summary": "Zero-key web search and page content fetching using DuckDuckGo.",
@@ -1366,11 +1368,11 @@
       "vault_key_name": "",
       "vault_key_required": false,
       "vault_key_desc": "",
-      "install_cmd": "uvx duckduckgo-mcp-server",
+      "install_cmd": "uvx duckduckgo-mcp-server==0.7.0",
       "mcp_server_key": "duckduckgo",
       "mcp_command": "uvx",
       "mcp_args": [
-        "duckduckgo-mcp-server"
+        "duckduckgo-mcp-server==0.7.0"
       ],
       "tags": [
         "web_browser",
@@ -1413,12 +1415,12 @@
       "vault_key_name": "",
       "vault_key_required": false,
       "vault_key_desc": "",
-      "install_cmd": "npx -y @modelcontextprotocol/server-postgres",
+      "install_cmd": "npx -y @modelcontextprotocol/server-postgres@0.6.2",
       "mcp_server_key": "postgres",
       "mcp_command": "npx",
       "mcp_args": [
         "-y",
-        "@modelcontextprotocol/server-postgres"
+        "@modelcontextprotocol/server-postgres@0.6.2"
       ],
       "tags": [
         "database",
@@ -1431,7 +1433,7 @@
       "name": "SQLite Local DB MCP",
       "category": "database_data",
       "kind": "stdio",
-      "version": "v2025.3.0",
+      "version": "v2025.4.25",
       "repo_url": "https://github.com/modelcontextprotocol/servers",
       "schema_tokens": 1500,
       "summary": "Inspects tables, runs SQL queries, and manages local SQLite .db files.",
@@ -1460,11 +1462,11 @@
       "vault_key_name": "",
       "vault_key_required": false,
       "vault_key_desc": "",
-      "install_cmd": "uvx mcp-server-sqlite",
+      "install_cmd": "uvx mcp-server-sqlite==2025.4.25",
       "mcp_server_key": "sqlite",
       "mcp_command": "uvx",
       "mcp_args": [
-        "mcp-server-sqlite"
+        "mcp-server-sqlite==2025.4.25"
       ],
       "tags": [
         "database",
@@ -1478,7 +1480,7 @@
       "name": "MySQL & MariaDB MCP",
       "category": "database_data",
       "kind": "stdio",
-      "version": "v0.2.5",
+      "version": "v0.4.5",
       "repo_url": "https://github.com/designcomputer/mysql_mcp_server",
       "schema_tokens": 1500,
       "summary": "Inspects MySQL / MariaDB schemas, tables, and executes controlled SQL queries.",
@@ -1507,11 +1509,11 @@
       "vault_key_name": "MYSQL_PASSWORD",
       "vault_key_required": false,
       "vault_key_desc": "MySQL user password (optional for local passwordless dev DB)",
-      "install_cmd": "uvx mysql-mcp-server",
+      "install_cmd": "uvx mysql-mcp-server==0.4.5",
       "mcp_server_key": "mysql",
       "mcp_command": "uvx",
       "mcp_args": [
-        "mysql-mcp-server"
+        "mysql-mcp-server==0.4.5"
       ],
       "tags": [
         "database",
@@ -1571,7 +1573,7 @@
       "name": "Redis Official MCP",
       "category": "database_data",
       "kind": "stdio",
-      "version": "v0.2.0",
+      "version": "v0.5.1",
       "repo_url": "https://github.com/redis/mcp-redis",
       "schema_tokens": 1700,
       "summary": "Official Redis server for inspecting keys, hashes, streams, pub/sub, and TTL caches.",
@@ -1600,11 +1602,11 @@
       "vault_key_name": "",
       "vault_key_required": false,
       "vault_key_desc": "",
-      "install_cmd": "uvx redis-mcp-server",
+      "install_cmd": "uvx redis-mcp-server==0.5.1",
       "mcp_server_key": "redis",
       "mcp_command": "uvx",
       "mcp_args": [
-        "redis-mcp-server"
+        "redis-mcp-server==0.5.1"
       ],
       "tags": [
         "database",
@@ -1666,7 +1668,7 @@
       "name": "Neon Serverless Postgres MCP",
       "category": "database_data",
       "kind": "stdio",
-      "version": "v0.3.2",
+      "version": "v0.6.5",
       "repo_url": "https://github.com/neondatabase-labs/mcp-server-neon",
       "schema_tokens": 2500,
       "summary": "Creates isolated database branches, runs SQL migrations, and tunes queries on Neon.",
@@ -1695,12 +1697,12 @@
       "vault_key_name": "NEON_API_KEY",
       "vault_key_required": true,
       "vault_key_desc": "Neon Cloud API key",
-      "install_cmd": "npx -y @neondatabase/mcp-server-neon",
+      "install_cmd": "npx -y @neondatabase/mcp-server-neon@0.6.5",
       "mcp_server_key": "neon",
       "mcp_command": "npx",
       "mcp_args": [
         "-y",
-        "@neondatabase/mcp-server-neon"
+        "@neondatabase/mcp-server-neon@0.6.5"
       ],
       "tags": [
         "database",
@@ -1713,7 +1715,7 @@
       "name": "DuckDB & MotherDuck MCP",
       "category": "database_data",
       "kind": "stdio",
-      "version": "v0.5.0",
+      "version": "v1.1.1",
       "repo_url": "https://github.com/motherduckdb/mcp-server-motherduck",
       "schema_tokens": 1600,
       "summary": "Queries local Parquet, CSV, JSON files, and DuckDB databases at columnar speed.",
@@ -1742,11 +1744,11 @@
       "vault_key_name": "",
       "vault_key_required": false,
       "vault_key_desc": "",
-      "install_cmd": "uvx mcp-server-motherduck",
+      "install_cmd": "uvx mcp-server-motherduck==1.1.1",
       "mcp_server_key": "duckdb",
       "mcp_command": "uvx",
       "mcp_args": [
-        "mcp-server-motherduck"
+        "mcp-server-motherduck==1.1.1"
       ],
       "tags": [
         "database",
@@ -1759,7 +1761,7 @@
       "name": "ClickHouse Official MCP",
       "category": "database_data",
       "kind": "stdio",
-      "version": "v0.1.8",
+      "version": "v0.7.0",
       "repo_url": "https://github.com/ClickHouse/mcp-clickhouse",
       "schema_tokens": 1700,
       "summary": "Runs fast OLAP analytical queries and schema inspection on ClickHouse clusters.",
@@ -1788,11 +1790,11 @@
       "vault_key_name": "CLICKHOUSE_PASSWORD",
       "vault_key_required": false,
       "vault_key_desc": "ClickHouse password (optional for local default instance)",
-      "install_cmd": "uvx mcp-clickhouse",
+      "install_cmd": "uvx mcp-clickhouse==0.7.0",
       "mcp_server_key": "clickhouse",
       "mcp_command": "uvx",
       "mcp_args": [
-        "mcp-clickhouse"
+        "mcp-clickhouse==0.7.0"
       ],
       "tags": [
         "database",
@@ -1805,7 +1807,7 @@
       "name": "Qdrant Official Vector MCP",
       "category": "database_data",
       "kind": "stdio",
-      "version": "v0.7.1",
+      "version": "v0.8.1",
       "repo_url": "https://github.com/qdrant/mcp-server-qdrant",
       "schema_tokens": 1500,
       "summary": "Semantic vector search, RAG collection inspection, and code snippet memory on Qdrant.",
@@ -1834,11 +1836,11 @@
       "vault_key_name": "QDRANT_API_KEY",
       "vault_key_required": false,
       "vault_key_desc": "Qdrant Cloud API key (optional for local Qdrant)",
-      "install_cmd": "uvx mcp-server-qdrant",
+      "install_cmd": "uvx mcp-server-qdrant==0.8.1",
       "mcp_server_key": "qdrant",
       "mcp_command": "uvx",
       "mcp_args": [
-        "mcp-server-qdrant"
+        "mcp-server-qdrant==0.8.1"
       ],
       "tags": [
         "database",
@@ -1852,7 +1854,7 @@
       "name": "Chroma Local Vector DB MCP",
       "category": "database_data",
       "kind": "stdio",
-      "version": "v0.2.3",
+      "version": "v0.2.6",
       "repo_url": "https://github.com/chroma-core/chroma-mcp",
       "schema_tokens": 1800,
       "summary": "Official ChromaDB server for local vector embeddings, document collections, and RAG.",
@@ -1881,11 +1883,11 @@
       "vault_key_name": "",
       "vault_key_required": false,
       "vault_key_desc": "",
-      "install_cmd": "uvx chroma-mcp",
+      "install_cmd": "uvx chroma-mcp==0.2.6",
       "mcp_server_key": "chroma",
       "mcp_command": "uvx",
       "mcp_args": [
-        "chroma-mcp"
+        "chroma-mcp==0.2.6"
       ],
       "tags": [
         "database",
@@ -1899,7 +1901,7 @@
       "name": "Prisma Official ORM MCP",
       "category": "database_data",
       "kind": "stdio",
-      "version": "v6.5.0",
+      "version": "v8.0.0-rc.34",
       "repo_url": "https://github.com/prisma/prisma",
       "schema_tokens": 1900,
       "summary": "Manages Prisma schemas, migrations, Prisma Postgres instances, and Studio helpers.",
@@ -1928,12 +1930,12 @@
       "vault_key_name": "",
       "vault_key_required": false,
       "vault_key_desc": "",
-      "install_cmd": "npx -y prisma mcp",
+      "install_cmd": "npx -y prisma@8.0.0-rc.34 mcp",
       "mcp_server_key": "prisma",
       "mcp_command": "npx",
       "mcp_args": [
         "-y",
-        "prisma",
+        "prisma@8.0.0-rc.34",
         "mcp"
       ],
       "tags": [
@@ -1977,12 +1979,12 @@
       "vault_key_name": "CLOUDFLARE_API_TOKEN",
       "vault_key_required": true,
       "vault_key_desc": "Cloudflare API Token",
-      "install_cmd": "npx -y @cloudflare/mcp-server-cloudflare",
+      "install_cmd": "npx -y @cloudflare/mcp-server-cloudflare@0.2.0",
       "mcp_server_key": "cloudflare",
       "mcp_command": "npx",
       "mcp_args": [
         "-y",
-        "@cloudflare/mcp-server-cloudflare"
+        "@cloudflare/mcp-server-cloudflare@0.2.0"
       ],
       "tags": [
         "cloud_devops",
@@ -2185,7 +2187,7 @@
       "name": "Google Cloud Run Official MCP",
       "category": "cloud_devops",
       "kind": "stdio",
-      "version": "v0.2.1",
+      "version": "v1.12.0",
       "repo_url": "https://github.com/GoogleCloudPlatform/cloud-run-mcp",
       "schema_tokens": 1800,
       "summary": "Deploys container services and inspects Google Cloud Run revisions and logs.",
@@ -2214,12 +2216,12 @@
       "vault_key_name": "",
       "vault_key_required": false,
       "vault_key_desc": "",
-      "install_cmd": "npx -y @google-cloud/cloud-run-mcp",
+      "install_cmd": "npx -y @google-cloud/cloud-run-mcp@1.12.0",
       "mcp_server_key": "gcloud-run",
       "mcp_command": "npx",
       "mcp_args": [
         "-y",
-        "@google-cloud/cloud-run-mcp"
+        "@google-cloud/cloud-run-mcp@1.12.0"
       ],
       "tags": [
         "cloud_devops",
@@ -2232,7 +2234,7 @@
       "name": "Docker Containers & Compose MCP",
       "category": "cloud_devops",
       "kind": "stdio",
-      "version": "v0.3.2",
+      "version": "v0.3.0",
       "repo_url": "https://github.com/ckreiling/mcp-server-docker",
       "schema_tokens": 2100,
       "summary": "Inspects local Docker containers, Compose stacks, image layers, networks, and logs.",
@@ -2261,11 +2263,11 @@
       "vault_key_name": "",
       "vault_key_required": false,
       "vault_key_desc": "",
-      "install_cmd": "uvx mcp-server-docker",
+      "install_cmd": "uvx mcp-server-docker==0.3.0",
       "mcp_server_key": "docker",
       "mcp_command": "uvx",
       "mcp_args": [
-        "mcp-server-docker"
+        "mcp-server-docker==0.3.0"
       ],
       "tags": [
         "cloud_devops",
@@ -2279,7 +2281,7 @@
       "name": "Kubernetes Cluster MCP",
       "category": "cloud_devops",
       "kind": "stdio",
-      "version": "v0.2.8",
+      "version": "v4.2.3",
       "repo_url": "https://github.com/Flux159/mcp-server-kubernetes",
       "schema_tokens": 2700,
       "summary": "Inspects Kubernetes pods, deployments, events, Helm releases, and container logs.",
@@ -2308,12 +2310,12 @@
       "vault_key_name": "",
       "vault_key_required": false,
       "vault_key_desc": "",
-      "install_cmd": "npx -y mcp-server-kubernetes",
+      "install_cmd": "npx -y mcp-server-kubernetes@4.2.3",
       "mcp_server_key": "kubernetes",
       "mcp_command": "npx",
       "mcp_args": [
         "-y",
-        "mcp-server-kubernetes"
+        "mcp-server-kubernetes@4.2.3"
       ],
       "tags": [
         "cloud_devops",
@@ -2326,7 +2328,7 @@
       "name": "Railway Official Cloud MCP",
       "category": "cloud_devops",
       "kind": "stdio",
-      "version": "v0.1.5",
+      "version": "v0.1.12",
       "repo_url": "https://github.com/railwayapp/railway-mcp-server",
       "schema_tokens": 2200,
       "summary": "Manages Railway services, deployments, environment variables, and build logs.",
@@ -2355,12 +2357,12 @@
       "vault_key_name": "RAILWAY_API_TOKEN",
       "vault_key_required": false,
       "vault_key_desc": "Railway API Token (optional if logged in via Railway CLI)",
-      "install_cmd": "npx -y @railway/mcp-server",
+      "install_cmd": "npx -y @railway/mcp-server@0.1.12",
       "mcp_server_key": "railway",
       "mcp_command": "npx",
       "mcp_args": [
         "-y",
-        "@railway/mcp-server"
+        "@railway/mcp-server@0.1.12"
       ],
       "tags": [
         "cloud_devops",
@@ -2373,7 +2375,7 @@
       "name": "Netlify Official MCP",
       "category": "cloud_devops",
       "kind": "stdio",
-      "version": "v0.2.0",
+      "version": "v1.22.1",
       "repo_url": "https://github.com/netlify/netlify-mcp",
       "schema_tokens": 2300,
       "summary": "Deploys frontend sites, Edge Functions, environment configs, and previews on Netlify.",
@@ -2402,12 +2404,12 @@
       "vault_key_name": "NETLIFY_PERSONAL_ACCESS_TOKEN",
       "vault_key_required": false,
       "vault_key_desc": "Netlify Personal Access Token (optional if authenticated via Netlify CLI)",
-      "install_cmd": "npx -y @netlify/mcp",
+      "install_cmd": "npx -y @netlify/mcp@1.22.1",
       "mcp_server_key": "netlify",
       "mcp_command": "npx",
       "mcp_args": [
         "-y",
-        "@netlify/mcp"
+        "@netlify/mcp@1.22.1"
       ],
       "tags": [
         "cloud_devops",
@@ -2420,7 +2422,7 @@
       "name": "Godot Engine MCP",
       "category": "game_3d",
       "kind": "stdio",
-      "version": "v0.3.0",
+      "version": "v0.1.1",
       "repo_url": "https://github.com/Coding-Solo/godot-mcp",
       "schema_tokens": 2400,
       "summary": "Launches Godot 4 projects, inspects scene trees (.tscn), edits nodes, and reads debug output.",
@@ -2449,12 +2451,12 @@
       "vault_key_name": "",
       "vault_key_required": false,
       "vault_key_desc": "",
-      "install_cmd": "npx -y @coding-solo/godot-mcp",
+      "install_cmd": "npx -y @coding-solo/godot-mcp@0.1.1",
       "mcp_server_key": "godot",
       "mcp_command": "npx",
       "mcp_args": [
         "-y",
-        "@coding-solo/godot-mcp"
+        "@coding-solo/godot-mcp@0.1.1"
       ],
       "tags": [
         "godot:modeling_3d",
@@ -2515,7 +2517,7 @@
       "name": "Sketchfab 3D Asset Search MCP",
       "category": "game_3d",
       "kind": "stdio",
-      "version": "v0.1.5",
+      "version": "v1.0.10",
       "repo_url": "https://github.com/gregkop/sketchfab-mcp",
       "schema_tokens": 1400,
       "summary": "Searches downloadable CC-licensed glTF/GLB 3D models on Sketchfab and fetches archives.",
@@ -2544,12 +2546,12 @@
       "vault_key_name": "SKETCHFAB_API_KEY",
       "vault_key_required": true,
       "vault_key_desc": "Sketchfab API Token",
-      "install_cmd": "npx -y sketchfab-mcp-server",
+      "install_cmd": "npx -y sketchfab-mcp-server@1.0.10",
       "mcp_server_key": "sketchfab",
       "mcp_command": "npx",
       "mcp_args": [
         "-y",
-        "sketchfab-mcp-server"
+        "sketchfab-mcp-server@1.0.10"
       ],
       "tags": [
         "modeling_3d",
@@ -2610,7 +2612,7 @@
       "name": "FFmpeg Audio & Video MCP",
       "category": "game_3d",
       "kind": "stdio",
-      "version": "v0.2.0",
+      "version": "v0.1.6",
       "repo_url": "https://github.com/video-creator/ffmpeg-mcp",
       "schema_tokens": 1600,
       "summary": "Converts, trims, normalizes, and compresses game audio (.ogg/.wav) and video clips locally.",
@@ -2639,11 +2641,11 @@
       "vault_key_name": "",
       "vault_key_required": false,
       "vault_key_desc": "",
-      "install_cmd": "uvx mcp-ffmpeg",
+      "install_cmd": "uvx mcp-ffmpeg==0.1.6",
       "mcp_server_key": "ffmpeg-media",
       "mcp_command": "uvx",
       "mcp_args": [
-        "mcp-ffmpeg"
+        "mcp-ffmpeg==0.1.6"
       ],
       "tags": [
         "audio_sfx",
@@ -2705,7 +2707,7 @@
       "name": "Framelink Figma Layout MCP",
       "category": "design_ui",
       "kind": "stdio",
-      "version": "v0.2.2",
+      "version": "v0.13.2",
       "repo_url": "https://github.com/GLips/Figma-Context-MCP",
       "schema_tokens": 1700,
       "summary": "Extracts clean, compressed auto-layout, color, and typography specs from Figma links.",
@@ -2734,12 +2736,12 @@
       "vault_key_name": "FIGMA_API_KEY",
       "vault_key_required": true,
       "vault_key_desc": "Figma Personal Access Token (figd_...)",
-      "install_cmd": "npx -y figma-developer-mcp --stdio",
+      "install_cmd": "npx -y figma-developer-mcp@0.13.2 --stdio",
       "mcp_server_key": "figma-context",
       "mcp_command": "npx",
       "mcp_args": [
         "-y",
-        "figma-developer-mcp",
+        "figma-developer-mcp@0.13.2",
         "--stdio"
       ],
       "tags": [
@@ -2753,7 +2755,7 @@
       "name": "shadcn/ui Registry MCP",
       "category": "design_ui",
       "kind": "stdio",
-      "version": "v1.1.0",
+      "version": "v3.0.0",
       "repo_url": "https://github.com/Jpisnice/shadcn-ui-mcp-server",
       "schema_tokens": 1500,
       "summary": "Fetches current shadcn/ui v4 component source code, blocks, and Radix demos.",
@@ -2782,12 +2784,12 @@
       "vault_key_name": "GITHUB_PERSONAL_ACCESS_TOKEN",
       "vault_key_required": false,
       "vault_key_desc": "GitHub Token (optional, avoids GitHub raw rate limits)",
-      "install_cmd": "npx -y @jpisnice/shadcn-ui-mcp-server",
+      "install_cmd": "npx -y @jpisnice/shadcn-ui-mcp-server@3.0.0",
       "mcp_server_key": "shadcn-ui",
       "mcp_command": "npx",
       "mcp_args": [
         "-y",
-        "@jpisnice/shadcn-ui-mcp-server"
+        "@jpisnice/shadcn-ui-mcp-server@3.0.0"
       ],
       "tags": [
         "design_ui",
@@ -2848,7 +2850,7 @@
       "name": "Storybook Component MCP",
       "category": "design_ui",
       "kind": "stdio",
-      "version": "v0.2.0",
+      "version": "v0.5.1",
       "repo_url": "https://github.com/mcpland/storybook-mcp",
       "schema_tokens": 1400,
       "summary": "Reads your project's live Storybook stories, component props, and design tokens.",
@@ -2877,12 +2879,12 @@
       "vault_key_name": "",
       "vault_key_required": false,
       "vault_key_desc": "",
-      "install_cmd": "npx -y storybook-mcp",
+      "install_cmd": "npx -y storybook-mcp@0.5.1",
       "mcp_server_key": "storybook",
       "mcp_command": "npx",
       "mcp_args": [
         "-y",
-        "storybook-mcp"
+        "storybook-mcp@0.5.1"
       ],
       "tags": [
         "design_ui",
@@ -2896,7 +2898,7 @@
       "name": "Mermaid Diagram Renderer MCP",
       "category": "design_ui",
       "kind": "stdio",
-      "version": "v0.2.3",
+      "version": "v0.3.0",
       "repo_url": "https://github.com/peng-shawn/mermaid-mcp-server",
       "schema_tokens": 1100,
       "summary": "Validates Mermaid syntax and exports architecture flowcharts and sequence diagrams to SVG/PNG.",
@@ -2925,12 +2927,12 @@
       "vault_key_name": "",
       "vault_key_required": false,
       "vault_key_desc": "",
-      "install_cmd": "npx -y @peng-shawn/mermaid-mcp-server",
+      "install_cmd": "npx -y @peng-shawn/mermaid-mcp-server@0.3.0",
       "mcp_server_key": "mermaid",
       "mcp_command": "npx",
       "mcp_args": [
         "-y",
-        "@peng-shawn/mermaid-mcp-server"
+        "@peng-shawn/mermaid-mcp-server@0.3.0"
       ],
       "tags": [
         "design_ui",
@@ -2944,7 +2946,7 @@
       "name": "Excalidraw Wireframe MCP",
       "category": "design_ui",
       "kind": "stdio",
-      "version": "v0.3.0",
+      "version": "v1.0.0",
       "repo_url": "https://github.com/yctimlin/mcp_excalidraw",
       "schema_tokens": 1700,
       "summary": "Creates editable .excalidraw wireframes, system sketches, and visual board layouts.",
@@ -2973,12 +2975,12 @@
       "vault_key_name": "",
       "vault_key_required": false,
       "vault_key_desc": "",
-      "install_cmd": "npx -y excalidraw-mcp",
+      "install_cmd": "npx -y excalidraw-mcp@1.0.0",
       "mcp_server_key": "excalidraw",
       "mcp_command": "npx",
       "mcp_args": [
         "-y",
-        "excalidraw-mcp"
+        "excalidraw-mcp@1.0.0"
       ],
       "tags": [
         "design_ui",
@@ -3040,7 +3042,7 @@
       "name": "Notion Official MCP",
       "category": "productivity_docs",
       "kind": "stdio",
-      "version": "v1.8.0",
+      "version": "v2.6.1",
       "repo_url": "https://github.com/makenotion/notion-mcp-server",
       "schema_tokens": 2700,
       "summary": "Searches, reads, and updates Notion pages, engineering specs, and databases.",
@@ -3069,12 +3071,12 @@
       "vault_key_name": "NOTION_TOKEN",
       "vault_key_required": true,
       "vault_key_desc": "Notion Internal Integration Secret (ntn_...)",
-      "install_cmd": "npx -y @notionhq/notion-mcp-server",
+      "install_cmd": "npx -y @notionhq/notion-mcp-server@2.6.1",
       "mcp_server_key": "notion",
       "mcp_command": "npx",
       "mcp_args": [
         "-y",
-        "@notionhq/notion-mcp-server"
+        "@notionhq/notion-mcp-server@2.6.1"
       ],
       "tags": [
         "notion:docs_search",
@@ -3087,7 +3089,7 @@
       "name": "Linear Issue Tracker MCP",
       "category": "productivity_docs",
       "kind": "stdio",
-      "version": "v0.3.0",
+      "version": "v0.1.0",
       "repo_url": "https://github.com/jerhadf/linear-mcp-server",
       "schema_tokens": 2000,
       "summary": "Reads and updates Linear issues, cycles, project milestones, and bug reports.",
@@ -3116,12 +3118,12 @@
       "vault_key_name": "LINEAR_API_KEY",
       "vault_key_required": true,
       "vault_key_desc": "Linear Personal API key (lin_api_...)",
-      "install_cmd": "npx -y linear-mcp-server",
+      "install_cmd": "npx -y linear-mcp-server@0.1.0",
       "mcp_server_key": "linear",
       "mcp_command": "npx",
       "mcp_args": [
         "-y",
-        "linear-mcp-server"
+        "linear-mcp-server@0.1.0"
       ],
       "tags": [
         "automation",
@@ -3134,7 +3136,7 @@
       "name": "Slack Workspace MCP",
       "category": "productivity_docs",
       "kind": "stdio",
-      "version": "v2025.2.0",
+      "version": "v2025.4.25",
       "repo_url": "https://github.com/modelcontextprotocol/servers",
       "schema_tokens": 2100,
       "summary": "Reads Slack channel discussions, incident threads, and posts engineering updates.",
@@ -3163,12 +3165,12 @@
       "vault_key_name": "SLACK_BOT_TOKEN",
       "vault_key_required": true,
       "vault_key_desc": "Slack Bot User OAuth Token (xoxb-...)",
-      "install_cmd": "npx -y @modelcontextprotocol/server-slack",
+      "install_cmd": "npx -y @modelcontextprotocol/server-slack@2025.4.25",
       "mcp_server_key": "slack",
       "mcp_command": "npx",
       "mcp_args": [
         "-y",
-        "@modelcontextprotocol/server-slack"
+        "@modelcontextprotocol/server-slack@2025.4.25"
       ],
       "tags": [
         "automation",
@@ -3181,7 +3183,7 @@
       "name": "Jira & Confluence MCP",
       "category": "productivity_docs",
       "kind": "stdio",
-      "version": "v0.10.0",
+      "version": "v0.24.7",
       "repo_url": "https://github.com/sooperset/mcp-atlassian",
       "schema_tokens": 3000,
       "summary": "Searches Confluence architecture docs and manages Jira issues, sprints, and transitions.",
@@ -3210,11 +3212,11 @@
       "vault_key_name": "JIRA_API_TOKEN",
       "vault_key_required": true,
       "vault_key_desc": "Atlassian API Token",
-      "install_cmd": "uvx mcp-atlassian",
+      "install_cmd": "uvx mcp-atlassian==0.24.7",
       "mcp_server_key": "atlassian",
       "mcp_command": "uvx",
       "mcp_args": [
-        "mcp-atlassian"
+        "mcp-atlassian==0.24.7"
       ],
       "tags": [
         "docs_search",
@@ -3227,7 +3229,7 @@
       "name": "Obsidian Local Vault MCP",
       "category": "productivity_docs",
       "kind": "stdio",
-      "version": "v0.3.2",
+      "version": "v1.0.0",
       "repo_url": "https://github.com/StevenStavrakis/mcp-obsidian",
       "schema_tokens": 1400,
       "summary": "Searches, reads, and links Markdown notes inside a local Obsidian vault with zero cloud keys.",
@@ -3256,12 +3258,12 @@
       "vault_key_name": "",
       "vault_key_required": false,
       "vault_key_desc": "",
-      "install_cmd": "npx -y mcp-obsidian",
+      "install_cmd": "npx -y mcp-obsidian@1.0.0",
       "mcp_server_key": "obsidian",
       "mcp_command": "npx",
       "mcp_args": [
         "-y",
-        "mcp-obsidian"
+        "mcp-obsidian@1.0.0"
       ],
       "tags": [
         "obsidian:docs_search",
@@ -3274,7 +3276,7 @@
       "name": "Todoist Task Manager MCP",
       "category": "productivity_docs",
       "kind": "stdio",
-      "version": "v0.1.9",
+      "version": "v0.1.0",
       "repo_url": "https://github.com/abhiz123/todoist-mcp-server",
       "schema_tokens": 1500,
       "summary": "Creates, filters, prioritizes, and completes personal tasks and checklists in Todoist.",
@@ -3303,12 +3305,12 @@
       "vault_key_name": "TODOIST_API_TOKEN",
       "vault_key_required": true,
       "vault_key_desc": "Todoist API Token",
-      "install_cmd": "npx -y @abhiz123/todoist-mcp-server",
+      "install_cmd": "npx -y @abhiz123/todoist-mcp-server@0.1.0",
       "mcp_server_key": "todoist",
       "mcp_command": "npx",
       "mcp_args": [
         "-y",
-        "@abhiz123/todoist-mcp-server"
+        "@abhiz123/todoist-mcp-server@0.1.0"
       ],
       "tags": [
         "automation",
@@ -3321,7 +3323,7 @@
       "name": "arXiv Research Papers MCP",
       "category": "productivity_docs",
       "kind": "stdio",
-      "version": "v0.2.6",
+      "version": "v0.8.2",
       "repo_url": "https://github.com/blazickjp/arxiv-mcp-server",
       "schema_tokens": 1300,
       "summary": "Searches arXiv preprints across CS, graphics, ML, and physics and reads paper full texts.",
@@ -3350,11 +3352,11 @@
       "vault_key_name": "",
       "vault_key_required": false,
       "vault_key_desc": "",
-      "install_cmd": "uvx arxiv-mcp-server",
+      "install_cmd": "uvx arxiv-mcp-server==0.8.2",
       "mcp_server_key": "arxiv",
       "mcp_command": "uvx",
       "mcp_args": [
-        "arxiv-mcp-server"
+        "arxiv-mcp-server==0.8.2"
       ],
       "tags": [
         "docs_search",
@@ -3367,7 +3369,7 @@
       "name": "Wikipedia Reference MCP",
       "category": "productivity_docs",
       "kind": "stdio",
-      "version": "v1.3.0",
+      "version": "v2.0.1",
       "repo_url": "https://github.com/Rudra-ravi/wikipedia-mcp",
       "schema_tokens": 1100,
       "summary": "Queries Wikipedia summaries, sections, and factual references without API keys.",
@@ -3396,11 +3398,11 @@
       "vault_key_name": "",
       "vault_key_required": false,
       "vault_key_desc": "",
-      "install_cmd": "uvx wikipedia-mcp",
+      "install_cmd": "uvx wikipedia-mcp==2.0.1",
       "mcp_server_key": "wikipedia",
       "mcp_command": "uvx",
       "mcp_args": [
-        "wikipedia-mcp"
+        "wikipedia-mcp==2.0.1"
       ],
       "tags": [
         "docs_search",
@@ -3413,7 +3415,7 @@
       "name": "Official Time & Timezone MCP",
       "category": "productivity_docs",
       "kind": "stdio",
-      "version": "v2025.3.0",
+      "version": "v2026.11.18",
       "repo_url": "https://github.com/modelcontextprotocol/servers",
       "schema_tokens": 750,
       "summary": "Provides exact current system time and IANA timezone conversions with tiny token cost.",
@@ -3442,11 +3444,11 @@
       "vault_key_name": "",
       "vault_key_required": false,
       "vault_key_desc": "",
-      "install_cmd": "uvx mcp-server-time",
+      "install_cmd": "uvx mcp-server-time==2026.11.18",
       "mcp_server_key": "time",
       "mcp_command": "uvx",
       "mcp_args": [
-        "mcp-server-time"
+        "mcp-server-time==2026.11.18"
       ],
       "tags": [
         "automation",
@@ -3459,7 +3461,7 @@
       "name": "Microsoft MarkItDown MCP",
       "category": "productivity_docs",
       "kind": "stdio",
-      "version": "v0.0.1a4",
+      "version": "v0.0.1a8",
       "repo_url": "https://github.com/microsoft/markitdown",
       "schema_tokens": 900,
       "summary": "Converts local PDF, DOCX, PPTX, XLSX, and HTML files into clean low-token Markdown.",
@@ -3488,11 +3490,11 @@
       "vault_key_name": "",
       "vault_key_required": false,
       "vault_key_desc": "",
-      "install_cmd": "uvx markitdown-mcp",
+      "install_cmd": "uvx markitdown-mcp==0.0.1a8",
       "mcp_server_key": "markitdown",
       "mcp_command": "uvx",
       "mcp_args": [
-        "markitdown-mcp"
+        "markitdown-mcp==0.0.1a8"
       ],
       "tags": [
         "docs_search",
@@ -3553,7 +3555,7 @@
       "name": "Semgrep Official SAST Security MCP",
       "category": "security_qa",
       "kind": "stdio",
-      "version": "v0.3.1",
+      "version": "v0.9.0",
       "repo_url": "https://github.com/semgrep/mcp",
       "schema_tokens": 1600,
       "summary": "Scans source code for OWASP vulnerabilities, injection flaws, and insecure patterns.",
@@ -3582,11 +3584,11 @@
       "vault_key_name": "",
       "vault_key_required": false,
       "vault_key_desc": "",
-      "install_cmd": "uvx semgrep-mcp",
+      "install_cmd": "uvx semgrep-mcp==0.9.0",
       "mcp_server_key": "semgrep",
       "mcp_command": "uvx",
       "mcp_args": [
-        "semgrep-mcp"
+        "semgrep-mcp==0.9.0"
       ],
       "tags": [
         "security",
@@ -3679,10 +3681,12 @@
       "vault_key_name": "",
       "vault_key_required": false,
       "vault_key_desc": "",
-      "install_cmd": "uvx osv-mcp",
+      "install_cmd": "uvx --from git+https://github.com/EdenYavin/OSV-MCP osv-mcp",
       "mcp_server_key": "osv-scanner",
       "mcp_command": "uvx",
       "mcp_args": [
+        "--from",
+        "git+https://github.com/EdenYavin/OSV-MCP",
         "osv-mcp"
       ],
       "tags": [
@@ -3697,7 +3701,7 @@
       "name": "Grafana Official Observability MCP",
       "category": "security_qa",
       "kind": "stdio",
-      "version": "v0.3.0",
+      "version": "v2.2.0",
       "repo_url": "https://github.com/grafana/mcp-grafana",
       "schema_tokens": 2600,
       "summary": "Queries Grafana dashboards, Prometheus metrics, Loki logs, and firing alert rules.",
@@ -3726,11 +3730,11 @@
       "vault_key_name": "GRAFANA_API_KEY",
       "vault_key_required": true,
       "vault_key_desc": "Grafana Service Account Token (glsa_...)",
-      "install_cmd": "uvx mcp-grafana",
+      "install_cmd": "uvx mcp-grafana==2.2.0",
       "mcp_server_key": "grafana",
       "mcp_command": "uvx",
       "mcp_args": [
-        "mcp-grafana"
+        "mcp-grafana==2.2.0"
       ],
       "tags": [
         "cloud_devops",
@@ -3743,7 +3747,7 @@
       "name": "Datadog APM & Logs MCP",
       "category": "security_qa",
       "kind": "stdio",
-      "version": "v1.3.0",
+      "version": "v1.8.0",
       "repo_url": "https://github.com/winor30/mcp-server-datadog",
       "schema_tokens": 2300,
       "summary": "Searches Datadog logs, APM traces, monitors, incidents, and service metrics.",
@@ -3772,12 +3776,12 @@
       "vault_key_name": "DATADOG_API_KEY",
       "vault_key_required": true,
       "vault_key_desc": "Datadog API Key",
-      "install_cmd": "npx -y @winor30/mcp-server-datadog",
+      "install_cmd": "npx -y @winor30/mcp-server-datadog@1.8.0",
       "mcp_server_key": "datadog",
       "mcp_command": "npx",
       "mcp_args": [
         "-y",
-        "@winor30/mcp-server-datadog"
+        "@winor30/mcp-server-datadog@1.8.0"
       ],
       "tags": [
         "cloud_devops",
@@ -3790,7 +3794,7 @@
       "name": "Stripe Official Billing MCP",
       "category": "security_qa",
       "kind": "stdio",
-      "version": "v0.2.4",
+      "version": "v0.3.4",
       "repo_url": "https://github.com/stripe/agent-toolkit",
       "schema_tokens": 2500,
       "summary": "Official Stripe toolkit for testing products, prices, checkout sessions, and webhooks.",
@@ -3819,12 +3823,12 @@
       "vault_key_name": "STRIPE_SECRET_KEY",
       "vault_key_required": true,
       "vault_key_desc": "Stripe Secret / Restricted API Key (rk_test_... recommended)",
-      "install_cmd": "npx -y @stripe/mcp --tools=all",
+      "install_cmd": "npx -y @stripe/mcp@0.3.4 --tools=all",
       "mcp_server_key": "stripe",
       "mcp_command": "npx",
       "mcp_args": [
         "-y",
-        "@stripe/mcp",
+        "@stripe/mcp@0.3.4",
         "--tools=all"
       ],
       "tags": [
@@ -3838,7 +3842,7 @@
       "name": "Vitest Structured Runner MCP",
       "category": "security_qa",
       "kind": "stdio",
-      "version": "v0.3.2",
+      "version": "v0.6.0",
       "repo_url": "https://github.com/djankies/vitest-mcp",
       "schema_tokens": 1400,
       "summary": "Runs targeted Vitest suites and returns compact JSON assertion failures and coverage.",
@@ -3867,12 +3871,12 @@
       "vault_key_name": "",
       "vault_key_required": false,
       "vault_key_desc": "",
-      "install_cmd": "npx -y @djankies/vitest-mcp",
+      "install_cmd": "npx -y @djankies/vitest-mcp@0.6.0",
       "mcp_server_key": "vitest",
       "mcp_command": "npx",
       "mcp_args": [
         "-y",
-        "@djankies/vitest-mcp"
+        "@djankies/vitest-mcp@0.6.0"
       ],
       "tags": [
         "testing_qa",
@@ -3886,7 +3890,7 @@
       "name": "Sequential Thinking MCP",
       "category": "ai_memory",
       "kind": "stdio",
-      "version": "v2025.3.0",
+      "version": "v2.2.0",
       "repo_url": "https://github.com/modelcontextprotocol/servers",
       "schema_tokens": 850,
       "summary": "Official structured step-by-step reasoning, hypothesis branching, and plan revision tool.",
@@ -3915,12 +3919,12 @@
       "vault_key_name": "",
       "vault_key_required": false,
       "vault_key_desc": "",
-      "install_cmd": "npx -y @modelcontextprotocol/server-sequential-thinking",
+      "install_cmd": "npx -y @modelcontextprotocol/server-sequential-thinking@2.2.0",
       "mcp_server_key": "sequential-thinking",
       "mcp_command": "npx",
       "mcp_args": [
         "-y",
-        "@modelcontextprotocol/server-sequential-thinking"
+        "@modelcontextprotocol/server-sequential-thinking@2.2.0"
       ],
       "tags": [
         "coding_lsp",
@@ -3933,7 +3937,7 @@
       "name": "Official Knowledge Graph Memory",
       "category": "ai_memory",
       "kind": "stdio",
-      "version": "v2025.3.0",
+      "version": "v2.2.1",
       "repo_url": "https://github.com/modelcontextprotocol/servers",
       "schema_tokens": 1300,
       "summary": "Stores persistent entities, relations, and project decisions in a local JSON knowledge graph.",
@@ -3962,12 +3966,12 @@
       "vault_key_name": "",
       "vault_key_required": false,
       "vault_key_desc": "",
-      "install_cmd": "npx -y @modelcontextprotocol/server-memory",
+      "install_cmd": "npx -y @modelcontextprotocol/server-memory@2.2.1",
       "mcp_server_key": "memory",
       "mcp_command": "npx",
       "mcp_args": [
         "-y",
-        "@modelcontextprotocol/server-memory"
+        "@modelcontextprotocol/server-memory@2.2.1"
       ],
       "tags": [
         "docs_search",
@@ -3981,7 +3985,7 @@
       "name": "Basic Memory Markdown KB",
       "category": "ai_memory",
       "kind": "stdio",
-      "version": "v0.12.0",
+      "version": "v1.0.0",
       "repo_url": "https://github.com/basicmachines-co/basic-memory",
       "schema_tokens": 1700,
       "summary": "Builds a local, human-readable Markdown knowledge base synced with SQLite semantic search.",
@@ -4010,11 +4014,11 @@
       "vault_key_name": "",
       "vault_key_required": false,
       "vault_key_desc": "",
-      "install_cmd": "uvx basic-memory mcp",
+      "install_cmd": "uvx basic-memory==1.0.0 mcp",
       "mcp_server_key": "basic-memory",
       "mcp_command": "uvx",
       "mcp_args": [
-        "basic-memory",
+        "basic-memory==1.0.0",
         "mcp"
       ],
       "tags": [
@@ -4058,11 +4062,11 @@
       "vault_key_name": "MEM0_API_KEY",
       "vault_key_required": true,
       "vault_key_desc": "Mem0 Cloud API key (m0-...)",
-      "install_cmd": "uvx mem0-mcp",
+      "install_cmd": "uvx mem0-mcp-server==0.2.1",
       "mcp_server_key": "mem0",
       "mcp_command": "uvx",
       "mcp_args": [
-        "mem0-mcp"
+        "mem0-mcp-server==0.2.1"
       ],
       "tags": [
         "docs_search",

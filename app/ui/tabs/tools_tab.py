@@ -38,8 +38,9 @@ from ...catalog import (
     tool_kind_label,
 )
 from ...i18n import tr
+from ...mcp_config import unique_project_key
 from ...oauth import supports_oauth
-from ...processes import probe_tool_health, query_gpu_vram, scan_live_process_locations
+from ...processes import query_gpu_vram, resolve_disk_location
 from ...tokens import compute_token_breakdown, fmt_tokens
 from ..dialogs.tool_info import ToolInfoDialog
 from ..icons import icon_color, make_icon
@@ -230,7 +231,7 @@ class ToolsTabMixin:
                 self._refresh_table()
             return
         p_path = pathlib.Path(folder)
-        proj_key = p_path.name
+        proj_key = unique_project_key(p_path, self.projects_map)
         self.projects_map[proj_key] = str(p_path)
         if assign_tool is not None and assign_tool.scope_selectable:
             assign_tool.project_scope = proj_key
@@ -566,8 +567,9 @@ class ToolsTabMixin:
             self.table.setCellWidget(r_idx, 4, act_w)
 
         active_tok, saved_tok = self._calculate_token_economy()
+        tok_key = "token_summary" if self.runtime_started else "token_summary_stopped"
         self.token_summary_lbl.setText(
-            tr(self.lang, "token_summary", act=fmt_tokens(active_tok), sav=fmt_tokens(saved_tok))
+            tr(self.lang, tok_key, act=fmt_tokens(active_tok), sav=fmt_tokens(saved_tok))
         )
         self.table.resizeColumnToContents(1)
         self.table.resizeColumnToContents(2)
@@ -706,20 +708,25 @@ class ToolsTabMixin:
             if tool.id in ("unity_pipeline", "renderdoc_mcp"):
                 tool.param_value = proj_dir
         self._save_state()
-        live_map = scan_live_process_locations(lang=self.lang)
-        missing_keys = self._missing_required_vault_keys()
-        _, h_state, ping_str, ms, _, loc_det = probe_tool_health(
-            tool,
-            len(self.active_skills),
-            self.projects_map,
-            live_map,
-            lang=self.lang,
-            missing_required_keys=missing_keys,
-        )
-        tool.health_state = h_state
-        tool.last_ping = ping_str
-        tool.last_latency_ms = ms
+        is_rt_running = bool(self.runtime_started and self._runtime_state == "running")
+        loc_det = resolve_disk_location(tool, self.projects_map, self._latest_live_map, lang=self.lang)
         tool.live_location_detail = loc_det
+        if not tool.enabled:
+            tool.health_state = "off"
+            tool.last_ping = tr(self.lang, "st_disabled")
+            tool.last_latency_ms = -1
+        elif self._tool_blocked_by_locked_vault(tool):
+            tool.health_state = "warn"
+            tool.last_ping = tr(self.lang, "st_vault_locked")
+            tool.last_latency_ms = -1
+        elif not is_rt_running:
+            tool.health_state = "idle"
+            tool.last_ping = tr(self.lang, "st_stopped_standby")
+            tool.last_latency_ms = -1
+        elif self._tool_needs_vault_key(tool):
+            tool.health_state = "warn"
+            tool.last_ping = tr(self.lang, "st_missing_key")
+            tool.last_latency_ms = -1
         scope_disp = self._format_scope_display(tool)
         self.logs.add("INFO", tool.name, tr(self.lang, "log_scope_changed", scope=scope_disp), loc_det)
         self._set_config_status(tr(self.lang, "msg_scope_changed", name=tool.name, scope=scope_disp))
@@ -727,5 +734,5 @@ class ToolsTabMixin:
         self._refresh_logs_tab()
         self._sync_live_environment_async(
             target_tools=[tool],
-            restart_running=(tool.id == "serena" and tool.enabled),
+            restart_running=(is_rt_running and tool.id == "serena" and tool.enabled),
         )

@@ -452,14 +452,21 @@ def detect_background_heal_plans(
             has_agy_mirror = (agy_root / t.id).is_dir() or (
                 agy_root.is_dir() and any(c.name.startswith(f"{t.id}__") for c in agy_root.iterdir() if c.is_dir())
             )
-            if (not act_dir.is_dir() and dis_dir.is_dir()) or (act_dir.is_dir() and t.clients.get("AGY", False) and not has_agy_mirror):
+            has_any_copy = act_dir.is_dir() or dis_dir.is_dir()
+            want_agy = bool(t.clients.get("AGY", False))
+            want_agents = bool(
+                t.clients.get("CDX", False) or t.clients.get("CLD", False) or t.clients.get("CUR", False)
+            )
+            agy_drift = (want_agy and not has_agy_mirror) or (not want_agy and has_agy_mirror)
+            agents_drift = (want_agents and not act_dir.is_dir()) or (not want_agents and act_dir.is_dir())
+            if has_any_copy and (agy_drift or agents_drift):
                 _add(
                     HealPlan(
                         action_id="sync_skills_mirror",
                         tool_id=t.id,
                         tool_name=t.name,
                         label="Skill Senkronla" if is_tr else "Sync Skills",
-                        detail=f"Reconcile {t.name} skill and Antigravity mirror",
+                        detail=f"Reconcile {t.name} skill and per-client isolation",
                         safe_auto=True,
                     )
                 )
@@ -474,6 +481,7 @@ def execute_background_heal_plan(
     projects_map: dict[str, str],
     vault: WindowsDpapiVault,
     lang: str = "en",
+    runtime_active: bool = True,
 ) -> tuple[bool, str, str]:
     """Execute a non-UI HealPlan on a worker thread. Returns (ok, short_summary, raw_detail)."""
     is_tr = lang == "tr"
@@ -484,6 +492,23 @@ def execute_background_heal_plan(
         if plan.action_id == "restart_http_server":
             if tool is None:
                 return False, ("Hedef araç bulunamadı." if is_tr else "Target tool not found."), plan.tool_id
+            if not runtime_active:
+                enforce_tool_runtime_state(
+                    tool,
+                    projects_map,
+                    allow_stop=True,
+                    allow_start=False,
+                    restart_if_running=False,
+                    lang=lang,
+                )
+                cfg_msgs = sync_mcp_json_clients(tools, vault, projects_map, lang=lang, runtime_active=False)
+                msg = (
+                    f"{tool.name} sıfırlandı (Araçları Başlat dediğinizde temiz çalışacak)."
+                    if is_tr
+                    else f"{tool.name} reset cleanly (will launch when you click Start Tools)."
+                )
+                return True, msg, "\n".join([msg, *cfg_msgs])
+
             note = enforce_tool_runtime_state(
                 tool,
                 projects_map,
@@ -494,7 +519,7 @@ def execute_background_heal_plan(
             )
             if tool.port:
                 wait_for_started_ports([int(tool.port)], timeout=3.0)
-            cfg_msgs = sync_mcp_json_clients(tools, vault, projects_map, lang=lang)
+            cfg_msgs = sync_mcp_json_clients(tools, vault, projects_map, lang=lang, runtime_active=True)
             if note:
                 msg = f"{tool.name}: {note.strip()}"
                 return True, msg, "\n".join([msg, *cfg_msgs])
@@ -510,7 +535,7 @@ def execute_background_heal_plan(
                 return False, ("Geçersiz port." if is_tr else "Invalid port."), ""
             ok, msg = kill_zombie_port_process(plan.port, lang=lang)
             extra = ""
-            if ok and tool is not None and tool.enabled and tool.id in ("serena", "unity_mcp"):
+            if runtime_active and ok and tool is not None and tool.enabled and tool.id in ("serena", "unity_mcp"):
                 time.sleep(0.4)
                 extra = enforce_tool_runtime_state(tool, projects_map, allow_stop=False, allow_start=True, lang=lang)
             full_msg = f"{msg}{extra}"
@@ -530,7 +555,7 @@ def execute_background_heal_plan(
                     raw_parts.append(i_raw or i_msg)
                     if not ok_i:
                         return False, i_msg, "\n".join(raw_parts)
-                ok_s, s_msg = sync_caveman_on_disk(tool, lang=lang)
+                ok_s, s_msg = sync_caveman_on_disk(tool, lang=lang, runtime_active=runtime_active)
                 raw_parts.append(s_msg)
                 return ok_s, s_msg, "\n".join(raw_parts)
 
@@ -547,6 +572,8 @@ def execute_background_heal_plan(
                     tool.project_scope,
                     projects_map,
                     lang=lang,
+                    clients=dict(tool.clients),
+                    runtime_active=runtime_active,
                 )
                 raw_parts.append(s_msg)
                 return ok_s, s_msg, "\n".join(raw_parts)
@@ -561,7 +588,7 @@ def execute_background_heal_plan(
                 raw_parts.append(i_raw or i_msg)
                 if not ok_i:
                     return False, i_msg, "\n".join(raw_parts)
-            s_msgs = sync_custom_skill_tools_on_disk([tool], lang=lang)
+            s_msgs = sync_custom_skill_tools_on_disk([tool], lang=lang, runtime_active=runtime_active)
             summary = " | ".join(s_msgs) if s_msgs else (
                 f"{tool.name} skill senkronizasyonu tamamlandı." if is_tr else f"Synced {tool.name} skill mirror."
             )
@@ -578,14 +605,16 @@ def execute_background_heal_plan(
                     bs_tool.project_scope,
                     projects_map,
                     lang=lang,
+                    clients=dict(bs_tool.clients),
+                    runtime_active=runtime_active,
                 )
                 raw_parts.append(b_msg)
             cv_tool = by_id.get("caveman")
             if cv_tool:
-                _ok, c_msg = sync_caveman_on_disk(cv_tool, lang=lang)
+                _ok, c_msg = sync_caveman_on_disk(cv_tool, lang=lang, runtime_active=runtime_active)
                 raw_parts.append(c_msg)
-            raw_parts.extend(sync_custom_skill_tools_on_disk(tools, lang=lang))
-            cfg_msgs = sync_mcp_json_clients(tools, vault, projects_map, lang=lang)
+            raw_parts.extend(sync_custom_skill_tools_on_disk(tools, lang=lang, runtime_active=runtime_active))
+            cfg_msgs = sync_mcp_json_clients(tools, vault, projects_map, lang=lang, runtime_active=runtime_active)
             raw_parts.extend(cfg_msgs)
             summary = " | ".join(cfg_msgs) if cfg_msgs else (
                 "İstemci config dosyaları yenilendi." if is_tr else "AI client configs resynced."
@@ -597,8 +626,8 @@ def execute_background_heal_plan(
                 return False, ("Kurulacak araç bulunamadı." if is_tr else "Tool to install not found."), plan.tool_id
             ok_i, _ver, i_msg, i_raw = install_library_tool(tool, active_skills, lang=lang)
             if ok_i:
-                sync_mcp_json_clients(tools, vault, projects_map, lang=lang)
-                sync_custom_skill_tools_on_disk([tool], lang=lang)
+                sync_mcp_json_clients(tools, vault, projects_map, lang=lang, runtime_active=runtime_active)
+                sync_custom_skill_tools_on_disk([tool], lang=lang, runtime_active=runtime_active)
             return ok_i, i_msg, i_raw or i_msg
 
         if plan.action_id == "launch_host_app":

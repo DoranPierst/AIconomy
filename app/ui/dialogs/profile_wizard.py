@@ -36,6 +36,7 @@ from ...catalog import (
     tag_sub_label,
 )
 from ...i18n import tr
+from ...oauth import supports_oauth
 from ...tokens import CONTEXT_WINDOW_TOKENS, compute_token_breakdown, fmt_tokens
 from ..theme import app_chip_qss, tag_pill_qss, wizard_chip_qss
 
@@ -57,7 +58,10 @@ class ProfileWizardDialog(QDialog):
         self.missing_keys: set[str] = {
             t.vault_key_name
             for t in parent.tools
-            if t.vault_key_required and t.vault_key_name and not parent.vault.has_secret(t.vault_key_name)
+            if not (getattr(t, "auth_mode", "key") == "oauth" and supports_oauth(t.id))
+            and t.vault_key_required
+            and t.vault_key_name
+            and not parent.vault.has_secret(t.vault_key_name)
         }
 
         self.selected_tags: list[str] = []
@@ -601,7 +605,10 @@ class ProfileWizardDialog(QDialog):
                 r_lay.addLayout(info_col, stretch=1)
 
                 has_missing = bool(
-                    t.vault_key_required and t.vault_key_name and t.vault_key_name in self.missing_keys
+                    not (getattr(t, "auth_mode", "key") == "oauth" and supports_oauth(t.id))
+                    and t.vault_key_required
+                    and t.vault_key_name
+                    and t.vault_key_name in self.missing_keys
                 )
                 if has_missing:
                     k_lbl = QLabel(tr(self.lang, "st_missing_key"))

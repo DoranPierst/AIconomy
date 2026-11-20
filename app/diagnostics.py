@@ -14,13 +14,69 @@ from typing import Any
 import urllib.error
 import urllib.request
 
+import psutil
+
 from .catalog import ToolSpec
 from .host_apps import NO_WINDOW
 from .mcp_config import build_effective_stdio_spec, is_tool_credential_ready
+from .oauth import get_oauth_spec, supports_oauth
 from .security import build_isolated_child_env
 from .storage import WindowsDpapiVault
 from .tokens import estimate_tokens_from_tools_payload
 from .updater import get_current_app_version
+
+
+def _terminate_proc_tree(proc: subprocess.Popen[Any], wait_timeout: float = 1.2) -> None:
+    """Terminate a spawned subprocess AND all recursive child processes (prevents orphaned node.exe/uvx.exe on Windows)."""
+    children: list[psutil.Process] = []
+    try:
+        parent = psutil.Process(proc.pid)
+        children = parent.children(recursive=True)
+    except (psutil.NoSuchProcess, psutil.AccessDenied):
+        children = []
+
+    for ch in children:
+        try:
+            ch.terminate()
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            pass
+    try:
+        proc.terminate()
+    except Exception:
+        pass
+
+    try:
+        proc.wait(timeout=wait_timeout)
+    except Exception:
+        try:
+            proc.kill()
+        except Exception:
+            pass
+
+    if children:
+        _gone, alive = psutil.wait_procs(children, timeout=0.8)
+        for ch in alive:
+            try:
+                ch.kill()
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                pass
+
+
+def _is_custom_skill_tool(tool: ToolSpec) -> bool:
+    return bool(
+        tool.id not in ("blender_skills", "caveman")
+        and not tool.mcp_server_key
+        and (tool.kind in ("skill_pack", "rule") or (tool.install_cmd or "").strip().startswith("git clone "))
+    )
+
+
+def _has_agy_skill_mirror_on_disk(home: pathlib.Path, tool_id: str) -> bool:
+    agy_root = home / ".gemini" / "config" / "skills"
+    if not agy_root.is_dir():
+        return False
+    if (agy_root / tool_id / "SKILL.md").is_file() or (agy_root / tool_id).is_dir():
+        return True
+    return any(c.is_dir() and c.name.startswith(f"{tool_id}__") for c in agy_root.iterdir())
 
 
 def test_tool_connection_e2e(
@@ -187,6 +243,23 @@ def test_tool_connection_e2e(
         lbl = ("Paket doğrulandı" if ok else "Paket eksik") if is_tr else ("Package verified" if ok else "Package missing")
         return ok, ms, lbl, str(manifest)
 
+    if _is_custom_skill_tool(tool):
+        home = pathlib.Path.home()
+        act_dir = home / ".agents" / "skills" / tool.id
+        has_agy = _has_agy_skill_mirror_on_disk(home, tool.id)
+        want_agy = bool(tool.clients.get("AGY", False))
+        want_agents = bool(tool.clients.get("CDX", False) or tool.clients.get("CLD", False) or tool.clients.get("CUR", False))
+        ms = max(1, int((time.perf_counter() - t0) * 1000))
+        if want_agy and not has_agy:
+            lbl = "AGY skill senkronu eksik" if is_tr else "AGY skill mirror missing"
+            return False, -1, lbl, str(home / ".gemini" / "config" / "skills" / tool.id)
+        if want_agents and not act_dir.is_dir():
+            lbl = "Skill dizini eksik (~/.agents/skills)" if is_tr else "Skill directory missing (~/.agents/skills)"
+            return False, -1, lbl, str(act_dir)
+        ok = (want_agy and has_agy) or (want_agents and act_dir.is_dir())
+        lbl = ("Skill doğrulandı" if ok else "Skill kurulu değil") if is_tr else ("Skill verified" if ok else "Skill not installed")
+        return (ok, ms if ok else -1, lbl, str(act_dir))
+
     return True, 1, ("Hazır" if is_tr else "Ready"), tool.summary
 
 
@@ -240,7 +313,7 @@ def _run_stdio_handshake(
         if proc.stdin:
             proc.stdin.write(init_msg)
             proc.stdin.flush()
-        rt.join(timeout=5.5)
+        rt.join(timeout=7.5)
         ms = max(1, int((time.perf_counter() - t0) * 1000))
         joined = "\n".join(out_lines)
         if '"result"' in joined or '"serverInfo"' in joined:
@@ -256,14 +329,7 @@ def _run_stdio_handshake(
         lbl = f"stdio çıkış kodu {rc}" if is_tr else f"stdio exit code {rc}"
         return False, -1, lbl, err_txt or joined or ("Süreç erken kapandı." if is_tr else "Process exited early.")
     finally:
-        try:
-            proc.terminate()
-            proc.wait(timeout=1.5)
-        except Exception:
-            try:
-                proc.kill()
-            except Exception:
-                pass
+        _terminate_proc_tree(proc, wait_timeout=1.5)
 
 
 def _extract_tools_from_jsonrpc_text(raw_body: str) -> list[dict] | None:
@@ -429,14 +495,7 @@ def measure_tool_schema_tokens(
     except Exception:
         return None
     finally:
-        try:
-            proc.terminate()
-            proc.wait(timeout=1.2)
-        except Exception:
-            try:
-                proc.kill()
-            except Exception:
-                pass
+        _terminate_proc_tree(proc, wait_timeout=1.2)
     return None
 
 
@@ -628,9 +687,8 @@ def _test_config_entry_live(
         lbl = f"Komut bulunamadı: {raw_cmd}" if is_tr else f"Command not found: {raw_cmd}"
         return False, -1, lbl, f"command={raw_cmd!r}, args={raw_args!r}"
 
-    env = dict(os.environ)
-    for k, v in raw_env.items():
-        env[str(k)] = str(v)
+    clean_raw_env = {str(k): str(v) for k, v in raw_env.items()}
+    env = build_isolated_child_env(clean_raw_env)
     return _run_stdio_handshake(cmd_bin, raw_args, env, t0, cfg_note, app_ver=app_ver, lang=lang)
 
 
@@ -707,7 +765,29 @@ def _check_dry_run_readiness(
             return True, ms, lbl, str(plugin_dir), "ready_stopped"
         return False, -1, ("Blender Skills kurulu değil" if is_tr else "Blender Skills not installed"), str(plugin_dir), "fail"
 
+    if _is_custom_skill_tool(tool):
+        home = pathlib.Path.home()
+        act_dir = home / ".agents" / "skills" / tool.id
+        dis_dir = home / ".agents" / "skills_disabled" / tool.id
+        ms = max(1, int((time.perf_counter() - t0) * 1000))
+        if act_dir.is_dir() or dis_dir.is_dir():
+            src = act_dir if act_dir.is_dir() else dis_dir
+            lbl = "Durduruldu — skill diskte hazır" if is_tr else "Stopped — skill ready on disk"
+            return True, ms, lbl, str(src), "ready_stopped"
+        lbl = "Skill kurulu değil (eksik)" if is_tr else "Skill not installed (missing)"
+        return False, -1, lbl, str(act_dir), "fail"
+
     if tool.mcp_command or getattr(tool, "auth_mode", "key") == "oauth":
+        is_oauth = getattr(tool, "auth_mode", "key") == "oauth" and supports_oauth(tool.id)
+        if (
+            not is_oauth
+            and tool.vault_key_name
+            and vault.is_locked()
+            and (tool.vault_key_required or vault.has_key_entry(tool.vault_key_name))
+        ):
+            lbl = "Kasa kilitli (PIN girin)" if is_tr else "Vault is locked (enter Master Passphrase)"
+            return False, -1, lbl, f"Vault locked for {tool.vault_key_name}", "fail"
+
         if not is_tool_credential_ready(tool, vault):
             lbl = (
                 f"Kimlik doğrulama eksik ({tool.vault_key_name or 'OAuth'})"
@@ -715,20 +795,36 @@ def _check_dry_run_readiness(
                 else f"Missing credential ({tool.vault_key_name or 'OAuth'})"
             )
             return False, -1, lbl, "Configure API key or OAuth first.", "fail"
+
+        ospec = get_oauth_spec(tool.id) if is_oauth else None
+        if ospec is not None and ospec.kind == "remote_mcp":
+            npx_bin = shutil.which("npx.cmd") or shutil.which("npx")
+            ms = max(1, int((time.perf_counter() - t0) * 1000))
+            if not npx_bin:
+                lbl = "Komut bulunamadı: npx" if is_tr else "Command not found: npx"
+                return False, -1, lbl, "Node.js (npx) is required for mcp-remote OAuth.", "fail"
+            lbl = (
+                f"Ön kontrol OK — OAuth köprüsü hazır ({ms}ms — durduruldu)"
+                if is_tr
+                else f"Dry-run OK — OAuth bridge ready ({ms}ms — stopped)"
+            )
+            return True, ms, lbl, f"npx={npx_bin} | url={ospec.remote_mcp_url} (side-effect-free dry-run)", "ready_stopped"
+
         spec = build_effective_stdio_spec(tool, vault, wrap_windows_npx=False)
         if spec is None:
             return False, -1, ("Yapılandırma eksik" if is_tr else "Configuration missing"), tool.name, "fail"
-        raw_bin, eff_args, eff_env = spec
-        cmd_bin = shutil.which(f"{raw_bin}.cmd") or shutil.which(raw_bin)
+        raw_bin, eff_args, _eff_env = spec
+        cmd_bin = raw_bin if pathlib.Path(raw_bin).is_file() else (shutil.which(f"{raw_bin}.cmd") or shutil.which(raw_bin))
         if not cmd_bin:
             lbl = f"Komut bulunamadı: {raw_bin}" if is_tr else f"Command not found: {raw_bin}"
             return False, -1, lbl, f"'{raw_bin}' is not on PATH.", "fail"
-        env = build_isolated_child_env(eff_env, allowed_secret_key=tool.vault_key_name)
-        ok, ms, msg, raw = _run_stdio_handshake(cmd_bin, eff_args, env, t0, "", app_ver=app_ver, lang=lang)
-        if ok:
-            dry_lbl = f"Ön kontrol OK ({ms}ms — durduruldu)" if is_tr else f"Dry-run OK ({ms}ms — stopped)"
-            return True, ms, dry_lbl, raw, "ready_stopped"
-        return False, ms, msg, raw, "fail"
+        ms = max(1, int((time.perf_counter() - t0) * 1000))
+        dry_lbl = (
+            f"Ön kontrol OK — ikili hazır ({ms}ms — durduruldu)"
+            if is_tr
+            else f"Dry-run OK — binary & auth ready ({ms}ms — stopped)"
+        )
+        return True, ms, dry_lbl, f"binary={cmd_bin} | args={eff_args} (side-effect-free dry-run)", "ready_stopped"
 
     ok, ms, msg, raw = test_tool_connection_e2e(tool, vault, projects_map, active_skills_count, lang=lang)
     return ok, ms, (f"{msg} (durduruldu)" if (ok and is_tr) else (f"{msg} (stopped)" if ok else msg)), raw, (
@@ -813,21 +909,86 @@ def test_tool_for_client_e2e(
 
     if tool.id == "blender_skills":
         ms = max(1, int((time.perf_counter() - t0) * 1000))
+        is_global = tool.project_scope == "GLOBAL" or not projects_map or tool.project_scope not in projects_map
+        if is_global:
+            if code == "AGY":
+                plugin_skills = home / ".gemini" / "config" / "plugins" / "blender-skills" / "skills"
+                exists_for_client = plugin_skills.is_dir() and any(
+                    d.is_dir() and d.name != "references" for d in plugin_skills.iterdir()
+                )
+                target_path_str = str(plugin_skills)
+            else:
+                ag_root = home / ".agents" / "skills"
+                exists_for_client = ag_root.is_dir() and any(
+                    d.is_dir() and d.name.startswith("blender-skills__") for d in ag_root.iterdir()
+                )
+                target_path_str = str(ag_root / "blender-skills__*")
+        else:
+            p_skills = pathlib.Path(projects_map[tool.project_scope]) / ".agents" / "skills"
+            exists_for_client = p_skills.is_dir() and any(
+                d.is_dir() and (d / ".aiconomy_managed").is_file() for d in p_skills.iterdir()
+            )
+            target_path_str = str(p_skills)
+
         if not client_allowed:
-            lbl = f"{code} için kapalı" if is_tr else f"Disabled for {code}"
-            return True, ms, lbl, str(cfg_path), "off_client"
+            if exists_for_client and is_global:
+                lbl = (
+                    f"Sızıntı: {code} kapalı ama Blender skill'leri hâlâ aktif!"
+                    if is_tr
+                    else f"Leak: {code} disabled but Blender skills are still active!"
+                )
+                return False, ms, lbl, target_path_str, "fail"
+            lbl = f"{code} için kapalı (doğrulandı)" if is_tr else f"Disabled for {code} (verified)"
+            return True, ms, lbl, target_path_str, "off_client"
         if not runtime_active:
+            if exists_for_client:
+                lbl = (
+                    f"Uyarı: Durduruldu ama {code} Blender skill'leri hâlâ aktif!"
+                    if is_tr
+                    else f"Warning: Stopped but {code} Blender skills still active!"
+                )
+                return False, ms, lbl, target_path_str, "fail"
             return _check_dry_run_readiness(tool, vault, projects_map, active_skills_count, lang=lang)
-        plugin_skills = home / ".gemini" / "config" / "plugins" / "blender-skills" / "skills"
-        has_active = plugin_skills.is_dir() and any(d.is_dir() and d.name != "references" for d in plugin_skills.iterdir())
-        if has_active:
+        if exists_for_client:
             lbl = (
                 f"{code} için {active_skills_count}/94 skill aktif"
                 if is_tr
                 else f"{active_skills_count}/94 skills active for {code}"
             )
-            return True, ms, lbl, str(plugin_skills), "pass"
-        return False, -1, ("Aktif Blender skill bulunamadı" if is_tr else "No active Blender skills found"), str(plugin_skills), "fail"
+            return True, ms, lbl, target_path_str, "pass"
+        return False, -1, ("Aktif Blender skill bulunamadı" if is_tr else "No active Blender skills found"), target_path_str, "fail"
+
+    if _is_custom_skill_tool(tool):
+        ms = max(1, int((time.perf_counter() - t0) * 1000))
+        if code == "AGY":
+            exists_for_client = _has_agy_skill_mirror_on_disk(home, tool.id)
+            target_desc = str(home / ".gemini" / "config" / "skills" / tool.id)
+        else:
+            act_dir = home / ".agents" / "skills" / tool.id
+            exists_for_client = act_dir.is_dir()
+            target_desc = str(act_dir)
+
+        if not client_allowed:
+            if exists_for_client:
+                lbl = (
+                    f"Sızıntı: {code} kapalı ama skill dizini hâlâ aktif!"
+                    if is_tr
+                    else f"Leak: {code} disabled but skill folder is still active!"
+                )
+                return False, ms, lbl, target_desc, "fail"
+            return True, ms, (f"{code} için kapalı (doğrulandı)" if is_tr else f"Disabled for {code} (verified)"), target_desc, "off_client"
+        if not runtime_active:
+            if exists_for_client:
+                lbl = (
+                    f"Uyarı: Durduruldu ama {code} skill dizini hâlâ aktif!"
+                    if is_tr
+                    else f"Warning: Stopped but {code} skill folder still active!"
+                )
+                return False, ms, lbl, target_desc, "fail"
+            return _check_dry_run_readiness(tool, vault, projects_map, active_skills_count, lang=lang)
+        if exists_for_client:
+            return True, ms, (f"{code} skill doğrulandı" if is_tr else f"{code} skill verified"), target_desc, "pass"
+        return False, -1, (f"{code} skill dizininde eksik!" if is_tr else f"Missing in {code} skills directory!"), target_desc, "fail"
 
     # CLI-only tools (no MCP server key)
     if not tool.mcp_server_key:

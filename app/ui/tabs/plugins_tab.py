@@ -4,6 +4,7 @@ from __future__ import annotations
 import copy
 import threading
 import time
+from typing import Any
 
 from PySide6.QtCore import QTimer, Qt
 from PySide6.QtWidgets import (
@@ -268,6 +269,192 @@ class PluginsTabMixin:
         )
         return out
 
+    def _build_plugin_card(
+        self,
+        t: ToolSpec,
+        *,
+        is_light: bool,
+        muted_col: str,
+        tag_f: str,
+        cat_pill_style: str,
+        kind_pill_style: str,
+        ws_badge_style: str,
+        not_dl_badge_style: str,
+    ) -> QFrame:
+        in_ws = bool(getattr(t, "in_workspace", True))
+        card = QFrame()
+        card.setObjectName("card")
+        row = QHBoxLayout(card)
+        row.setContentsMargins(12, 8, 12, 8)
+        row.setSpacing(10)
+
+        info_col = QVBoxLayout()
+        info_col.setSpacing(3)
+
+        title_row = QHBoxLayout()
+        title_row.setSpacing(7)
+
+        name_btn = QPushButton(t.name.replace("&", "&&"))
+        name_btn.setObjectName("ghostBtn")
+        name_btn.setStyleSheet("font-weight: 700; padding: 0px; text-align: left;")
+        name_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        name_btn.clicked.connect(lambda _=False, tool_obj=t: ToolInfoDialog(self, tool_obj).exec())
+        title_row.addWidget(name_btn)
+
+        cat_lbl = QLabel(category_label(getattr(t, "category", "coding_dev"), self.lang))
+        cat_lbl.setStyleSheet(cat_pill_style)
+        title_row.addWidget(cat_lbl)
+
+        kind_lbl = QLabel(tool_kind_label(t.kind, self.lang))
+        kind_lbl.setStyleSheet(kind_pill_style)
+        title_row.addWidget(kind_lbl)
+
+        tok_lbl = QLabel(f"~{fmt_tokens(t.schema_tokens)}")
+        tok_lbl.setStyleSheet(f"color: {muted_col}; font-family: Consolas, monospace; font-size: 10.5px;")
+        title_row.addWidget(tok_lbl)
+
+        cur_v = t.version.strip().lstrip("vV")
+        lat_v = (t.latest_version or t.version).strip().lstrip("vV")
+        if in_ws and t.has_update and lat_v != cur_v:
+            ver_html = (
+                f"<span style='color:#f59e0b; font-weight:700;'>"
+                f"{tr(self.lang, 'plug_ver_update', cur=cur_v, lat=lat_v)}</span>"
+            )
+        else:
+            ver_html = f"<span style='color:{muted_col}; font-size:11px;'>v{cur_v}</span>"
+        title_row.addWidget(QLabel(ver_html))
+
+        has_oauth = supports_oauth(t.id)
+        if has_oauth and getattr(t, "auth_mode", "key") == "oauth":
+            oa_lbl = QLabel(tr(self.lang, "plug_oauth_active"))
+            oa_lbl.setStyleSheet("color: #10b981; font-size: 10.5px; font-weight: 700;")
+            title_row.addWidget(oa_lbl)
+        else:
+            if t.vault_key_name:
+                has_secret = self.vault.has_secret(t.vault_key_name)
+                if self.vault.is_locked() and (t.vault_key_required or has_secret):
+                    k_txt = tr(self.lang, "st_vault_locked")
+                    k_col = "#f59e0b"
+                elif has_secret:
+                    k_txt = tr(self.lang, "plug_key_ready")
+                    k_col = "#10b981"
+                elif t.vault_key_required:
+                    k_txt = tr(self.lang, "plug_key_req", key=t.vault_key_name)
+                    k_col = "#f59e0b"
+                else:
+                    k_txt = tr(self.lang, "plug_key_opt")
+                    k_col = muted_col
+                k_lbl = QLabel(k_txt)
+                k_lbl.setStyleSheet(f"color: {k_col}; font-size: 10.5px; font-weight: 600;")
+                title_row.addWidget(k_lbl)
+            if has_oauth:
+                oa_col = "#0284c7" if is_light else "#38bdf8"
+                oa_lbl = QLabel(tr(self.lang, "plug_oauth_avail"))
+                oa_lbl.setStyleSheet(f"color: {oa_col}; font-size: 10.5px; font-weight: 600;")
+                title_row.addWidget(oa_lbl)
+
+        title_row.addStretch()
+        info_col.addLayout(title_row)
+
+        summary = localized_tool_text(t, "summary", self.lang)
+        if summary:
+            desc_lbl = QLabel(summary)
+            desc_lbl.setStyleSheet(f"color: {muted_col}; font-size: 11px;")
+            desc_lbl.setWordWrap(True)
+            info_col.addWidget(desc_lbl)
+
+        if t.tags:
+            tg_row = QHBoxLayout()
+            tg_row.setContentsMargins(0, 0, 0, 0)
+            tg_row.setSpacing(5)
+            for tg in t.tags[:3]:
+                tg_txt = tag_label(tg, self.lang)
+                is_hi = tag_f != "ALL" and tg == tag_f
+                tg_btn = QPushButton(tg_txt.replace("&", "&&"))
+                tg_btn.setStyleSheet(tag_button_qss(tg, is_highlighted=is_hi, is_light=is_light))
+                tg_btn.setFixedHeight(16)
+                tg_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+                tg_btn.setToolTip(tr(self.lang, "tag_filter_tip", tag=tg_txt))
+                tg_btn.clicked.connect(lambda _=False, code=tg: self._filter_plugins_by_tag(code))
+                tg_row.addWidget(tg_btn)
+            tg_row.addStretch()
+            info_col.addLayout(tg_row)
+
+        row.addLayout(info_col, stretch=1)
+
+        if in_ws and t.release_notes_url:
+            notes_lbl = QLabel(
+                f"<a style='color:#60a5fa;' href='{t.release_notes_url}'>{tr(self.lang, 'plug_release_notes')}</a>"
+            )
+            notes_lbl.setOpenExternalLinks(True)
+            notes_lbl.setToolTip(t.release_notes_url)
+            row.addWidget(notes_lbl)
+
+        copy_cmd = QPushButton(tr(self.lang, "plug_btn_copy_cmd"))
+        copy_cmd.setCursor(Qt.CursorShape.PointingHandCursor)
+        copy_cmd.setToolTip(t.install_cmd or t.repo_url)
+        copy_cmd.clicked.connect(
+            lambda _=False, c=(t.install_cmd or t.repo_url), nm=t.name: (
+                QApplication.clipboard().setText(c),
+                self.set_status(tr(self.lang, "msg_cmd_copied", name=nm)),
+            )
+        )
+        row.addWidget(copy_cmd)
+
+        if not in_ws:
+            is_inst = bool(getattr(t, "installed", False))
+            installing_ids = getattr(self, "_installing_tool_ids", set())
+            is_busy_this = t.id in installing_ids
+            if not is_inst:
+                nd_lbl = QLabel(tr(self.lang, "plug_badge_not_dl"))
+                nd_lbl.setFixedHeight(26)
+                nd_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                nd_lbl.setStyleSheet(not_dl_badge_style)
+                row.addWidget(nd_lbl, alignment=Qt.AlignmentFlag.AlignVCenter)
+
+                dl_txt = tr(self.lang, "plug_btn_installing" if is_busy_this else "plug_btn_install_add")
+                dl_btn = QPushButton(dl_txt.replace("&", "&&"))
+                dl_btn.setObjectName("primaryBtn")
+                dl_btn.setEnabled(not self.updating_busy and not is_busy_this)
+                dl_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+                dl_btn.setToolTip(tr(self.lang, "plug_btn_install_add_tip"))
+                dl_btn.clicked.connect(lambda _=False, tool_obj=t: self.install_and_add_tool(tool_obj))
+                row.addWidget(dl_btn)
+            else:
+                add_btn = QPushButton(tr(self.lang, "plug_btn_add_ws").replace("&", "&&"))
+                add_btn.setObjectName("primaryBtn")
+                add_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+                add_btn.setToolTip(tr(self.lang, "plug_btn_add_ws_tip"))
+                add_btn.clicked.connect(lambda _=False, tool_obj=t: self.add_tool_to_workspace(tool_obj))
+                row.addWidget(add_btn)
+        else:
+            ws_lbl = QLabel(tr(self.lang, "plug_badge_in_ws"))
+            ws_lbl.setFixedHeight(26)
+            ws_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            ws_lbl.setStyleSheet(ws_badge_style)
+            row.addWidget(ws_lbl, alignment=Qt.AlignmentFlag.AlignVCenter)
+
+            if t.has_update:
+                upd_one = QPushButton(tr(self.lang, "plug_btn_update"))
+                upd_one.setObjectName("warnBtn")
+                upd_one.setCursor(Qt.CursorShape.PointingHandCursor)
+                upd_one.clicked.connect(
+                    lambda _=False, tool_obj=t: self._run_batch_update([tool_obj], install_if_missing=True)
+                )
+                row.addWidget(upd_one)
+
+            uninstalling_ids = getattr(self, "_uninstalling_tool_ids", set())
+            is_uninst = t.id in uninstalling_ids
+            rem_txt = tr(self.lang, "plug_btn_uninstalling" if is_uninst else "plug_btn_remove_ws")
+            rem_btn = QPushButton(rem_txt)
+            rem_btn.setEnabled(not is_uninst)
+            rem_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            rem_btn.setToolTip(tr(self.lang, "plug_btn_remove_ws_tip"))
+            rem_btn.clicked.connect(lambda _=False, tool_obj=t: self.prompt_remove_or_uninstall_tool(tool_obj))
+            row.addWidget(rem_btn)
+
+        return card
+
     def _refresh_plugins_tab(self) -> None:
         if not hasattr(self, "plugins_lay"):
             return
@@ -279,11 +466,6 @@ class PluginsTabMixin:
             self.plug_status_cmb.setItemText(1, f"{tr(self.lang, 'plug_flt_workspace')} ({ws_cnt})")
             self.plug_status_cmb.setItemText(2, f"{tr(self.lang, 'plug_flt_library')} ({lib_cnt})")
 
-        while self.plugins_lay.count():
-            item = self.plugins_lay.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
-
         upd_count = sum(1 for t in self.tools if getattr(t, "in_workspace", True) and t.has_update)
         self.btn_plugins_update_all.setText(tr(self.lang, "plug_upd_avail", n=upd_count))
         self.btn_plugins_update_all.setEnabled(upd_count > 0 and not self.updating_busy)
@@ -293,6 +475,35 @@ class PluginsTabMixin:
         muted_col = "#64748b" if is_light else "#94a3b8"
         tag_f = str(self.plug_tag_cmb.currentData() or "ALL")
         self.plug_tag_cmb.setStyleSheet(active_tag_combo_qss(tag_f, is_light=is_light))
+
+        cache: dict[str, tuple[tuple[Any, ...], QFrame]] = getattr(self, "_plugin_card_cache", None) or {}
+        self._plugin_card_cache = cache
+        cached_widgets = {w for _sig, w in cache.values()}
+
+        while self.plugins_lay.count():
+            item = self.plugins_lay.takeAt(0)
+            w = item.widget()
+            if w is not None and w not in cached_widgets:
+                w.deleteLater()
+
+        cur_lang_theme = (self.lang, is_light)
+        if getattr(self, "_plugin_cache_lang_theme", None) != cur_lang_theme:
+            for _sig, old_w in list(cache.values()):
+                old_w.setParent(None)
+                old_w.deleteLater()
+            cache.clear()
+            self._plugin_cache_lang_theme = cur_lang_theme
+
+        valid_ids = {t.id for t in self.tools}
+        for stale_id in [tid for tid in cache if tid not in valid_ids]:
+            _sig, stale_w = cache.pop(stale_id)
+            stale_w.setParent(None)
+            stale_w.deleteLater()
+
+        filtered_ids = {t.id for t in filtered}
+        for tid, (_sig, cw) in cache.items():
+            if tid not in filtered_ids:
+                cw.hide()
 
         if not self.checking_plugins_busy:
             base_txt = tr(
@@ -345,176 +556,54 @@ class PluginsTabMixin:
             self.plugins_lay.addStretch()
             return
 
+        installing_ids = getattr(self, "_installing_tool_ids", set())
+        uninstalling_ids = getattr(self, "_uninstalling_tool_ids", set())
+        vault_locked = self.vault.is_locked()
+
         for t in filtered:
-            in_ws = bool(getattr(t, "in_workspace", True))
-            card = QFrame()
-            card.setObjectName("card")
-            row = QHBoxLayout(card)
-            row.setContentsMargins(12, 8, 12, 8)
-            row.setSpacing(10)
-
-            info_col = QVBoxLayout()
-            info_col.setSpacing(3)
-
-            title_row = QHBoxLayout()
-            title_row.setSpacing(7)
-
-            name_btn = QPushButton(t.name.replace("&", "&&"))
-            name_btn.setObjectName("ghostBtn")
-            name_btn.setStyleSheet("font-weight: 700; padding: 0px; text-align: left;")
-            name_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            name_btn.clicked.connect(lambda _=False, tool_obj=t: ToolInfoDialog(self, tool_obj).exec())
-            title_row.addWidget(name_btn)
-
-            cat_lbl = QLabel(category_label(getattr(t, "category", "coding_dev"), self.lang))
-            cat_lbl.setStyleSheet(cat_pill_style)
-            title_row.addWidget(cat_lbl)
-
-            kind_lbl = QLabel(tool_kind_label(t.kind, self.lang))
-            kind_lbl.setStyleSheet(kind_pill_style)
-            title_row.addWidget(kind_lbl)
-
-            tok_lbl = QLabel(f"~{fmt_tokens(t.schema_tokens)}")
-            tok_lbl.setStyleSheet(f"color: {muted_col}; font-family: Consolas, monospace; font-size: 10.5px;")
-            title_row.addWidget(tok_lbl)
-
-            cur_v = t.version.strip().lstrip("vV")
-            lat_v = (t.latest_version or t.version).strip().lstrip("vV")
-            if in_ws and t.has_update and lat_v != cur_v:
-                ver_html = (
-                    f"<span style='color:#f59e0b; font-weight:700;'>"
-                    f"{tr(self.lang, 'plug_ver_update', cur=cur_v, lat=lat_v)}</span>"
-                )
-            else:
-                ver_html = f"<span style='color:{muted_col}; font-size:11px;'>v{cur_v}</span>"
-            title_row.addWidget(QLabel(ver_html))
-
-            has_oauth = supports_oauth(t.id)
-            if has_oauth and getattr(t, "auth_mode", "key") == "oauth":
-                oa_lbl = QLabel(tr(self.lang, "plug_oauth_active"))
-                oa_lbl.setStyleSheet("color: #10b981; font-size: 10.5px; font-weight: 700;")
-                title_row.addWidget(oa_lbl)
-            else:
-                if t.vault_key_name:
-                    has_secret = self.vault.has_secret(t.vault_key_name)
-                    if has_secret:
-                        k_txt = tr(self.lang, "plug_key_ready")
-                        k_col = "#10b981"
-                    elif t.vault_key_required:
-                        k_txt = tr(self.lang, "plug_key_req", key=t.vault_key_name)
-                        k_col = "#f59e0b"
-                    else:
-                        k_txt = tr(self.lang, "plug_key_opt")
-                        k_col = muted_col
-                    k_lbl = QLabel(k_txt)
-                    k_lbl.setStyleSheet(f"color: {k_col}; font-size: 10.5px; font-weight: 600;")
-                    title_row.addWidget(k_lbl)
-                if has_oauth:
-                    oa_col = "#0284c7" if is_light else "#38bdf8"
-                    oa_lbl = QLabel(tr(self.lang, "plug_oauth_avail"))
-                    oa_lbl.setStyleSheet(f"color: {oa_col}; font-size: 10.5px; font-weight: 600;")
-                    title_row.addWidget(oa_lbl)
-
-            title_row.addStretch()
-            info_col.addLayout(title_row)
-
-            summary = localized_tool_text(t, "summary", self.lang)
-            if summary:
-                desc_lbl = QLabel(summary)
-                desc_lbl.setStyleSheet(f"color: {muted_col}; font-size: 11px;")
-                desc_lbl.setWordWrap(True)
-                info_col.addWidget(desc_lbl)
-
-            if t.tags:
-                tg_row = QHBoxLayout()
-                tg_row.setContentsMargins(0, 0, 0, 0)
-                tg_row.setSpacing(5)
-                for tg in t.tags[:3]:
-                    tg_txt = tag_label(tg, self.lang)
-                    is_hi = tag_f != "ALL" and tg == tag_f
-                    tg_btn = QPushButton(tg_txt.replace("&", "&&"))
-                    tg_btn.setStyleSheet(tag_button_qss(tg, is_highlighted=is_hi, is_light=is_light))
-                    tg_btn.setFixedHeight(16)
-                    tg_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-                    tg_btn.setToolTip(tr(self.lang, "tag_filter_tip", tag=tg_txt))
-                    tg_btn.clicked.connect(lambda _=False, code=tg: self._filter_plugins_by_tag(code))
-                    tg_row.addWidget(tg_btn)
-                tg_row.addStretch()
-                info_col.addLayout(tg_row)
-
-            row.addLayout(info_col, stretch=1)
-
-            if in_ws and t.release_notes_url:
-                notes_lbl = QLabel(
-                    f"<a style='color:#60a5fa;' href='{t.release_notes_url}'>{tr(self.lang, 'plug_release_notes')}</a>"
-                )
-                notes_lbl.setOpenExternalLinks(True)
-                notes_lbl.setToolTip(t.release_notes_url)
-                row.addWidget(notes_lbl)
-
-            copy_cmd = QPushButton(tr(self.lang, "plug_btn_copy_cmd"))
-            copy_cmd.setCursor(Qt.CursorShape.PointingHandCursor)
-            copy_cmd.setToolTip(t.install_cmd or t.repo_url)
-            copy_cmd.clicked.connect(
-                lambda _=False, c=(t.install_cmd or t.repo_url), nm=t.name: (
-                    QApplication.clipboard().setText(c),
-                    self.set_status(tr(self.lang, "msg_cmd_copied", name=nm)),
-                )
+            has_secret = bool(self.vault.has_secret(t.vault_key_name)) if t.vault_key_name else False
+            sig = (
+                self.lang,
+                is_light,
+                tag_f if (tag_f != "ALL" and tag_f in t.tags[:3]) else "",
+                t.name,
+                t.kind,
+                getattr(t, "category", "coding_dev"),
+                t.schema_tokens,
+                t.version,
+                t.latest_version,
+                bool(t.has_update),
+                bool(getattr(t, "in_workspace", True)),
+                bool(getattr(t, "installed", False)),
+                getattr(t, "auth_mode", "key"),
+                has_secret,
+                vault_locked if t.vault_key_name else False,
+                t.release_notes_url,
+                t.install_cmd,
+                tuple(t.tags[:3]),
+                bool(self.updating_busy),
+                t.id in installing_ids,
+                t.id in uninstalling_ids,
             )
-            row.addWidget(copy_cmd)
-
-            if not in_ws:
-                is_inst = bool(getattr(t, "installed", False))
-                installing_ids = getattr(self, "_installing_tool_ids", set())
-                is_busy_this = t.id in installing_ids
-                if not is_inst:
-                    nd_lbl = QLabel(tr(self.lang, "plug_badge_not_dl"))
-                    nd_lbl.setFixedHeight(26)
-                    nd_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-                    nd_lbl.setStyleSheet(not_dl_badge_style)
-                    row.addWidget(nd_lbl, alignment=Qt.AlignmentFlag.AlignVCenter)
-
-                    dl_txt = tr(self.lang, "plug_btn_installing" if is_busy_this else "plug_btn_install_add")
-                    dl_btn = QPushButton(dl_txt.replace("&", "&&"))
-                    dl_btn.setObjectName("primaryBtn")
-                    dl_btn.setEnabled(not self.updating_busy and not is_busy_this)
-                    dl_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-                    dl_btn.setToolTip(tr(self.lang, "plug_btn_install_add_tip"))
-                    dl_btn.clicked.connect(lambda _=False, tool_obj=t: self.install_and_add_tool(tool_obj))
-                    row.addWidget(dl_btn)
-                else:
-                    add_btn = QPushButton(tr(self.lang, "plug_btn_add_ws").replace("&", "&&"))
-                    add_btn.setObjectName("primaryBtn")
-                    add_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-                    add_btn.setToolTip(tr(self.lang, "plug_btn_add_ws_tip"))
-                    add_btn.clicked.connect(lambda _=False, tool_obj=t: self.add_tool_to_workspace(tool_obj))
-                    row.addWidget(add_btn)
+            cached = cache.get(t.id)
+            if cached is not None and cached[0] == sig:
+                card = cached[1]
             else:
-                ws_lbl = QLabel(tr(self.lang, "plug_badge_in_ws"))
-                ws_lbl.setFixedHeight(26)
-                ws_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-                ws_lbl.setStyleSheet(ws_badge_style)
-                row.addWidget(ws_lbl, alignment=Qt.AlignmentFlag.AlignVCenter)
-
-                if t.has_update:
-                    upd_one = QPushButton(tr(self.lang, "plug_btn_update"))
-                    upd_one.setObjectName("warnBtn")
-                    upd_one.setCursor(Qt.CursorShape.PointingHandCursor)
-                    upd_one.clicked.connect(
-                        lambda _=False, tool_obj=t: self._run_batch_update([tool_obj], install_if_missing=True)
-                    )
-                    row.addWidget(upd_one)
-
-                uninstalling_ids = getattr(self, "_uninstalling_tool_ids", set())
-                is_uninst = t.id in uninstalling_ids
-                rem_txt = tr(self.lang, "plug_btn_uninstalling" if is_uninst else "plug_btn_remove_ws")
-                rem_btn = QPushButton(rem_txt)
-                rem_btn.setEnabled(not is_uninst)
-                rem_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-                rem_btn.setToolTip(tr(self.lang, "plug_btn_remove_ws_tip"))
-                rem_btn.clicked.connect(lambda _=False, tool_obj=t: self.prompt_remove_or_uninstall_tool(tool_obj))
-                row.addWidget(rem_btn)
-
+                if cached is not None:
+                    cached[1].setParent(None)
+                    cached[1].deleteLater()
+                card = self._build_plugin_card(
+                    t,
+                    is_light=is_light,
+                    muted_col=muted_col,
+                    tag_f=tag_f,
+                    cat_pill_style=cat_pill_style,
+                    kind_pill_style=kind_pill_style,
+                    ws_badge_style=ws_badge_style,
+                    not_dl_badge_style=not_dl_badge_style,
+                )
+                cache[t.id] = (sig, card)
+            card.show()
             self.plugins_lay.addWidget(card)
         self.plugins_lay.addStretch()
 
@@ -623,6 +712,7 @@ class PluginsTabMixin:
         if self.updating_busy or not target_tools:
             return
         self.updating_busy = True
+        self._updated_tool_ids: set[str] = set()
         self.btn_plugins_check.setEnabled(False)
         self.btn_plugins_update_all.setEnabled(False)
 
@@ -671,6 +761,8 @@ class PluginsTabMixin:
                 tool_obj.latest_version = f"v{target_v}"
                 tool_obj.has_update = False
                 sync_pinned_version_on_tool(tool_obj, target_v)
+                if hasattr(self, "_updated_tool_ids"):
+                    self._updated_tool_ids.add(tool_obj.id)
             ver_note = f"v{prev_v} -> v{target_v}" if prev_v != target_v else f"v{target_v}"
             self.logs.add("INFO", t_name, tr(self.lang, "log_plug_updated", ver=ver_note), raw_log)
         else:
@@ -699,6 +791,13 @@ class PluginsTabMixin:
             self.set_status(tr(self.lang, "msg_plug_update_ok", n=ok_cnt))
         self._save_state()
         self._refresh_logs_tab()
+        updated_ids = set(getattr(self, "_updated_tool_ids", set()))
+        if hasattr(self, "_updated_tool_ids"):
+            self._updated_tool_ids.clear()
+        if updated_ids and getattr(self, "sync_live_environment", True):
+            updated_objs = [t for t in self.tools if t.id in updated_ids]
+            need_restart = any(t.id in ("serena", "unity_mcp") and t.enabled for t in updated_objs)
+            self._sync_live_environment_async(target_tools=updated_objs, restart_running=need_restart)
 
     def _run_library_install(self, target_tools: list[ToolSpec], enable_after: bool = False) -> None:
         """Download & install library tools on demand (never runs subprocesses when sync_live_environment=False)."""
@@ -720,6 +819,7 @@ class PluginsTabMixin:
         if self.updating_busy:
             return
         self.updating_busy = True
+        self._updated_tool_ids: set[str] = set()
         self.btn_plugins_check.setEnabled(False)
         self.btn_plugins_update_all.setEnabled(False)
         self.btn_jump_err_logs.hide()
@@ -789,12 +889,19 @@ class PluginsTabMixin:
             tool_obj.installed = True
             self.add_tool_to_workspace(tool_obj)
             if enable_after:
+                is_rt_running = bool(self.runtime_started and self._runtime_state == "running")
                 tool_obj.enabled = True
                 if not any(tool_obj.clients.values()):
                     tool_obj.clients["AGY"] = True
-                if self._tool_needs_vault_key(tool_obj):
+                if self._tool_blocked_by_locked_vault(tool_obj):
+                    tool_obj.health_state = "warn"
+                    tool_obj.last_ping = tr(self.lang, "st_vault_locked")
+                elif self._tool_needs_vault_key(tool_obj):
                     tool_obj.health_state = "warn"
                     tool_obj.last_ping = tr(self.lang, "st_missing_key")
+                elif not is_rt_running:
+                    tool_obj.health_state = "idle"
+                    tool_obj.last_ping = tr(self.lang, "st_stopped_standby")
                 else:
                     tool_obj.health_state = "ok"
                     tool_obj.last_ping = tr(self.lang, "st_ready")

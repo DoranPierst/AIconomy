@@ -19,4 +19,7 @@ dist/
 dist_*/
 *.spec
 _apply_update.bat
+_apply_update.ps1
 *.exe.new
+*.exe.old
+assets/aiconomy-bridge.exe

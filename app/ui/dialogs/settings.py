@@ -1,8 +1,10 @@
 """Unified Settings dialog: General, API Keys (DPAPI Vault), Projects, and Backup & Configs."""
 from __future__ import annotations
 
+import copy
 import os
 import pathlib
+import threading
 from typing import TYPE_CHECKING
 
 from PySide6.QtCore import Qt
@@ -29,6 +31,7 @@ from PySide6.QtWidgets import (
 
 from ...catalog import AI_CLIENTS, localized_tool_text
 from ...i18n import SUPPORTED_LANGUAGES, tr
+from ...mcp_config import cleanup_removed_project_configs, unique_project_key
 from ...updater import get_current_app_version
 
 if TYPE_CHECKING:
@@ -404,6 +407,8 @@ class SettingsDialog(QDialog):
         self.main_win.set_status(msg)
         self.main_win._refresh_logs_tab()
         self._refresh_pin_and_key_rows()
+        self.main_win.run_health_scan()
+        self.main_win._sync_live_environment_async(target_tools=list(self.main_win.tools))
         return True
 
     def _prompt_set_or_change_pin(self) -> None:
@@ -437,6 +442,8 @@ class SettingsDialog(QDialog):
             self.main_win.set_status(msg)
             self.main_win._refresh_logs_tab()
             self._refresh_pin_and_key_rows()
+            self.main_win.run_health_scan()
+            self.main_win._sync_live_environment_async(target_tools=list(self.main_win.tools))
 
     def _lock_vault_now(self) -> None:
         self.main_win.vault.lock()
@@ -445,6 +452,8 @@ class SettingsDialog(QDialog):
         self.main_win.set_status(msg)
         self.main_win._refresh_logs_tab()
         self._refresh_pin_and_key_rows()
+        self.main_win.run_health_scan()
+        self.main_win._sync_live_environment_async(target_tools=list(self.main_win.tools))
 
     def _prompt_remove_pin(self) -> None:
         if self.main_win.vault.is_locked() and not self._prompt_unlock_pin():
@@ -455,6 +464,8 @@ class SettingsDialog(QDialog):
             self.main_win.set_status(msg)
             self.main_win._refresh_logs_tab()
             self._refresh_pin_and_key_rows()
+            self.main_win.run_health_scan()
+            self.main_win._sync_live_environment_async(target_tools=list(self.main_win.tools))
 
     def _save_key(self, key_name: str) -> None:
         if self.main_win.vault.is_locked():
@@ -541,7 +552,7 @@ class SettingsDialog(QDialog):
         if not folder:
             return
         p_path = pathlib.Path(folder)
-        key = p_path.name
+        key = unique_project_key(p_path, self.main_win.projects_map)
         self.main_win.projects_map[key] = str(p_path)
         self.main_win._save_state()
         self.main_win._rebuild_project_filter_combo()
@@ -588,13 +599,21 @@ class SettingsDialog(QDialog):
         )
         if ans != QMessageBox.StandardButton.Yes:
             return
-        self.main_win.projects_map.pop(key, None)
+        removed_dir_str = self.main_win.projects_map.pop(key, "")
         for t in self.main_win.tools:
             if t.project_scope == key:
                 t.project_scope = "GLOBAL"
         self.main_win._save_state()
         self.main_win._rebuild_project_filter_combo()
         self.main_win._refresh_table()
+        if removed_dir_str and getattr(self.main_win, "sync_live_environment", True):
+            tools_snap = copy.deepcopy(self.main_win.tools)
+            lang_snap = self.lang
+            threading.Thread(
+                target=cleanup_removed_project_configs,
+                args=(pathlib.Path(removed_dir_str), tools_snap, lang_snap),
+                daemon=True,
+            ).start()
         self.main_win._sync_live_environment_async(target_tools=[])
         self.main_win.set_status(tr(self.lang, "msg_proj_removed", name=key))
         self._reload_projects()

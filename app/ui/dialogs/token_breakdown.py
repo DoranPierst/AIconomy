@@ -5,7 +5,7 @@ import copy
 import threading
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QObject, Qt
 from PySide6.QtWidgets import (
     QDialog,
     QFrame,
@@ -95,8 +95,29 @@ class TokenBreakdownDialog(QDialog):
         root.addLayout(bot)
 
         self._measuring = False
-        self.main_win.bridge.schema_measure_done.connect(self._on_measure_done)
+        self._bridge_conns = [
+            self.main_win.bridge.schema_measure_done.connect(self._on_measure_done),
+        ]
         self._rebuild_view()
+
+    def _disconnect_bridge_signals(self) -> None:
+        conns = getattr(self, "_bridge_conns", None)
+        if not conns:
+            return
+        self._bridge_conns = []
+        for conn in conns:
+            try:
+                QObject.disconnect(conn)
+            except (RuntimeError, TypeError):
+                pass
+
+    def done(self, result: int) -> None:
+        self._disconnect_bridge_signals()
+        super().done(result)
+
+    def closeEvent(self, event) -> None:  # type: ignore[override]
+        self._disconnect_bridge_signals()
+        super().closeEvent(event)
 
     @staticmethod
     def _clear_layout(lay: QHBoxLayout | QVBoxLayout) -> None:

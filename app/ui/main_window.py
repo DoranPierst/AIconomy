@@ -73,7 +73,7 @@ from ..storage import (
     WindowsDpapiVault,
     migrate_legacy_data_files,
 )
-from ..tokens import schema_cache_key
+from ..tokens import fmt_tokens, schema_cache_key
 from ..updater import UpdateCheckResult, get_current_app_version
 from .dialogs import (
     BlenderSkillsDialog,
@@ -189,6 +189,9 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, ProfilesMixin, Tr
             if not t.enabled:
                 t.last_ping = tr(self.lang, "st_disabled")
                 t.health_state = "off"
+            elif self._tool_blocked_by_locked_vault(t):
+                t.last_ping = tr(self.lang, "st_vault_locked")
+                t.health_state = "warn"
             else:
                 t.last_ping = tr(self.lang, "st_stopped_standby")
                 t.health_state = "idle"
@@ -239,6 +242,24 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, ProfilesMixin, Tr
             for t in self.tools
             if getattr(t, "in_workspace", True)
             and self._tool_needs_vault_key(t)
+        }
+
+    def _tool_blocked_by_locked_vault(self, t: ToolSpec) -> bool:
+        if not self.vault.is_locked():
+            return False
+        if getattr(t, "auth_mode", "key") == "oauth" and supports_oauth(t.id):
+            return False
+        if not t.vault_key_name:
+            return False
+        return bool(t.vault_key_required or self.vault.has_key_entry(t.vault_key_name))
+
+    def _locked_vault_keys(self) -> set[str]:
+        if not self.vault.is_locked():
+            return set()
+        return {
+            t.vault_key_name
+            for t in self.tools
+            if getattr(t, "in_workspace", True) and self._tool_blocked_by_locked_vault(t)
         }
 
     def _format_scope_display(self, t: ToolSpec) -> str:
@@ -437,6 +458,12 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, ProfilesMixin, Tr
         self.runtime_started = new_state == "running"
         self._apply_runtime_button_visuals()
         self._rebuild_tray_menu()
+        if hasattr(self, "token_summary_lbl") and hasattr(self, "table"):
+            active_tok, saved_tok = self._calculate_token_economy()
+            tok_key = "token_summary" if self.runtime_started else "token_summary_stopped"
+            self.token_summary_lbl.setText(
+                tr(self.lang, tok_key, act=fmt_tokens(active_tok), sav=fmt_tokens(saved_tok))
+            )
 
     def _pause_all_configs_and_skills_on_disk(
         self,
@@ -454,6 +481,8 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, ProfilesMixin, Tr
                 bs_tool.project_scope,
                 proj_snap,
                 lang=lang_snap,
+                clients=dict(bs_tool.clients),
+                runtime_active=False,
             )
         cv_tool = next((x for x in tools_snap if x.id == "caveman"), None)
         if cv_tool:
@@ -497,6 +526,7 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, ProfilesMixin, Tr
         proj_snap = dict(self.projects_map)
         lang_snap = self.lang
         missing_keys = self._missing_required_vault_keys()
+        locked_keys = self._locked_vault_keys()
 
         def worker() -> None:
             if self.sync_live_environment:
@@ -514,6 +544,7 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, ProfilesMixin, Tr
                     lang=lang_snap,
                     missing_required_keys=missing_keys,
                     runtime_active=False,
+                    locked_vault_keys=locked_keys,
                 )
                 out.append((t.id, ok, h_state, ping_str, ms, detail, loc_detail))
             safe_emit(self.bridge.runtime_transition_done, "stopped", out, live_map, "")
@@ -548,6 +579,7 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, ProfilesMixin, Tr
         proj_snap = dict(self.projects_map)
         lang_snap = self.lang
         missing_keys = self._missing_required_vault_keys()
+        locked_keys = self._locked_vault_keys()
 
         def worker() -> None:
             started_ports: list[int] = []
@@ -569,6 +601,8 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, ProfilesMixin, Tr
                             bs_tool.project_scope,
                             proj_snap,
                             lang=lang_snap,
+                            clients=dict(bs_tool.clients),
+                            runtime_active=True,
                         )
                     cv_tool = next((x for x in tools_snap if x.id == "caveman"), None)
                     if cv_tool:
@@ -587,7 +621,13 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, ProfilesMixin, Tr
                 out = []
                 for x in ws_snap:
                     ok, h_state, ping_str, ms, detail, loc_detail = probe_tool_health(
-                        x, len(skills_snap), proj_snap, live_map, lang=lang_snap, missing_required_keys=missing_keys
+                        x,
+                        len(skills_snap),
+                        proj_snap,
+                        live_map,
+                        lang=lang_snap,
+                        missing_required_keys=missing_keys,
+                        locked_vault_keys=locked_keys,
                     )
                     out.append((x.id, ok, h_state, ping_str, ms, detail, loc_detail))
 
@@ -616,6 +656,7 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, ProfilesMixin, Tr
         proj_snap = dict(self.projects_map)
         lang_snap = self.lang
         missing_keys = self._missing_required_vault_keys()
+        locked_keys = self._locked_vault_keys()
 
         def worker() -> None:
             detail_msg = ""
@@ -634,6 +675,7 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, ProfilesMixin, Tr
                         lang=lang_snap,
                         missing_required_keys=missing_keys,
                         runtime_active=False,
+                        locked_vault_keys=locked_keys,
                     )
                     out.append((x.id, ok, h_state, ping_str, ms, detail, loc_detail))
 
@@ -723,7 +765,8 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, ProfilesMixin, Tr
         self.status_lbl.setToolTip(msg)
 
     def _set_config_status(self, msg: str) -> None:
-        self.set_status(f"{msg}  ({tr(self.lang, 'msg_cfg_reload_hint')})")
+        hint_key = "msg_cfg_reload_hint" if self.runtime_started else "msg_cfg_staged_stopped"
+        self.set_status(f"{msg}  ({tr(self.lang, hint_key)})")
 
     def _save_state(self) -> None:
         self.meta["sort_key"] = self.sort_key
@@ -744,11 +787,19 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, ProfilesMixin, Tr
             return
         self.lang = norm
         self.meta["lang"] = norm
+        is_rt_running = bool(self.runtime_started and self._runtime_state == "running")
         for t in self.tools:
             if not getattr(t, "in_workspace", True):
                 t.last_ping = tr(self.lang, "st_disabled")
                 continue
-            t.last_ping = tr(self.lang, "st_disabled") if not t.enabled else tr(self.lang, "st_scanning")
+            if not t.enabled:
+                t.last_ping = tr(self.lang, "st_disabled")
+            elif self._tool_blocked_by_locked_vault(t):
+                t.last_ping = tr(self.lang, "st_vault_locked")
+            elif not is_rt_running:
+                t.last_ping = tr(self.lang, "st_stopped_standby")
+            else:
+                t.last_ping = tr(self.lang, "st_scanning")
             t.live_location_detail = resolve_disk_location(t, self.projects_map, {}, lang=self.lang)
         self._save_state()
         self._retranslate_ui()
@@ -869,6 +920,7 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, ProfilesMixin, Tr
         lang_snap = self.lang
         allow_start_flag = bool(self.runtime_started and self._runtime_state == "running")
         missing_keys = self._missing_required_vault_keys()
+        locked_keys = self._locked_vault_keys()
 
         def worker() -> None:
             measured_schemas: dict[str, int] = {}
@@ -891,10 +943,12 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, ProfilesMixin, Tr
                 if bs_tool:
                     sync_blender_skills_on_disk(
                         skills_snap,
-                        bool(allow_start_flag and getattr(bs_tool, "in_workspace", True) and bs_tool.enabled),
+                        bool(getattr(bs_tool, "in_workspace", True) and bs_tool.enabled),
                         bs_tool.project_scope,
                         proj_snap,
                         lang=lang_snap,
+                        clients=dict(bs_tool.clients),
+                        runtime_active=allow_start_flag,
                     )
                 cv_tool = next((x for x in tools_snap if x.id == "caveman"), None)
                 if cv_tool:
@@ -925,6 +979,7 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, ProfilesMixin, Tr
                         lang=eff_lang,
                         missing_required_keys=missing_keys,
                         runtime_active=allow_start_flag,
+                        locked_vault_keys=locked_keys,
                     )
                     out.append((x.id, ok, h_state, ping_str, ms, detail, loc_detail))
             if measured_schemas:
@@ -944,6 +999,14 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, ProfilesMixin, Tr
         if not tool.enabled:
             tool.health_state = "off"
             tool.last_ping = tr(self.lang, "st_disabled")
+        elif self._tool_blocked_by_locked_vault(tool):
+            tool.health_state = "warn"
+            tool.last_ping = tr(self.lang, "st_vault_locked")
+            if prompt_missing_key and self.isVisible():
+                self.open_settings(SettingsDialog.TAB_KEYS, focus_key=tool.vault_key_name)
+                if not self._tool_blocked_by_locked_vault(tool) and not self._tool_needs_vault_key(tool):
+                    tool.health_state = "ok" if is_rt_running else "idle"
+                    tool.last_ping = tr(self.lang, "st_ready" if is_rt_running else "st_stopped_standby")
         elif self._tool_needs_vault_key(tool):
             tool.health_state = "warn"
             tool.last_ping = tr(self.lang, "st_missing_key")
@@ -1260,18 +1323,20 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, ProfilesMixin, Tr
                 self.active_skills = dlg.saved_result
                 self.meta["checked_blender_skills"] = sorted(dlg.saved_checked)
                 tool.enabled = len(self.active_skills) > 0
-                ok, disk_msg = (True, "")
-                if self.sync_live_environment:
-                    ok, disk_msg = sync_blender_skills_on_disk(
-                        self.active_skills,
-                        tool.enabled,
-                        tool.project_scope,
-                        self.projects_map,
-                        lang=self.lang,
-                    )
+                is_rt_running = bool(self.runtime_started and self._runtime_state == "running")
+                if not tool.enabled:
+                    tool.health_state = "off"
+                    tool.last_ping = tr(self.lang, "st_disabled")
+                elif is_rt_running:
+                    tool.health_state = "ok"
+                    tool.last_ping = tr(self.lang, "st_active_count", on=len(self.active_skills))
+                else:
+                    tool.health_state = "idle"
+                    tool.last_ping = tr(self.lang, "st_stopped_standby")
                 self._save_state()
+                disk_msg = f"{len(self.active_skills)}/94"
                 self.logs.add(
-                    "INFO" if ok else "DBG",
+                    "INFO",
                     tool.name,
                     tr(self.lang, "log_skills_saved", n=len(self.active_skills)),
                     disk_msg,
@@ -1279,6 +1344,7 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, ProfilesMixin, Tr
                 self._set_config_status(tr(self.lang, "msg_skills_saved", on=len(self.active_skills), detail=disk_msg))
                 self._refresh_table()
                 self._refresh_logs_tab()
+                self._sync_live_environment_async(target_tools=[tool])
         else:
             prev_snap = (
                 tool.port,
@@ -1297,10 +1363,17 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, ProfilesMixin, Tr
                     tuple(o.enabled for o in tool.options),
                 )
                 changed = new_snap != prev_snap
+                is_rt_running = bool(self.runtime_started and self._runtime_state == "running")
                 if tool.enabled:
-                    if self._tool_needs_vault_key(tool):
+                    if self._tool_blocked_by_locked_vault(tool):
+                        tool.health_state = "warn"
+                        tool.last_ping = tr(self.lang, "st_vault_locked")
+                    elif self._tool_needs_vault_key(tool):
                         tool.health_state = "warn"
                         tool.last_ping = tr(self.lang, "st_missing_key")
+                    elif not is_rt_running:
+                        tool.health_state = "idle"
+                        tool.last_ping = tr(self.lang, "st_stopped_standby")
                     elif tool.health_state == "warn" and not tool.port:
                         tool.health_state = "ok"
                         tool.last_ping = tr(self.lang, "st_ready")
@@ -1379,6 +1452,7 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, ProfilesMixin, Tr
         sk_cnt = len(self.active_skills)
         proj_snap = dict(self.projects_map)
         missing_keys = self._missing_required_vault_keys()
+        locked_keys = self._locked_vault_keys()
         rt_active = bool(self.runtime_started and self._runtime_state == "running")
 
         def worker() -> None:
@@ -1395,6 +1469,7 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, ProfilesMixin, Tr
                         lang=eff_lang,
                         missing_required_keys=missing_keys,
                         runtime_active=rt_active,
+                        locked_vault_keys=locked_keys,
                     )
                     out.append((t.id, ok, h_state, ping_str, ms, detail, loc_detail))
                 if self.lang == eff_lang:
@@ -1483,6 +1558,7 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, ProfilesMixin, Tr
         proj_snap = dict(self.projects_map)
         lang_snap = self.lang
         missing_keys = self._missing_required_vault_keys()
+        locked_keys = self._locked_vault_keys()
         rt_active = bool(self.runtime_started and self._runtime_state == "running")
 
         def worker() -> None:
@@ -1499,6 +1575,7 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, ProfilesMixin, Tr
                         lang=lang_snap,
                         missing_required_keys=missing_keys,
                         runtime_active=rt_active,
+                        locked_vault_keys=locked_keys,
                     )
                     out.append((t.id, ok, h_state, ping_str, ms, detail, loc_detail))
             finally:
@@ -1670,6 +1747,7 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, ProfilesMixin, Tr
         skills_snap = set(self.active_skills)
         proj_snap = dict(self.projects_map)
         lang_snap = self.lang
+        rt_active = bool(self.runtime_started and self._runtime_state == "running")
 
         def worker() -> None:
             ok, summary, raw = False, "", ""
@@ -1682,6 +1760,7 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, ProfilesMixin, Tr
                         proj_snap,
                         self.vault,
                         lang=lang_snap,
+                        runtime_active=rt_active,
                     )
             finally:
                 safe_emit(self.bridge.auto_heal_done, ok, plan.tool_name or tr(lang_snap, "log_src_heal"), summary, raw)
@@ -1710,15 +1789,26 @@ class MainWindow(ToolsTabMixin, PluginsTabMixin, LogsTabMixin, ProfilesMixin, Tr
         sk_cnt = len(self.active_skills)
         lang_snap = self.lang
         missing_keys = self._missing_required_vault_keys()
+        locked_keys = self._locked_vault_keys()
+        rt_active = bool(self.runtime_started and self._runtime_state == "running")
 
         def worker() -> None:
-            note = enforce_tool_runtime_state(tool_snap, proj_snap, allow_stop=False, lang=lang_snap)
+            note = enforce_tool_runtime_state(
+                tool_snap, proj_snap, allow_stop=False, allow_start=rt_active, lang=lang_snap
+            )
             if note:
                 self.logs.add("INFO", tool_snap.name, tr(lang_snap, "log_auto_heal", note=note))
                 time.sleep(1.5)
                 live_map = scan_live_process_locations(lang=lang_snap)
                 ok, h_state, ping_str, ms, detail, loc_detail = probe_tool_health(
-                    tool_snap, sk_cnt, proj_snap, live_map, lang=lang_snap, missing_required_keys=missing_keys
+                    tool_snap,
+                    sk_cnt,
+                    proj_snap,
+                    live_map,
+                    lang=lang_snap,
+                    missing_required_keys=missing_keys,
+                    runtime_active=rt_active,
+                    locked_vault_keys=locked_keys,
                 )
                 safe_emit(
                     self.bridge.health_done,

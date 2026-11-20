@@ -164,7 +164,7 @@ def launch_host_app_for_tool(
             return False, ("blender.exe sistemde bulunamadı." if is_tr else "blender.exe was not found on this machine.")
         py_expr = (
             "import bpy; "
-            "bpy.app.timers.register(lambda: (bpy.ops.blendermcp.start_server() if hasattr(bpy.ops, 'blendermcp') else None), first_interval=1.2)"
+            "bpy.app.timers.register(lambda: ((bpy.ops.blendermcp.start_server() and None) if hasattr(bpy.ops, 'blendermcp') else None), first_interval=1.2)"
         )
         subprocess.Popen([str(b_exe), "--python-expr", py_expr], startupinfo=si_minimized)
         return True, (

@@ -12,13 +12,16 @@ from __future__ import annotations
 
 import sys
 
-# Ultra-fast pre-Qt RAM secret bridge for stdio MCP servers (zero GUI overhead, <10ms)
+# Ultra-fast pre-Qt RAM secret bridge for stdio MCP servers
 if len(sys.argv) >= 3 and sys.argv[1] == "--mcp-exec":
     from app.mcp_bridge import run_mcp_exec_cli
 
     raise SystemExit(run_mcp_exec_cli(sys.argv[2:]))
 
+import base64
+import contextlib
 import ctypes
+from ctypes import wintypes
 import os
 import pathlib
 import shutil
@@ -28,6 +31,7 @@ from PySide6.QtNetwork import QLocalServer, QLocalSocket
 from PySide6.QtWidgets import QApplication
 
 from app.main_window import MainWindow, create_app_icon
+from app.mcp_bridge import BRIDGE_EXE_NAME
 
 APP_USER_MODEL_ID = "DoranPierst.AIconomy.App"
 _SESSION_SUFFIX = (os.environ.get("USERNAME") or "user").replace(" ", "_")
@@ -41,6 +45,22 @@ def _app_root_dir() -> pathlib.Path:
     if getattr(sys, "frozen", False):
         return pathlib.Path(sys.executable).resolve().parent
     return pathlib.Path(__file__).resolve().parent
+
+
+def _cleanup_old_exe_swap() -> None:
+    """Remove leftover ``AIconomy.exe.old`` files left behind after an atomic NTFS self-update swap."""
+    if not getattr(sys, "frozen", False):
+        return
+    try:
+        cur_exe = pathlib.Path(sys.executable).resolve()
+        old_swap = cur_exe.with_suffix(".exe.old")
+        if old_swap.is_file():
+            old_swap.unlink(missing_ok=True)
+        for cand in cur_exe.parent.glob(f"{cur_exe.name}.*.old"):
+            with contextlib.suppress(OSError):
+                cand.unlink(missing_ok=True)
+    except OSError:
+        pass
 
 
 def resolve_data_dir(root_dir: pathlib.Path) -> pathlib.Path:
@@ -103,7 +123,44 @@ def _bring_to_front(win: MainWindow) -> None:
     win.activateWindow()
 
 
+def _is_trusted_bridge_peer(conn: QLocalSocket, data_dir: pathlib.Path) -> bool:
+    """Verify via Win32 kernel ``GetNamedPipeClientProcessId`` that the pipe caller is an official AIconomy bridge."""
+    if os.name != "nt":
+        return False
+    try:
+        desc = int(conn.socketDescriptor())
+        if desc <= 0:
+            return False
+        client_pid = wintypes.ULONG(0)
+        ok = ctypes.windll.kernel32.GetNamedPipeClientProcessId(
+            wintypes.HANDLE(desc),
+            ctypes.byref(client_pid),
+        )
+        if not ok or not client_pid.value:
+            return False
+        pid = int(client_pid.value)
+        if pid == os.getpid():
+            return True
+
+        peer = psutil.Process(pid)
+        peer_exe = pathlib.Path(peer.exe()).resolve()
+        self_exe = pathlib.Path(sys.executable).resolve()
+        bridge_exe = (data_dir / "bin" / BRIDGE_EXE_NAME).resolve()
+
+        if peer_exe == bridge_exe:
+            return True
+        if peer_exe == self_exe:
+            if getattr(sys, "frozen", False):
+                return True
+            cmdline = [str(x) for x in (peer.cmdline() or [])]
+            return "--mcp-exec" in cmdline
+    except Exception:
+        return False
+    return False
+
+
 def main() -> int:
+    _cleanup_old_exe_swap()
     if os.name == "nt":
         try:
             ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(APP_USER_MODEL_ID)
@@ -133,7 +190,8 @@ def main() -> int:
     QLocalServer.removeServer(SERVER_NAME)
     server.listen(SERVER_NAME)
 
-    win = MainWindow(data_dir=resolve_data_dir(_app_root_dir()))
+    data_dir = resolve_data_dir(_app_root_dir())
+    win = MainWindow(data_dir=data_dir)
 
     def _on_new_connection() -> None:
         conn = server.nextPendingConnection()
@@ -141,14 +199,40 @@ def main() -> int:
             return
         conn.waitForReadyRead(300)
         msg = bytes(conn.readAll()).strip()
+
+        # Never expose raw Master Passphrase PBKDF2 entropy over IPC!
         if msg == b"request_entropy":
-            ent = win.vault.export_entropy_hex()
-            reply = f"ENTROPY:{ent}".encode("ascii") if ent else b"LOCKED"
-            conn.write(reply)
+            conn.write(b"DENIED")
             conn.flush()
             conn.waitForBytesWritten(300)
             conn.disconnectFromServer()
             return
+
+        if msg.startswith(b"resolve_secret:"):
+            if not _is_trusted_bridge_peer(conn, data_dir):
+                conn.write(b"DENIED")
+            elif win.vault.is_locked():
+                conn.write(b"LOCKED")
+            else:
+                req_tid = msg.split(b":", 1)[1].decode("ascii", errors="ignore").strip()
+                t_obj = next(
+                    (t for t in win.tools if t.id == req_tid and getattr(t, "in_workspace", True)),
+                    None,
+                )
+                if t_obj is None or not t_obj.vault_key_name:
+                    conn.write(b"DENIED")
+                else:
+                    sec = win.vault.get_secret(t_obj.vault_key_name)
+                    if sec:
+                        b64 = base64.b64encode(sec.encode("utf-8")).decode("ascii")
+                        conn.write(f"SECRET:{b64}".encode("ascii"))
+                    else:
+                        conn.write(b"EMPTY")
+            conn.flush()
+            conn.waitForBytesWritten(300)
+            conn.disconnectFromServer()
+            return
+
         conn.disconnectFromServer()
         _bring_to_front(win)
 

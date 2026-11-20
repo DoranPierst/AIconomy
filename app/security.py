@@ -112,5 +112,6 @@ def build_isolated_child_env(
                 continue
         cleaned[k] = v
 
+    cleaned.setdefault("npm_config_ignore_scripts", "true")
     cleaned.update(allowed_Tool_env)
     return cleaned

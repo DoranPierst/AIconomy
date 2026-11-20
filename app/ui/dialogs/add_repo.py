@@ -151,7 +151,8 @@ class AddRepoDialog(QDialog):
                 tr(self.lang, "repo_exists_msg", name=existing.name),
             )
             return
-        has_real_gear = bool(info["needs_api_key"])
+        vk_name = str(info.get("vault_key_name") or "").strip()
+        has_real_gear = bool(info["needs_api_key"] or vk_name)
         auto_tags = ["automation"] if info["needs_api_key"] else ["automation", "free_local"]
         self.added_tool = ToolSpec(
             id=info["id"],
@@ -169,8 +170,9 @@ class AddRepoDialog(QDialog):
             scope_selectable=True,
             project_scope="GLOBAL",
             has_gear=has_real_gear,
-            param_label="Extra arguments / path" if has_real_gear else "",
-            param_arg_flag="__POSITIONAL__" if has_real_gear else "",
+            vault_key_name=vk_name,
+            vault_key_required=False,
+            vault_key_desc=f"API key for {info['name']}" if vk_name else "",
             install_cmd=info["install_cmd"],
             mcp_server_key=info["id"] if info["mcp_command"] else "",
             mcp_command=info["mcp_command"],

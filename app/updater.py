@@ -1,6 +1,7 @@
 """Locked official GitHub release checker and SHA-256 verified self-updater for AIconomy (EN & TR)."""
 from __future__ import annotations
 
+import contextlib
 import dataclasses
 import hashlib
 import json
@@ -371,6 +372,104 @@ def verify_file_sha256(file_path: pathlib.Path, expected_sha256: str) -> tuple[b
     return actual == norm_exp, actual
 
 
+def check_directory_writable(target_dir: pathlib.Path) -> tuple[bool, str]:
+    """Verify write/rename permissions in ``target_dir`` before downloading an update binary."""
+    probe = target_dir / f".aiconomy_write_check_{os.getpid()}.tmp"
+    probe_ren = target_dir / f".aiconomy_write_check_{os.getpid()}.ren"
+    try:
+        target_dir.mkdir(parents=True, exist_ok=True)
+        probe.write_bytes(b"ok")
+        os.replace(probe, probe_ren)
+        probe_ren.unlink(missing_ok=True)
+        return True, ""
+    except OSError as exc:
+        with contextlib.suppress(OSError):
+            probe.unlink(missing_ok=True)
+            probe_ren.unlink(missing_ok=True)
+        return False, str(exc)
+
+
+def perform_exe_atomic_swap(
+    current_exe: pathlib.Path,
+    new_exe: pathlib.Path,
+    spawn_relauncher: bool = True,
+) -> tuple[bool, pathlib.Path]:
+    """Swap ``new_exe`` onto ``current_exe`` using NTFS live-executable rename (`current -> .exe.old`).
+
+    On Windows NTFS, an executing `.exe` cannot be deleted or overwritten in place, but CAN be
+    atomically renamed (`os.replace(current_exe, old_exe)`) while still running, allowing `new_exe`
+    to take its place immediately before exit. If a non-NTFS volume blocks in-process rename, falls
+    back to an env-var-driven PowerShell swapper with zero path-quoting/codepage hazards.
+    """
+    old_exe = current_exe.with_suffix(".exe.old")
+    if old_exe.exists():
+        try:
+            old_exe.unlink(missing_ok=True)
+        except OSError:
+            old_exe = current_exe.with_name(f"{current_exe.name}.{os.getpid()}.old")
+
+    swapped_in_proc = False
+    if current_exe.exists():
+        try:
+            os.replace(current_exe, old_exe)
+            try:
+                os.replace(new_exe, current_exe)
+                swapped_in_proc = True
+            except OSError:
+                with contextlib.suppress(OSError):
+                    os.replace(old_exe, current_exe)
+                raise
+        except OSError:
+            swapped_in_proc = False
+    else:
+        os.replace(new_exe, current_exe)
+        swapped_in_proc = True
+
+    if spawn_relauncher:
+        env = os.environ.copy()
+        env["AICONOMY_CUR_EXE"] = str(current_exe)
+        env["AICONOMY_NEW_EXE"] = str(new_exe)
+        env["AICONOMY_OLD_EXE"] = str(old_exe)
+        env["AICONOMY_PARENT_PID"] = str(os.getpid())
+        if swapped_in_proc:
+            ps_script = (
+                "$ppid = [int]$env:AICONOMY_PARENT_PID; "
+                "for ($i = 0; $i -lt 40; $i++) { "
+                "  if (-not (Get-Process -Id $ppid -ErrorAction SilentlyContinue)) { break } "
+                "  Start-Sleep -Milliseconds 250 "
+                "} "
+                "Remove-Item -LiteralPath $env:AICONOMY_OLD_EXE -Force -ErrorAction SilentlyContinue; "
+                "Start-Process -FilePath $env:AICONOMY_CUR_EXE"
+            )
+        else:
+            ps_script = (
+                "$ppid = [int]$env:AICONOMY_PARENT_PID; "
+                "for ($i = 0; $i -lt 60; $i++) { "
+                "  if (-not (Get-Process -Id $ppid -ErrorAction SilentlyContinue)) { break } "
+                "  Start-Sleep -Milliseconds 500 "
+                "} "
+                "for ($t = 0; $t -lt 20; $t++) { "
+                "  try { "
+                "    if (Test-Path -LiteralPath $env:AICONOMY_CUR_EXE) { "
+                "      Move-Item -LiteralPath $env:AICONOMY_CUR_EXE -Destination $env:AICONOMY_OLD_EXE -Force -ErrorAction Stop "
+                "    } "
+                "    Move-Item -LiteralPath $env:AICONOMY_NEW_EXE -Destination $env:AICONOMY_CUR_EXE -Force -ErrorAction Stop; "
+                "    break "
+                "  } catch { Start-Sleep -Milliseconds 500 } "
+                "} "
+                "Remove-Item -LiteralPath $env:AICONOMY_OLD_EXE -Force -ErrorAction SilentlyContinue; "
+                "if (-not (Test-Path -LiteralPath $env:AICONOMY_NEW_EXE)) { "
+                "  Start-Process -FilePath $env:AICONOMY_CUR_EXE "
+                "}"
+            )
+        subprocess.Popen(
+            ["powershell.exe", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", ps_script],
+            env=env,
+            creationflags=NO_WINDOW,
+        )
+    return swapped_in_proc, old_exe
+
+
 def apply_self_update(
     check_res: UpdateCheckResult,
     github_token: str = "",
@@ -400,6 +499,17 @@ def apply_self_update(
             return False, "none", msg
 
         current_exe = pathlib.Path(sys.executable).resolve()
+        can_write, perm_err = check_directory_writable(current_exe.parent)
+        if not can_write:
+            msg = (
+                f"Güncelleme engellendi: '{current_exe.parent}' klasörüne yazma izni yok ({perm_err}). "
+                "Lütfen AIconomy'yi Yönetici olarak çalıştırın veya yazılabilir bir klasöre taşıyın."
+                if is_tr
+                else f"Update blocked: No write permission in '{current_exe.parent}' ({perm_err}). "
+                "Please run AIconomy as Administrator or move AIconomy.exe to a writable folder."
+            )
+            return False, "none", msg
+
         new_exe = current_exe.with_suffix(".exe.new")
         headers = {"User-Agent": f"AIconomy/{local_ver}", "Accept": "application/vnd.github+json"}
         if github_token:
@@ -474,23 +584,7 @@ def apply_self_update(
                     )
                     return False, "none", msg
 
-            bat_path = current_exe.parent / "_apply_update.bat"
-            bat_content = (
-                "@echo off\r\n"
-                "chcp 65001 >nul\r\n"
-                "set /a tries=0\r\n"
-                ":retry\r\n"
-                "timeout /t 1 /nobreak >nul\r\n"
-                f'move /y "{new_exe}" "{current_exe}" >nul 2>&1\r\n'
-                f'if exist "{new_exe}" (\r\n'
-                "  set /a tries+=1\r\n"
-                "  if %tries% lss 15 goto retry\r\n"
-                ")\r\n"
-                f'start "" "{current_exe}"\r\n'
-                'del "%~f0"\r\n'
-            )
-            bat_path.write_text(bat_content, encoding="utf-8")
-            subprocess.Popen(["cmd.exe", "/c", str(bat_path)], creationflags=NO_WINDOW)
+            perform_exe_atomic_swap(current_exe, new_exe, spawn_relauncher=True)
             msg = (
                 f"v{check_res.remote_version} indirildi (SHA-256 doğrulandı); uygulama şimdi yeniden başlatılacak."
                 if is_tr

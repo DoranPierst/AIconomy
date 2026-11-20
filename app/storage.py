@@ -11,6 +11,8 @@ import os
 import pathlib
 import shutil
 import sqlite3
+import threading
+import time
 from typing import Any
 
 from .catalog import (
@@ -46,6 +48,32 @@ def migrate_legacy_data_files(data_dir: pathlib.Path) -> None:
                 continue
 
 
+def _atomic_write_text(path: pathlib.Path, content: str) -> None:
+    """Atomically write UTF-8 text via a temporary sibling file and ``os.replace``."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+    try:
+        with open(tmp_path, "w", encoding="utf-8") as fh:
+            fh.write(content)
+            fh.flush()
+            with contextlib.suppress(OSError):
+                os.fsync(fh.fileno())
+        last_err: OSError | None = None
+        for attempt in range(4):
+            try:
+                os.replace(tmp_path, path)
+                return
+            except PermissionError as exc:
+                last_err = exc
+                time.sleep(0.02 * (attempt + 1))
+        if last_err is not None:
+            raise last_err
+    finally:
+        with contextlib.suppress(OSError):
+            if tmp_path.exists():
+                tmp_path.unlink()
+
+
 class DATA_BLOB(ctypes.Structure):
     _fields_ = [
         ("cbData", wintypes.DWORD),
@@ -70,6 +98,7 @@ class WindowsDpapiVault:
         self.vault_file = vault_file
         self.vault_file.parent.mkdir(parents=True, exist_ok=True)
         self._entropy: bytes | None = None
+        self._lock = threading.RLock()
 
     @staticmethod
     def _make_entropy_blob(entropy: bytes | None) -> tuple[Any, Any]:
@@ -128,172 +157,203 @@ class WindowsDpapiVault:
             ctypes.windll.kernel32.LocalFree(blob_out.pbData)
 
     def _read_raw_doc(self) -> dict[str, Any]:
-        if not self.vault_file.is_file():
-            return {}
-        try:
-            doc = json.loads(self.vault_file.read_text(encoding="utf-8"))
-            return doc if isinstance(doc, dict) else {}
-        except Exception:
+        with self._lock:
+            if not self.vault_file.is_file():
+                return {}
+            for attempt in range(3):
+                try:
+                    doc = json.loads(self.vault_file.read_text(encoding="utf-8"))
+                    return doc if isinstance(doc, dict) else {}
+                except PermissionError:
+                    if attempt < 2:
+                        time.sleep(0.02 * (attempt + 1))
+                        continue
+                    return {}
+                except Exception:
+                    return {}
             return {}
 
     def _write_raw_doc(self, doc: dict[str, Any]) -> None:
-        self.vault_file.write_text(json.dumps(doc, indent=2), encoding="utf-8")
+        with self._lock:
+            _atomic_write_text(self.vault_file, json.dumps(doc, indent=2))
 
     def _read_map(self) -> dict[str, str]:
-        raw = self._read_raw_doc()
-        return {k: v for k, v in raw.items() if not k.startswith("__") and isinstance(v, str)}
+        with self._lock:
+            raw = self._read_raw_doc()
+            return {k: v for k, v in raw.items() if not k.startswith("__") and isinstance(v, str)}
 
     def is_passphrase_enabled(self) -> bool:
-        meta = self._read_raw_doc().get(self.META_KEY)
-        return bool(isinstance(meta, dict) and meta.get("protected"))
+        with self._lock:
+            meta = self._read_raw_doc().get(self.META_KEY)
+            return bool(isinstance(meta, dict) and meta.get("protected"))
 
     def is_locked(self) -> bool:
-        return self.is_passphrase_enabled() and self._entropy is None
+        with self._lock:
+            return self.is_passphrase_enabled() and self._entropy is None
 
     def lock(self) -> None:
-        self._entropy = None
+        with self._lock:
+            self._entropy = None
 
     def unlock(self, passphrase: str) -> bool:
-        doc = self._read_raw_doc()
-        meta = doc.get(self.META_KEY)
-        if not isinstance(meta, dict) or not meta.get("protected"):
-            self._entropy = None
-            return True
-        if not passphrase:
-            return False
-        try:
-            salt = base64.b64decode(str(meta["salt_b64"]).encode("ascii"))
-            cand = derive_vault_entropy(passphrase, salt)
-            plain = self._unprotect(str(meta["verifier"]), entropy=cand)
-            if plain == self.VERIFIER_PLAINTEXT:
-                self._entropy = cand
+        with self._lock:
+            doc = self._read_raw_doc()
+            meta = doc.get(self.META_KEY)
+            if not isinstance(meta, dict) or not meta.get("protected"):
+                self._entropy = None
                 return True
-        except Exception:
+            if not passphrase:
+                return False
+            try:
+                salt = base64.b64decode(str(meta["salt_b64"]).encode("ascii"))
+                cand = derive_vault_entropy(passphrase, salt)
+                plain = self._unprotect(str(meta["verifier"]), entropy=cand)
+                if plain == self.VERIFIER_PLAINTEXT:
+                    self._entropy = cand
+                    return True
+            except Exception:
+                return False
             return False
-        return False
 
     def unlock_with_entropy_hex(self, entropy_hex: str) -> bool:
         """Unlock in-memory using a hex entropy key received over the user-scoped IPC pipe."""
-        doc = self._read_raw_doc()
-        meta = doc.get(self.META_KEY)
-        if not isinstance(meta, dict) or not meta.get("protected"):
-            return True
-        try:
-            cand = bytes.fromhex(entropy_hex.strip())
-            if self._unprotect(str(meta["verifier"]), entropy=cand) == self.VERIFIER_PLAINTEXT:
-                self._entropy = cand
+        with self._lock:
+            doc = self._read_raw_doc()
+            meta = doc.get(self.META_KEY)
+            if not isinstance(meta, dict) or not meta.get("protected"):
                 return True
-        except Exception:
+            try:
+                cand = bytes.fromhex(entropy_hex.strip())
+                if self._unprotect(str(meta["verifier"]), entropy=cand) == self.VERIFIER_PLAINTEXT:
+                    self._entropy = cand
+                    return True
+            except Exception:
+                return False
             return False
-        return False
 
     def export_entropy_hex(self) -> str:
-        return self._entropy.hex() if self._entropy else ""
+        with self._lock:
+            return self._entropy.hex() if self._entropy else ""
 
     def set_passphrase(self, new_passphrase: str, current_passphrase: str = "") -> bool:
         """Enable, change, or clear (when new_passphrase == '') the vault Master Passphrase."""
-        if self.is_locked() and not self.unlock(current_passphrase):
-            return False
-        doc = self._read_raw_doc()
-        secret_map = self._read_map()
-        decrypted: dict[str, str] = {}
-        for k, enc in secret_map.items():
-            try:
-                decrypted[k] = self._unprotect(enc, entropy=self._entropy)
-            except Exception:
+        with self._lock:
+            if self.is_locked() and not self.unlock(current_passphrase):
                 return False
+            secret_map = self._read_map()
+            decrypted: dict[str, str] = {}
+            for k, enc in secret_map.items():
+                try:
+                    decrypted[k] = self._unprotect(enc, entropy=self._entropy)
+                except Exception:
+                    return False
 
-        clean_new = new_passphrase.strip()
-        new_doc: dict[str, Any] = {}
-        if clean_new:
-            salt = os.urandom(16)
-            new_ent = derive_vault_entropy(clean_new, salt)
-            new_doc[self.META_KEY] = {
-                "protected": True,
-                "salt_b64": base64.b64encode(salt).decode("ascii"),
-                "verifier": self._protect(self.VERIFIER_PLAINTEXT, entropy=new_ent),
-            }
-            for k, plain_val in decrypted.items():
-                if plain_val:
-                    new_doc[k] = self._protect(plain_val, entropy=new_ent)
-            self._entropy = new_ent
-        else:
-            for k, plain_val in decrypted.items():
-                if plain_val:
-                    new_doc[k] = self._protect(plain_val, entropy=None)
-            self._entropy = None
+            clean_new = new_passphrase.strip()
+            new_doc: dict[str, Any] = {}
+            if clean_new:
+                salt = os.urandom(16)
+                new_ent = derive_vault_entropy(clean_new, salt)
+                new_doc[self.META_KEY] = {
+                    "protected": True,
+                    "salt_b64": base64.b64encode(salt).decode("ascii"),
+                    "verifier": self._protect(self.VERIFIER_PLAINTEXT, entropy=new_ent),
+                }
+                for k, plain_val in decrypted.items():
+                    if plain_val:
+                        new_doc[k] = self._protect(plain_val, entropy=new_ent)
+                self._entropy = new_ent
+            else:
+                for k, plain_val in decrypted.items():
+                    if plain_val:
+                        new_doc[k] = self._protect(plain_val, entropy=None)
+                self._entropy = None
 
-        self._write_raw_doc(new_doc)
-        return True
+            self._write_raw_doc(new_doc)
+            return True
 
     def has_key_entry(self, key_name: str) -> bool:
         """Return True when a cipher entry exists on disk (even while locked)."""
-        return bool(key_name and key_name in self._read_map())
+        with self._lock:
+            return bool(key_name and key_name in self._read_map())
 
     def set_secret(self, key_name: str, secret_value: str) -> None:
-        if self.is_locked():
-            raise PermissionError("Vault is locked; unlock with Master Passphrase first.")
-        doc = self._read_raw_doc()
-        cleaned = secret_value.strip()
-        if not cleaned:
-            doc.pop(key_name, None)
-        else:
-            doc[key_name] = self._protect(cleaned, entropy=self._entropy)
-        self._write_raw_doc(doc)
+        with self._lock:
+            if self.is_locked():
+                raise PermissionError("Vault is locked; unlock with Master Passphrase first.")
+            doc = self._read_raw_doc()
+            cleaned = secret_value.strip()
+            if not cleaned:
+                doc.pop(key_name, None)
+            else:
+                doc[key_name] = self._protect(cleaned, entropy=self._entropy)
+            self._write_raw_doc(doc)
 
     def get_secret(self, key_name: str) -> str:
-        if self.is_locked():
-            return ""
-        enc = self._read_map().get(key_name)
-        if not enc:
-            return ""
-        try:
-            return self._unprotect(enc, entropy=self._entropy)
-        except Exception:
-            return ""
+        with self._lock:
+            if self.is_locked():
+                return ""
+            enc = self._read_map().get(key_name)
+            if not enc:
+                return ""
+            try:
+                return self._unprotect(enc, entropy=self._entropy)
+            except Exception:
+                return ""
 
     def has_secret(self, key_name: str) -> bool:
-        if self.is_locked():
-            return self.has_key_entry(key_name)
-        return bool(self.get_secret(key_name))
+        with self._lock:
+            if self.is_locked():
+                return self.has_key_entry(key_name)
+            return bool(self.get_secret(key_name))
 
     def all_unlocked_values(self) -> list[str]:
-        if self.is_locked():
-            return []
-        vals: list[str] = []
-        for k in self._read_map():
-            v = self.get_secret(k)
-            if v:
-                vals.append(v)
-        return vals
+        with self._lock:
+            if self.is_locked():
+                return []
+            vals: list[str] = []
+            for k in self._read_map():
+                v = self.get_secret(k)
+                if v:
+                    vals.append(v)
+            return vals
 
     def list_masked(self) -> dict[str, str]:
-        out: dict[str, str] = {}
-        for k in self._read_map():
-            if self.is_locked():
-                out[k] = f"locked{'*' * 10}"
-                continue
-            val = self.get_secret(k)
-            if val:
-                prefix = val[:4] if len(val) >= 8 else val[:2]
-                out[k] = f"{prefix}{'*' * 12}"
-        return out
+        with self._lock:
+            out: dict[str, str] = {}
+            for k in self._read_map():
+                if self.is_locked():
+                    out[k] = f"locked{'*' * 10}"
+                    continue
+                val = self.get_secret(k)
+                if val:
+                    prefix = val[:4] if len(val) >= 8 else val[:2]
+                    out[k] = f"{prefix}{'*' * 12}"
+            return out
 
 
 class LogDatabase:
     """Persistent SQLite log store for errors, warnings, and operational events (auto-redacts secrets)."""
 
+    MAX_LOG_ROWS = 5000
+
     def __init__(self, db_path: pathlib.Path, vault: WindowsDpapiVault | None = None) -> None:
         self.db_path = db_path
         self.vault = vault
+        self._db_lock = threading.RLock()
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._init_db()
 
     def _connect(self) -> contextlib.AbstractContextManager[sqlite3.Connection]:
-        return contextlib.closing(sqlite3.connect(self.db_path))
+        return contextlib.closing(sqlite3.connect(self.db_path, timeout=10.0))
+
+    def _prune_locked(self, conn: sqlite3.Connection) -> None:
+        conn.execute(
+            "DELETE FROM logs WHERE id <= COALESCE((SELECT id FROM logs ORDER BY id DESC LIMIT 1 OFFSET ?), 0)",
+            (self.MAX_LOG_ROWS,),
+        )
 
     def _init_db(self) -> None:
-        with self._connect() as conn, conn:
+        with self._db_lock, self._connect() as conn, conn:
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS logs (
@@ -321,17 +381,20 @@ class LogDatabase:
                         None,
                     ),
                 )
+            else:
+                self._prune_locked(conn)
 
     def add(self, level: str, tool: str, summary: str, raw_detail: str = "", port: int | None = None) -> None:
         ts = dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         extra = self.vault.all_unlocked_values() if self.vault is not None else ()
         safe_summary = redact_secrets(summary, extra_secrets=extra)
         safe_raw = redact_secrets(raw_detail or summary, extra_secrets=extra)
-        with self._connect() as conn, conn:
+        with self._db_lock, self._connect() as conn, conn:
             conn.execute(
                 "INSERT INTO logs (ts, level, tool, summary, raw_detail, port) VALUES (?, ?, ?, ?, ?, ?)",
                 (ts, level, tool, safe_summary, safe_raw, port),
             )
+            self._prune_locked(conn)
 
     def clear(self) -> None:
         with self._connect() as conn, conn:
@@ -600,4 +663,4 @@ class StateStore:
         self, tools: list[ToolSpec], active_skills: set[str], meta: dict[str, Any], default_ids: set[str]
     ) -> None:
         payload = self.serialize(tools, active_skills, meta, default_ids)
-        self.state_file.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        _atomic_write_text(self.state_file, json.dumps(payload, ensure_ascii=False, indent=2))

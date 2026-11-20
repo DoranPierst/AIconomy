@@ -67,9 +67,9 @@ When you toggle tools or change scopes, AIconomy updates **only its own managed 
 
 ### Security Architecture
 
-- **Zero Plaintext on Disk:** Credential-backed `stdio` MCP servers are registered in AI client config files via `AIconomy --mcp-exec <tool_id>`, resolving secrets strictly in memory at launch (`<10ms` pre-GUI entrypoint) while scrubbing unrelated sensitive environment variables from child MCP processes.
+- **Zero Plaintext on Disk:** Credential-backed `stdio` MCP servers are registered in AI client config files via the native zero-extraction `aiconomy-bridge` launcher (`--mcp-exec <tool_id>`), resolving secrets strictly in memory at launch (`<85ms` warm start, zero `_MEI*` bundle extraction) while scrubbing unrelated sensitive environment variables from child MCP processes.
 - **DPAPI + Optional Master Passphrase:** Secrets are protected by Windows `CryptProtectData` tied to your Windows user account, with an optional **Vault Master Passphrase / PIN** (`PBKDF2-HMAC-SHA256`, `600,000` iterations) in **Settings -> API Keys** so other processes in the same session cannot decrypt the vault without your PIN.
-- **Automatic Secret Redaction & User-Scoped IPC:** Known API token formats (`sk-...`, `ghp_...`, `github_pat_...`, `ntn_...`, `sntryu_...`, `Bearer ...`) and stored vault values are automatically masked (`***REDACTED***`) before touching SQLite logs or diagnostic prompts, and the single-instance local pipe is restricted to the current Windows user (`UserAccessOption`).
+- **Automatic Secret Redaction & Kernel-Verified IPC:** Known API token formats (`sk-...`, `ghp_...`, `github_pat_...`, `ntn_...`, `sntryu_...`, `Bearer ...`) and stored vault values are automatically masked (`***REDACTED***`) before touching SQLite logs or diagnostic prompts, and the single-instance local pipe is restricted to the current Windows user (`UserAccessOption`) with Win32 kernel peer PID/path verification (`GetNamedPipeClientProcessId`) on single-secret resolution.
 
 ---
 

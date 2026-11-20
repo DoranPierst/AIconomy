@@ -82,9 +82,10 @@ def build_logs_ai_prompt(
                     lines.append(f"  - Location: {t.live_location_detail}")
 
     lines.extend(["", "=== 2. TÜM ARAÇLAR ===" if is_tr else "=== 2. ALL TOOLS ==="])
+    ws_only = [t for t in all_tools if getattr(t, "in_workspace", True)] or list(all_tools)
     compact_tools = [
         f"{t.name} (v{t.version.lstrip('vV')}, {('AÇIK' if t.enabled else 'KAPALI') if is_tr else ('ON' if t.enabled else 'OFF')}{f', :{t.port}' if t.port else ''})"
-        for t in all_tools
+        for t in ws_only
     ]
     lines.append(", ".join(compact_tools))
 

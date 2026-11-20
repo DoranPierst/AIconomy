@@ -20,6 +20,7 @@ from ...mcp_config import (
     sync_mcp_json_clients,
 )
 from ...processes import resolve_disk_location
+from ...storage import _atomic_write_text
 from ...updater import (
     UpdateCheckResult,
     check_for_app_updates,
@@ -172,10 +173,12 @@ class TrayUpdaterMixin:
         if bs_tool:
             sync_blender_skills_on_disk(
                 self.active_skills,
-                bool(rt_active and getattr(bs_tool, "in_workspace", True) and bs_tool.enabled),
+                bool(getattr(bs_tool, "in_workspace", True) and bs_tool.enabled),
                 bs_tool.project_scope,
                 self.projects_map,
                 lang=self.lang,
+                clients=dict(bs_tool.clients),
+                runtime_active=rt_active,
             )
         cv_tool = next((t for t in self.tools if t.id == "caveman"), None)
         if cv_tool:
@@ -232,8 +235,12 @@ class TrayUpdaterMixin:
 
     def import_from_file(self, source_path: pathlib.Path) -> None:
         txt = source_path.read_text(encoding="utf-8")
-        json.loads(txt)
-        self.store.state_file.write_text(txt, encoding="utf-8")
+        raw_doc = json.loads(txt)
+        if not isinstance(raw_doc, dict) or (
+            not isinstance(raw_doc.get("tools"), dict) and not isinstance(raw_doc.get("meta"), dict)
+        ):
+            raise ValueError("Invalid AIconomy settings schema (expected 'tools' or 'meta' object).")
+        _atomic_write_text(self.store.state_file, txt)
         self.tools = build_default_catalog()
         self.active_skills, self.meta = self.store.load_into(self.tools)
 
@@ -245,29 +252,41 @@ class TrayUpdaterMixin:
         self.meta["lang"] = self.lang
         self._apply_theme(self.meta.get("theme", "dark"))
 
+        rt_active = bool(self.runtime_started and self._runtime_state == "running")
         for t in self.tools:
             if getattr(t, "in_workspace", True):
                 t.live_location_detail = resolve_disk_location(t, self.projects_map, {}, lang=self.lang)
+                if not t.enabled:
+                    t.last_ping = tr(self.lang, "st_disabled")
+                    t.health_state = "off"
+                elif self._tool_blocked_by_locked_vault(t):
+                    t.last_ping = tr(self.lang, "st_vault_locked")
+                    t.health_state = "warn"
+                elif not rt_active:
+                    t.last_ping = tr(self.lang, "st_stopped_standby")
+                    t.health_state = "idle"
             else:
                 t.last_ping = tr(self.lang, "st_disabled")
                 t.health_state = "off"
 
         if self.sync_live_environment:
-            rt_active = bool(self.runtime_started and self._runtime_state == "running")
             bs_tool = next((t for t in self.tools if t.id == "blender_skills"), None)
             if bs_tool:
                 sync_blender_skills_on_disk(
                     self.active_skills,
-                    bool(rt_active and getattr(bs_tool, "in_workspace", True) and bs_tool.enabled),
+                    bool(getattr(bs_tool, "in_workspace", True) and bs_tool.enabled),
                     bs_tool.project_scope,
                     self.projects_map,
                     lang=self.lang,
+                    clients=dict(bs_tool.clients),
+                    runtime_active=rt_active,
                 )
             cv_tool = next((t for t in self.tools if t.id == "caveman"), None)
             if cv_tool:
                 sync_caveman_on_disk(cv_tool, lang=self.lang, runtime_active=rt_active)
             sync_custom_skill_tools_on_disk(self.tools, lang=self.lang, runtime_active=rt_active)
             sync_mcp_json_clients(self.tools, self.vault, self.projects_map, lang=self.lang, runtime_active=rt_active)
+            self._sync_live_environment_async(target_tools=list(self.tools))
 
         self._retranslate_ui()
         self._rebuild_kind_filter_combo()

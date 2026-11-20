@@ -36,8 +36,12 @@ jobs:
             $v.changelog | Set-Content "release_notes.md" -Encoding UTF8
           }
 
-      - name: Sync dependencies & Build EXE
+      - name: Compile native RAM secret bridge & Build EXE
+        shell: pwsh
         run: |
+          $csc = Join-Path $env:WINDIR "Microsoft.NET\Framework64\v4.0.30319\csc.exe"
+          & $csc /nologo /optimize+ /target:exe /r:System.Web.Extensions.dll /out:"assets\aiconomy-bridge.exe" "app\bridge_host.cs"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           uv sync --dev
           uv run pyinstaller --noconfirm --onefile --windowed --name "AIconomy" `
             --icon "assets/aiconomy.ico" `

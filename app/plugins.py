@@ -24,6 +24,7 @@ NPM_PACKAGE_MAP: dict[str, str] = {
     "gltf_transform": "@gltf-transform/cli",
     "context7": "@upstash/context7-mcp",
     "chrome_devtools": "chrome-devtools-mcp",
+    "meshy": "@meshy-ai/meshy-mcp-server",
 }
 
 UV_TOOL_MAP: dict[str, str] = {
@@ -270,6 +271,11 @@ def inspect_github_repo(repo_url: str, github_token: str = "", lang: str = "en")
     has_pkg = "package.json" in paths
     has_py = "pyproject.toml" in paths
     needs_key = any("API_KEY" in p.upper() or ".env.example" in p for p in paths)
+    vault_key_name = ""
+    if needs_key:
+        clean_repo_tok = re.sub(r"[^A-Z0-9]+", "_", repo.upper()).strip("_")
+        clean_repo_tok = re.sub(r"(?:_MCP(?:_SERVER)?|_SERVER)$", "", clean_repo_tok) or "CUSTOM_TOOL"
+        vault_key_name = f"{clean_repo_tok}_API_KEY"
 
     detected_ver = "v1.0.0"
     registry_verified = True
@@ -342,6 +348,7 @@ def inspect_github_repo(repo_url: str, github_token: str = "", lang: str = "en")
         "mcp_args": mcp_args,
         "skill_count": len(skill_files),
         "needs_api_key": needs_key,
+        "vault_key_name": vault_key_name,
         "repo_url": f"https://github.com/{owner}/{repo}",
         "registry_verified": registry_verified,
         "security_warning": security_warning,
@@ -533,10 +540,9 @@ def update_single_tool(
                     return True, tool.version, f"git pull: {out}", raw
                 err_first = (proc.stderr.strip() or proc.stdout.strip() or "git error").splitlines()[0]
                 return False, "", f"git pull: {err_first}", raw
-            if (cav_dir / "SKILL.md").is_file():
-                msg = "Yerel SKILL.md doğrulandı." if is_tr else "Local SKILL.md verified."
-                return True, tool.version, msg, str(cav_dir / "SKILL.md")
-            if not install_if_missing:
+
+            has_existing_md = (cav_dir / "SKILL.md").is_file()
+            if not has_existing_md and not install_if_missing:
                 msg = (
                     "Caveman henüz indirilmedi."
                     if is_tr
@@ -544,26 +550,42 @@ def update_single_tool(
                 )
                 return True, tool.version, msg, str(cav_dir)
 
-            # Brand-new PC install: fetch official SKILL.md via HTTPS (no Git required), fallback to git clone
+            # Brand-new PC install OR HTTPS update: fetch latest official SKILL.md via HTTPS (no Git required)
             raw_url = "https://raw.githubusercontent.com/JuliusBrussee/caveman/main/skills/caveman/SKILL.md"
             try:
                 req = urllib.request.Request(raw_url, headers={"User-Agent": ua})
                 with urllib.request.urlopen(req, timeout=15) as resp:
                     skill_txt = resp.read().decode("utf-8", errors="replace")
                 if "name:" in skill_txt and len(skill_txt.strip()) > 60:
-                    active_dir.mkdir(parents=True, exist_ok=True)
+                    cav_dir.mkdir(parents=True, exist_ok=True)
                     clean_md = _dedupe_yaml_frontmatter_keys(skill_txt)
-                    (active_dir / "SKILL.md").write_text(clean_md, encoding="utf-8")
+                    (cav_dir / "SKILL.md").write_text(clean_md, encoding="utf-8")
                     msg = (
-                        f"Caveman kuralı indirildi ve kuruldu: {active_dir}"
-                        if is_tr
-                        else f"Downloaded and installed Caveman rule: {active_dir}"
+                        f"Caveman kuralı güncellendi: {cav_dir}"
+                        if (has_existing_md and is_tr)
+                        else (
+                            f"Updated Caveman rule: {cav_dir}"
+                            if has_existing_md
+                            else (
+                                f"Caveman kuralı indirildi ve kuruldu: {cav_dir}"
+                                if is_tr
+                                else f"Downloaded and installed Caveman rule: {cav_dir}"
+                            )
+                        )
                     )
-                    return True, tool.version, msg, raw_url
+                    return True, (tool.latest_version or tool.version), msg, raw_url
             except Exception as dl_exc:
                 dl_err = str(dl_exc)
             else:
                 dl_err = "Unexpected SKILL.md payload"
+
+            if has_existing_md:
+                msg = (
+                    "Çevrimdışı: mevcut yerel SKILL.md korundu."
+                    if is_tr
+                    else "Offline: existing local SKILL.md preserved."
+                )
+                return True, tool.version, msg, str(cav_dir / "SKILL.md")
 
             git_exe = shutil.which("git.exe") or shutil.which("git")
             if not git_exe:
@@ -645,11 +667,16 @@ def update_single_tool(
 
             new_v_tag = f"v{latest_ver}" if latest_ver else tool.version
             target_spec = f"{pkg}@{latest_ver}" if latest_ver else pkg
-            if install_if_missing and pkg in ("bla-agents", "@gltf-transform/cli"):
-                npm_exe = "npm.cmd" if shutil.which("npm.cmd") else "npm"
+            npm_exe = shutil.which("npm.cmd") or shutil.which("npm")
+            if npm_exe:
                 cmd = [npm_exe, "install", "-g", "--ignore-scripts", "--no-fund", "--no-audit", target_spec]
                 proc = subprocess.run(cmd, capture_output=True, text=True, timeout=90, creationflags=NO_WINDOW)
                 raw = _fmt_cmd_raw(cmd, proc, is_tr)
+                if proc.returncode != 0 and "EEXIST" in (proc.stderr + "\n" + proc.stdout):
+                    cache_cmd = [npm_exe, "cache", "add", target_spec]
+                    proc2 = subprocess.run(cache_cmd, capture_output=True, text=True, timeout=90, creationflags=NO_WINDOW)
+                    raw = raw + "\n\n" + _fmt_cmd_raw(cache_cmd, proc2, is_tr)
+                    proc = proc2
                 if proc.returncode != 0:
                     first_err = (proc.stderr.strip() or proc.stdout.strip() or "npm install error").splitlines()[0]
                     return False, new_v_tag, f"npm install ({pkg}): {first_err}", raw
@@ -679,6 +706,26 @@ def update_single_tool(
                 err_lbl = f"PyPI sorgu hatası ({pkg}): {exc}" if is_tr else f"PyPI lookup error ({pkg}): {exc}"
                 return False, "", err_lbl, traceback.format_exc()
             new_v_tag = f"v{latest_ver}" if latest_ver else tool.version
+            uv_exe = shutil.which("uv.exe") or shutil.which("uv")
+            if uv_exe and latest_ver:
+                target_py = f"{pkg}=={latest_ver}"
+                cmd = [uv_exe, "tool", "install", "--upgrade", target_py]
+                proc = subprocess.run(cmd, capture_output=True, text=True, timeout=90, creationflags=NO_WINDOW)
+                comb = (proc.stdout + "\n" + proc.stderr).strip()
+                raw = _fmt_cmd_raw(cmd, proc, is_tr)
+                if proc.returncode != 0 and "no executables are provided" in comb.lower():
+                    warm_cmd = [uv_exe, "tool", "run", "--refresh", target_py, "--help"]
+                    proc2 = subprocess.run(warm_cmd, capture_output=True, text=True, timeout=60, creationflags=NO_WINDOW)
+                    raw = raw + "\n\n" + _fmt_cmd_raw(warm_cmd, proc2, is_tr)
+                    if proc2.returncode == 0:
+                        proc = proc2
+                if proc.returncode == 0 or "already installed" in comb.lower() or "nothing to upgrade" in comb.lower():
+                    msg = (
+                        f"{pkg} {new_v_tag} sürümüne güncellendi."
+                        if is_tr
+                        else f"Updated {pkg} to {new_v_tag}."
+                    )
+                    return True, new_v_tag, msg, raw
             msg = f"PyPI doğrulandı ({new_v_tag})." if is_tr else f"Verified latest PyPI release ({new_v_tag})."
             return True, new_v_tag, msg, msg
 
@@ -689,6 +736,10 @@ def update_single_tool(
                 else "Local installation verified (existing weights and project files preserved)."
             )
             return True, tool.version, msg, msg
+
+        cmd_chk = (tool.install_cmd or "").strip()
+        if tool.mcp_command in ("npx", "uvx") or cmd_chk.startswith(("npx ", "npm ", "uvx ", "uv ", "git clone ")):
+            return install_library_tool(tool, active_skills, lang=lang, upgrade_to_latest=True)
 
         if "github.com/" in tool.repo_url:
             m = re.search(r"github\.com/([^/\s]+)/([^/\s#?]+)", tool.repo_url)
@@ -750,8 +801,9 @@ def install_library_tool(
     tool: ToolSpec,
     active_skills: set[str],
     lang: str = "en",
+    upgrade_to_latest: bool = False,
 ) -> tuple[bool, str, str, str]:
-    """Download and install an uninstalled library tool onto the user's PC (npm / uv / git).
+    """Download and install (or upgrade when ``upgrade_to_latest=True``) a library tool onto the user's PC.
 
     Returns (ok, installed_version_tag, short_summary, raw_log_detail). Never mutates ``tool``.
     """
@@ -787,6 +839,19 @@ def install_library_tool(
                     else "Node.js / npm not found on PATH. Please install Node.js.",
                     cmd_text,
                 )
+            base_pkg = _strip_npm_dist_tag(pkg_spec)
+            resolved_latest = ""
+            if upgrade_to_latest and base_pkg:
+                try:
+                    enc = base_pkg.replace("/", "%2F")
+                    req = urllib.request.Request(f"https://registry.npmjs.org/{enc}/latest", headers={"User-Agent": ua})
+                    with urllib.request.urlopen(req, timeout=6) as resp:
+                        resolved_latest = str(json.loads(resp.read().decode("utf-8")).get("version", "") or "").strip()
+                except Exception:
+                    resolved_latest = tool.latest_version.strip().lstrip("vV")
+                if resolved_latest:
+                    pkg_spec = f"{base_pkg}@{resolved_latest}"
+
             cmd = [npm_exe, "install", "-g", "--ignore-scripts", "--no-fund", "--no-audit", pkg_spec]
             proc = subprocess.run(cmd, capture_output=True, text=True, timeout=120, creationflags=NO_WINDOW)
             raw = _fmt_cmd_raw(cmd, proc, is_tr)
@@ -800,17 +865,17 @@ def install_library_tool(
                 first_err = (proc.stderr.strip() or proc.stdout.strip() or "npm install error").splitlines()[0]
                 return False, "", f"npm ({pkg_spec}): {first_err}", raw
 
-            ver_tag = tool.version
-            base_pkg = _strip_npm_dist_tag(pkg_spec)
-            try:
-                enc = base_pkg.replace("/", "%2F")
-                req = urllib.request.Request(f"https://registry.npmjs.org/{enc}/latest", headers={"User-Agent": ua})
-                with urllib.request.urlopen(req, timeout=5) as resp:
-                    v_str = json.loads(resp.read().decode("utf-8")).get("version", "")
-                    if v_str:
-                        ver_tag = f"v{v_str}"
-            except Exception:
-                pass
+            ver_tag = f"v{resolved_latest}" if resolved_latest else tool.version
+            if not resolved_latest:
+                try:
+                    enc = base_pkg.replace("/", "%2F")
+                    req = urllib.request.Request(f"https://registry.npmjs.org/{enc}/latest", headers={"User-Agent": ua})
+                    with urllib.request.urlopen(req, timeout=5) as resp:
+                        v_str = json.loads(resp.read().decode("utf-8")).get("version", "")
+                        if v_str:
+                            ver_tag = f"v{v_str}"
+                except Exception:
+                    pass
             msg = (
                 f"npm paketi indirildi ve kuruldu: {base_pkg}"
                 if is_tr
@@ -855,8 +920,20 @@ def install_library_tool(
                 )
 
             clean_pkg = re.split(r"==|@", pkg_spec, maxsplit=1)[0] if not pkg_spec.startswith("@") else pkg_spec.removesuffix("@latest")
+            resolved_pypi = ""
+            if upgrade_to_latest and not from_spec:
+                try:
+                    req = urllib.request.Request(f"https://pypi.org/pypi/{clean_pkg}/json", headers={"User-Agent": ua})
+                    with urllib.request.urlopen(req, timeout=6) as resp:
+                        resolved_pypi = str(json.loads(resp.read().decode("utf-8")).get("info", {}).get("version", "") or "").strip()
+                except Exception:
+                    resolved_pypi = tool.latest_version.strip().lstrip("vV")
+                if resolved_pypi:
+                    pkg_spec = f"{clean_pkg}=={resolved_pypi}"
+
             if from_spec:
-                cmd = [uv_exe, "tool", "install", "--upgrade", "--from", from_spec, clean_pkg]
+                extra_flags = ["--upgrade", "--reinstall"] if upgrade_to_latest else ["--upgrade"]
+                cmd = [uv_exe, "tool", "install", *extra_flags, "--from", from_spec, clean_pkg]
             else:
                 cmd = [uv_exe, "tool", "install", "--upgrade", pkg_spec.removesuffix("@latest")]
 
@@ -933,7 +1010,7 @@ def install_library_tool(
 
 
 def sync_pinned_version_on_tool(tool: ToolSpec, new_ver: str) -> None:
-    """Update pinned @X.Y.Z / ==X.Y.Z version specifiers in tool.mcp_args and tool.install_cmd."""
+    """Update or pin @X.Y.Z / ==X.Y.Z version specifiers in tool.mcp_args and tool.install_cmd."""
     clean_v = (new_ver or "").strip().lstrip("vV")
     if not clean_v:
         return
@@ -941,9 +1018,9 @@ def sync_pinned_version_on_tool(tool: ToolSpec, new_ver: str) -> None:
         updated_args: list[str] = []
         changed_from_to: tuple[str, str] | None = None
         for a in tool.mcp_args:
-            if not a.startswith("-") and changed_from_to is None:
+            if not a.startswith("-") and changed_from_to is None and a != "mcp":
                 base = _strip_npm_dist_tag(a)
-                if base and base != a:
+                if base:
                     new_spec = f"{base}@{clean_v}"
                     changed_from_to = (a, new_spec)
                     updated_args.append(new_spec)
@@ -951,12 +1028,25 @@ def sync_pinned_version_on_tool(tool: ToolSpec, new_ver: str) -> None:
             updated_args.append(a)
         tool.mcp_args = updated_args
         if changed_from_to and changed_from_to[0] in tool.install_cmd:
-            tool.install_cmd = tool.install_cmd.replace(changed_from_to[0], changed_from_to[1])
+            tool.install_cmd = tool.install_cmd.replace(changed_from_to[0], changed_from_to[1], 1)
     elif tool.mcp_command == "uvx" and tool.mcp_args:
         updated_uv: list[str] = []
         changed_uv: tuple[str, str] | None = None
+        skip_next = False
         for a in tool.mcp_args:
-            if not a.startswith("-") and "==" in a and changed_uv is None:
+            if skip_next:
+                skip_next = False
+                updated_uv.append(a)
+                continue
+            if a == "--from":
+                skip_next = True
+                updated_uv.append(a)
+                continue
+            if not a.startswith("-") and not a.startswith("git+") and changed_uv is None:
+                # Do not pin binary entrypoint when `--from git+...` was used earlier
+                if "--from" in tool.mcp_args:
+                    updated_uv.append(a)
+                    continue
                 base = a.split("==", 1)[0]
                 new_spec = f"{base}=={clean_v}"
                 changed_uv = (a, new_spec)
@@ -965,7 +1055,7 @@ def sync_pinned_version_on_tool(tool: ToolSpec, new_ver: str) -> None:
             updated_uv.append(a)
         tool.mcp_args = updated_uv
         if changed_uv and changed_uv[0] in tool.install_cmd:
-            tool.install_cmd = tool.install_cmd.replace(changed_uv[0], changed_uv[1])
+            tool.install_cmd = tool.install_cmd.replace(changed_uv[0], changed_uv[1], 1)
 
 
 def can_uninstall_tool_from_disk(tool: ToolSpec) -> bool:

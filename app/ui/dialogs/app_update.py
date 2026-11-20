@@ -4,7 +4,7 @@ from __future__ import annotations
 import threading
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import QTimer
+from PySide6.QtCore import QObject, QTimer
 from PySide6.QtWidgets import (
     QDialog,
     QFrame,
@@ -110,14 +110,35 @@ class AppUpdateDialog(QDialog):
         bot.addWidget(self.btn_apply)
         lay.addLayout(bot)
 
-        parent.bridge.app_check_done.connect(self._on_checked)
-        parent.bridge.app_dl_progress.connect(self._on_dl_prog)
-        parent.bridge.app_apply_done.connect(self._on_applied)
+        self._bridge_conns = [
+            parent.bridge.app_check_done.connect(self._on_checked),
+            parent.bridge.app_dl_progress.connect(self._on_dl_prog),
+            parent.bridge.app_apply_done.connect(self._on_applied),
+        ]
 
         if initial_result is not None and initial_result.ok:
             self._render_result(initial_result)
         elif cur_repo:
             QTimer.singleShot(120, self.run_check)
+
+    def _disconnect_bridge_signals(self) -> None:
+        conns = getattr(self, "_bridge_conns", None)
+        if not conns:
+            return
+        self._bridge_conns = []
+        for conn in conns:
+            try:
+                QObject.disconnect(conn)
+            except (RuntimeError, TypeError):
+                pass
+
+    def done(self, result: int) -> None:
+        self._disconnect_bridge_signals()
+        super().done(result)
+
+    def closeEvent(self, event) -> None:  # type: ignore[override]
+        self._disconnect_bridge_signals()
+        super().closeEvent(event)
 
     def _toggle_repo_card(self) -> None:
         self.repo_card.setVisible(not self.repo_card.isVisible())

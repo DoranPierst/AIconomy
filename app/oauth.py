@@ -4,7 +4,10 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import threading
 from dataclasses import dataclass
+
+import psutil
 
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
 
@@ -192,13 +195,36 @@ def launch_browser_oauth_flow(tool_id: str, lang: str = "en") -> tuple[bool, str
                 "OAuth köprüsü için Node.js (npx) gerekli." if is_tr else "Node.js (npx) is required for mcp-remote OAuth.",
             )
         try:
-            subprocess.Popen(
+            proc = subprocess.Popen(
                 [npx_bin, "-y", "mcp-remote", spec.remote_mcp_url],
-                stdin=subprocess.DEVNULL,
+                stdin=subprocess.PIPE,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 creationflags=NO_WINDOW,
             )
+
+            def _reap_oauth_helper(p: subprocess.Popen[bytes]) -> None:
+                try:
+                    p.wait(timeout=120)
+                except subprocess.TimeoutExpired:
+                    try:
+                        parent = psutil.Process(p.pid)
+                        for ch in parent.children(recursive=True):
+                            try:
+                                ch.terminate()
+                            except Exception:
+                                pass
+                        parent.terminate()
+                    except Exception:
+                        pass
+                finally:
+                    if p.stdin:
+                        try:
+                            p.stdin.close()
+                        except Exception:
+                            pass
+
+            threading.Thread(target=_reap_oauth_helper, args=(proc,), daemon=True).start()
             msg = (
                 f"{spec.provider_label} tarayıcı yetkilendirmesi başlatıldı (tarayıcınızda İzin Ver'e tıklayın)."
                 if is_tr

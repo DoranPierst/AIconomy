@@ -139,6 +139,21 @@ def is_tool_installed_for_tokens(
             or _has_cmd("uvx")
         )
 
+    if (
+        tool.id not in ("blender_skills", "caveman")
+        and not tool.mcp_server_key
+        and (tool.kind in ("skill_pack", "rule") or (tool.install_cmd or "").strip().startswith("git clone "))
+    ):
+        agy_root = home / ".gemini" / "config" / "skills"
+        has_agy = (agy_root / tool.id).is_dir() or (
+            agy_root.is_dir() and any(c.name.startswith(f"{tool.id}__") for c in agy_root.iterdir() if c.is_dir())
+        )
+        return (
+            (home / ".agents" / "skills" / tool.id).is_dir()
+            or (home / ".agents" / "skills_disabled" / tool.id).is_dir()
+            or has_agy
+        )
+
     if tool.mcp_command:
         return _has_cmd(tool.mcp_command)
 
@@ -204,7 +219,7 @@ def compute_token_breakdown(
             elif not active_clients:
                 eff = 0
                 zero_reason = "tok_zero_no_client"
-            elif t.id in ("blender_skills", "caveman", "trellis", "unity_pipeline") and not is_installed:
+            elif not is_installed:
                 eff = 0
                 zero_reason = "tok_zero_not_installed"
             else:

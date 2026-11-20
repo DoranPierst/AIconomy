@@ -131,6 +131,7 @@ class ProfilesMixin:
                     self._rebuild_profile_combo()
                     return
 
+        is_rt_running = bool(self.runtime_started and self._runtime_state == "running")
         target_enable = set(PROFILES[profile_key]["enable"])
         for t in self.tools:
             if t.id in target_enable and not getattr(t, "in_workspace", True):
@@ -143,6 +144,12 @@ class ProfilesMixin:
             if not t.enabled:
                 t.health_state = "off"
                 t.last_ping = tr(self.lang, "st_disabled")
+            elif self._tool_blocked_by_locked_vault(t):
+                t.health_state = "warn"
+                t.last_ping = tr(self.lang, "st_vault_locked")
+            elif not is_rt_running:
+                t.health_state = "idle"
+                t.last_ping = tr(self.lang, "st_stopped_standby")
             elif self._tool_needs_vault_key(t):
                 t.health_state = "warn"
                 t.last_ping = tr(self.lang, "st_missing_key")
@@ -260,10 +267,17 @@ class ProfilesMixin:
                         if o.key in saved["options"]:
                             o.enabled = bool(saved["options"][o.key])
 
+        is_rt_running = bool(self.runtime_started and self._runtime_state == "running")
         for t in self.workspace_tools():
             if not t.enabled:
                 t.health_state = "off"
                 t.last_ping = tr(self.lang, "st_disabled")
+            elif self._tool_blocked_by_locked_vault(t):
+                t.health_state = "warn"
+                t.last_ping = tr(self.lang, "st_vault_locked")
+            elif not is_rt_running:
+                t.health_state = "idle"
+                t.last_ping = tr(self.lang, "st_stopped_standby")
             elif self._tool_needs_vault_key(t):
                 t.health_state = "warn"
                 t.last_ping = tr(self.lang, "st_missing_key")
@@ -319,6 +333,7 @@ class ProfilesMixin:
                         t, self.projects_map, self._latest_live_map, lang=self.lang
                     )
 
+        is_rt_running = bool(self.runtime_started and self._runtime_state == "running")
         for t in self.tools:
             if not getattr(t, "in_workspace", True):
                 t.enabled = False
@@ -329,6 +344,12 @@ class ProfilesMixin:
             if not t.enabled:
                 t.health_state = "off"
                 t.last_ping = tr(self.lang, "st_disabled")
+            elif self._tool_blocked_by_locked_vault(t):
+                t.health_state = "warn"
+                t.last_ping = tr(self.lang, "st_vault_locked")
+            elif not is_rt_running:
+                t.health_state = "idle"
+                t.last_ping = tr(self.lang, "st_stopped_standby")
             elif self._tool_needs_vault_key(t):
                 t.health_state = "warn"
                 t.last_ping = tr(self.lang, "st_missing_key")

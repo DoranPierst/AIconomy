@@ -39,6 +39,7 @@ class DiagnosticsDialog(QDialog):
         self.lang = parent.lang
         self.tools = [copy.deepcopy(t) for t in parent.tools if getattr(t, "in_workspace", True) and t.enabled]
         self._running = False
+        self._run_gen = 0
         self._bridge = WorkerBridge()
         self._bridge.conn_test_row.connect(self._on_row_result)
         self._bridge.conn_test_cfg.connect(self._on_client_cfg_status)
@@ -66,7 +67,7 @@ class DiagnosticsDialog(QDialog):
         self.client_cmb.addItem(tr(self.lang, "diag_target_all"), "ALL")
         for code, full_name in AI_CLIENTS:
             self.client_cmb.addItem(f"{full_name} ({code})", code)
-        self.client_cmb.currentIndexChanged.connect(lambda _idx: self.start_tests(force_dry_run=True))
+        self.client_cmb.currentIndexChanged.connect(lambda _idx: self.start_tests(force_dry_run=True, interrupt_running=True))
         top_actions.addWidget(self.client_cmb)
 
         self.btn_retest = QPushButton(tr(self.lang, "diag_btn_retest"))
@@ -180,9 +181,11 @@ class DiagnosticsDialog(QDialog):
         elif self.main_win._runtime_state == "running":
             self.start_tests(force_dry_run=False)
 
-    def start_tests(self, force_dry_run: bool = False) -> None:
-        if self._running:
+    def start_tests(self, force_dry_run: bool = False, interrupt_running: bool = False) -> None:
+        if self._running and not interrupt_running:
             return
+        self._run_gen += 1
+        cur_gen = self._run_gen
         self.tools = [copy.deepcopy(t) for t in self.main_win.tools if getattr(t, "in_workspace", True) and t.enabled]
         self.tbl.setRowCount(len(self.tools))
         self._running = True
@@ -256,10 +259,12 @@ class DiagnosticsDialog(QDialog):
                 banner_txt = f"[{client_snap}] {cfg_msg}"
                 if parse_ok and rt_active:
                     banner_txt = f"{banner_txt}  —  {tr(lang, 'diag_client_reload_hint')}"
-                safe_emit(self._bridge.conn_test_cfg, parse_ok, banner_txt)
+                safe_emit(self._bridge.conn_test_cfg, cur_gen, parse_ok, banner_txt)
 
             measured: dict[str, int] = {}
             for idx, t in enumerate(snap):
+                if cur_gen != self._run_gen:
+                    return
                 ok, ms, msg, raw, badge = test_tool_for_client_e2e(
                     t,
                     client_snap,
@@ -269,18 +274,22 @@ class DiagnosticsDialog(QDialog):
                     runtime_active=rt_active,
                     lang=lang,
                 )
-                safe_emit(self._bridge.conn_test_row, idx, ok, ms, msg, raw, badge)
+                if cur_gen != self._run_gen:
+                    return
+                safe_emit(self._bridge.conn_test_row, cur_gen, idx, ok, ms, msg, raw, badge)
                 if ok and rt_active and client_snap == "ALL" and t.id in ("serena", "unity_mcp"):
                     tok_val = measure_tool_schema_tokens(t, self.main_win.vault)
                     if isinstance(tok_val, int) and tok_val > 0:
                         measured[schema_cache_key(t)] = tok_val
-            if measured:
+            if measured and cur_gen == self._run_gen:
                 safe_emit(self.main_win.bridge.schema_measure_done, measured, len(measured))
-            safe_emit(self._bridge.conn_test_done, not rt_active)
+            safe_emit(self._bridge.conn_test_done, cur_gen, not rt_active)
 
         threading.Thread(target=worker, daemon=True).start()
 
-    def _on_client_cfg_status(self, parse_ok: bool, msg: str) -> None:
+    def _on_client_cfg_status(self, gen: int, parse_ok: bool, msg: str) -> None:
+        if gen != self._run_gen:
+            return
         self.client_cfg_lbl.setText(msg)
         if parse_ok:
             self.client_cfg_lbl.setStyleSheet(
@@ -296,8 +305,8 @@ class DiagnosticsDialog(QDialog):
             self.main_win._refresh_logs_tab()
         self.client_cfg_lbl.show()
 
-    def _on_row_result(self, row: int, ok: bool, ms: int, msg: str, raw: str, badge_state: str) -> None:
-        if row < 0 or row >= len(self.tools):
+    def _on_row_result(self, gen: int, row: int, ok: bool, ms: int, msg: str, raw: str, badge_state: str) -> None:
+        if gen != self._run_gen or row < 0 or row >= len(self.tools):
             return
         self._raw_details[row] = raw
         if ok:
@@ -328,7 +337,9 @@ class DiagnosticsDialog(QDialog):
         self.tbl.setItem(row, 2, QTableWidgetItem(f"{ms}ms" if ms >= 0 else "—"))
         self.tbl.setItem(row, 3, QTableWidgetItem(msg))
 
-    def _on_all_done(self, was_dry_run: bool) -> None:
+    def _on_all_done(self, gen: int, was_dry_run: bool) -> None:
+        if gen != self._run_gen:
+            return
         self._running = False
         self.btn_retest.setEnabled(True)
         key = "diag_done_stopped" if was_dry_run else "diag_done"

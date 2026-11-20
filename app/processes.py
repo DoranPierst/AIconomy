@@ -39,6 +39,7 @@ _AI_CLIENT_PROCESS_NAMES = frozenset(
         "cursor.exe",
         "claude.exe",
         "codex.exe",
+        "chatgpt.exe",
         "windsurf.exe",
     }
 )
@@ -576,7 +577,7 @@ def stop_all_managed_services(tools: list[ToolSpec], lang: str = "en") -> tuple[
         ),
     ]
 
-    # Also find frozen AIconomy.exe --mcp-exec child bridge processes (never self)
+    # Also find frozen AIconomy.exe --mcp-exec / aiconomy-bridge.exe child bridge processes (never self)
     self_pid = os.getpid()
     bridge_exes: list[psutil.Process] = []
     for p in psutil.process_iter(["pid", "name", "cmdline"]):
@@ -584,7 +585,9 @@ def stop_all_managed_services(tools: list[ToolSpec], lang: str = "en") -> tuple[
             if p.info.get("pid") == self_pid:
                 continue
             nm = (p.info.get("name") or "").lower()
-            if nm == "aiconomy.exe":
+            if nm == "aiconomy-bridge.exe":
+                bridge_exes.append(p)
+            elif nm == "aiconomy.exe":
                 cmd_s = " ".join(str(x).lower() for x in (p.info.get("cmdline") or []))
                 if "--mcp-exec" in cmd_s:
                     bridge_exes.append(p)
@@ -798,11 +801,12 @@ def enforce_tool_runtime_state(
             )
         owner_pid, _ = find_port_owner(port)
         if not owner_pid:
-            serena_exe = pathlib.Path.home() / ".local" / "bin" / "serena.exe"
-            if serena_exe.is_file():
+            local_cand = pathlib.Path.home() / ".local" / "bin" / "serena.exe"
+            serena_bin = str(local_cand) if local_cand.is_file() else (shutil.which("serena.exe") or shutil.which("serena") or "")
+            if serena_bin:
                 serena_mode = "editing" if int(tool.mode_index) == 1 else "planning"
                 cmd = [
-                    str(serena_exe),
+                    serena_bin,
                     "start-mcp-server",
                     "--transport",
                     "streamable-http",
@@ -919,8 +923,18 @@ def resolve_disk_location(
         and not tool.mcp_server_key
         and (tool.kind in ("skill_pack", "rule") or (tool.install_cmd or "").strip().startswith("git clone "))
     ):
-        act_dir = pathlib.Path.home() / ".agents" / "skills" / tool.id
-        dis_dir = pathlib.Path.home() / ".agents" / "skills_disabled" / tool.id
+        home = pathlib.Path.home()
+        act_dir = home / ".agents" / "skills" / tool.id
+        dis_dir = home / ".agents" / "skills_disabled" / tool.id
+        agy_root = home / ".gemini" / "config" / "skills"
+        agy_direct = agy_root / tool.id
+        has_agy = agy_direct.is_dir() or (
+            agy_root.is_dir() and any(c.name.startswith(f"{tool.id}__") for c in agy_root.iterdir() if c.is_dir())
+        )
+        if act_dir.is_dir() and has_agy:
+            return f"Skill klasörü: {act_dir}  |  AGY: {agy_root}" if is_tr else f"Skills folder: {act_dir}  |  AGY: {agy_root}"
+        if has_agy:
+            return f"AGY: {agy_direct if agy_direct.is_dir() else agy_root}"
         if act_dir.is_dir():
             return f"Skill klasörü: {act_dir}" if is_tr else f"Skills folder: {act_dir}"
         if dis_dir.is_dir():
@@ -945,12 +959,29 @@ def probe_tool_health(
     lang: str = "en",
     missing_required_keys: set[str] | None = None,
     runtime_active: bool = True,
+    locked_vault_keys: set[str] | None = None,
 ) -> tuple[bool, str, str, int, str, str]:
     """Return (is_healthy, health_state, short_status_str, latency_ms, detail_msg, location_detail).
 
     ``health_state`` is one of: ``'ok'``, ``'warn'``, ``'error'``, ``'idle'``, ``'off'``.
     """
     loc_detail = resolve_disk_location(tool, projects_map, live_map, lang=lang)
+
+    if (
+        tool.enabled
+        and getattr(tool, "auth_mode", "key") != "oauth"
+        and tool.vault_key_name
+        and locked_vault_keys is not None
+        and tool.vault_key_name in locked_vault_keys
+    ):
+        return (
+            False,
+            "warn",
+            tr(lang, "st_vault_locked"),
+            -1,
+            f"Vault locked ({tool.vault_key_name})",
+            loc_detail,
+        )
 
     if tool.enabled and not runtime_active:
         return True, "idle", tr(lang, "st_stopped_standby"), -1, loc_detail, loc_detail
@@ -1066,12 +1097,21 @@ def probe_tool_health(
         and not tool.mcp_server_key
         and (tool.kind in ("skill_pack", "rule") or (tool.install_cmd or "").strip().startswith("git clone "))
     ):
-        act_dir = pathlib.Path.home() / ".agents" / "skills" / tool.id
-        dis_dir = pathlib.Path.home() / ".agents" / "skills_disabled" / tool.id
-        if act_dir.is_dir():
-            return True, "ok", tr(lang, "st_ready"), 1, str(act_dir), loc_detail
-        if dis_dir.is_dir():
-            return True, "idle", tr(lang, "st_ready"), 1, str(dis_dir), loc_detail
+        home = pathlib.Path.home()
+        act_dir = home / ".agents" / "skills" / tool.id
+        dis_dir = home / ".agents" / "skills_disabled" / tool.id
+        agy_root = home / ".gemini" / "config" / "skills"
+        has_agy = (agy_root / tool.id).is_dir() or (
+            agy_root.is_dir() and any(c.name.startswith(f"{tool.id}__") for c in agy_root.iterdir() if c.is_dir())
+        )
+        want_agy = bool(tool.clients.get("AGY", False))
+        want_agents = bool(tool.clients.get("CDX", False) or tool.clients.get("CLD", False) or tool.clients.get("CUR", False))
+        if (want_agy and has_agy and (not want_agents or act_dir.is_dir())) or (
+            want_agents and not want_agy and act_dir.is_dir()
+        ):
+            return True, "ok", tr(lang, "st_ready"), 1, str(agy_root if want_agy else act_dir), loc_detail
+        if act_dir.is_dir() or dis_dir.is_dir():
+            return True, "idle", tr(lang, "st_ready"), 1, str(act_dir if act_dir.is_dir() else dis_dir), loc_detail
         return False, "warn", tr(lang, "st_not_installed"), -1, str(act_dir), loc_detail
 
     return True, "ok", tr(lang, "st_ready"), 2, tool.mcp_command or tool.install_cmd or "stdio", loc_detail
