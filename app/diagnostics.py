@@ -319,6 +319,8 @@ def _run_stdio_handshake(
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         env=env,
         creationflags=NO_WINDOW,
     )
@@ -458,6 +460,8 @@ def measure_tool_schema_tokens(
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             env=env,
             creationflags=NO_WINDOW,
         )

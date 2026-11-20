@@ -191,10 +191,14 @@ def get_gui_window_titles(target_pids_by_img: dict[str, list[int]] | None = None
     imgs = set(target_pids_by_img.keys()) if target_pids_by_img is not None else {"blender.exe", "Unity.exe"}
     for img in imgs:
         try:
+            import locale
+
             proc = subprocess.run(
                 ["tasklist", "/v", "/fo", "csv", "/nh", "/fi", f"IMAGENAME eq {img}"],
                 capture_output=True,
                 text=True,
+                encoding=locale.getpreferredencoding(False) or "utf-8",
+                errors="replace",
                 timeout=2.5,
                 creationflags=NO_WINDOW,
             )

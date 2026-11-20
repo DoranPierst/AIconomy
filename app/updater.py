@@ -632,12 +632,17 @@ def apply_self_update(
     git_dir = src_root if (src_root / ".git").is_dir() else (src_root.parent if (src_root.parent / ".git").is_dir() else None)
     if git_dir is not None:
         try:
+            from .security import build_isolated_child_env
+
             cmd = ["git", "-C", str(git_dir), "pull", "--ff-only"]
             proc = subprocess.run(
                 cmd,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=45,
+                env=build_isolated_child_env({}),
                 creationflags=NO_WINDOW,
             )
             if proc.returncode != 0:

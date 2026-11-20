@@ -372,24 +372,55 @@ internal static class Program
         if (string.IsNullOrEmpty(exe)) return "";
         try
         {
+            bool isBatch = exe.EndsWith(".cmd", StringComparison.OrdinalIgnoreCase)
+                || exe.EndsWith(".bat", StringComparison.OrdinalIgnoreCase);
+            string fName = isBatch ? "cmd.exe" : exe;
+            string fArgs = isBatch
+                ? ("/d /s /c \"" + QuoteBatchArg(exe) + " " + JoinBatchArgs(tokenArgs) + "\"")
+                : JoinWindowsArgs(tokenArgs);
             ProcessStartInfo psi = new ProcessStartInfo
             {
-                FileName = exe,
-                Arguments = JoinWindowsArgs(tokenArgs),
+                FileName = fName,
+                Arguments = fArgs,
                 UseShellExecute = false,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
+                StandardOutputEncoding = Encoding.UTF8,
+                StandardErrorEncoding = Encoding.UTF8,
                 CreateNoWindow = true
             };
-            using (Process p = Process.Start(psi))
+            List<string> scrubKeys = new List<string>();
+            foreach (DictionaryEntry de in psi.EnvironmentVariables)
             {
-                if (p == null) return "";
-                string stdout = p.StandardOutput.ReadToEnd();
+                string k = de.Key != null ? de.Key.ToString() : "";
+                if (!string.IsNullOrEmpty(k) && IsSensitiveKey(k)) scrubKeys.Add(k);
+            }
+            foreach (string rk in scrubKeys) psi.EnvironmentVariables.Remove(rk);
+            psi.EnvironmentVariables["npm_config_ignore_scripts"] = "true";
+
+            StringBuilder sbOut = new StringBuilder();
+            using (Process p = new Process())
+            {
+                p.StartInfo = psi;
+                p.OutputDataReceived += delegate(object _s, DataReceivedEventArgs e)
+                {
+                    if (!string.IsNullOrEmpty(e.Data))
+                    {
+                        lock (sbOut) { sbOut.AppendLine(e.Data); }
+                    }
+                };
+                p.ErrorDataReceived += delegate(object _s, DataReceivedEventArgs _e) { };
+                if (!p.Start()) return "";
+                p.BeginOutputReadLine();
+                p.BeginErrorReadLine();
                 if (!p.WaitForExit(4000))
                 {
                     try { p.Kill(); } catch { }
                     return "";
                 }
+                p.WaitForExit();
+                string stdout;
+                lock (sbOut) { stdout = sbOut.ToString(); }
                 if (p.ExitCode == 0 && !string.IsNullOrWhiteSpace(stdout))
                 {
                     string[] lines = stdout.Trim().Split(new char[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);

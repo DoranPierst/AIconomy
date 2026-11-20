@@ -33,6 +33,8 @@ def _run_isolated_cmd(cmd: list[str], timeout: int = 90) -> subprocess.Completed
         cmd,
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         timeout=timeout,
         env=build_isolated_child_env({}),
         creationflags=NO_WINDOW,

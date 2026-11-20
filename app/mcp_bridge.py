@@ -226,6 +226,8 @@ def ensure_fast_bridge_binary(data_dir: pathlib.Path | None = None) -> pathlib.P
                         csc_args,
                         capture_output=True,
                         text=True,
+                        encoding="utf-8",
+                        errors="replace",
                         timeout=30,
                         creationflags=NO_WINDOW,
                     )
@@ -251,6 +253,8 @@ def ensure_fast_bridge_binary(data_dir: pathlib.Path | None = None) -> pathlib.P
                 [str(dst_exe), "--ping"],
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=8,
                 creationflags=NO_WINDOW,
             )
@@ -430,7 +434,10 @@ def _resolve_from_manifest(
                 [cli_exe, *oauth_targs],
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=4,
+                env=build_isolated_child_env({}),
                 creationflags=NO_WINDOW,
             )
             if proc.returncode == 0 and proc.stdout.strip():
